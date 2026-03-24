@@ -1,6 +1,6 @@
 # MarkNote
 
-一款 macOS 原生 Markdown 悬浮便签应用。一个完全是vibe coding开发的小笔记软件。支持icloud同步
+一款 macOS 原生的AI Markdown 悬浮便签应用。一个完全是vibe coding开发的小笔记软件。支持icloud同步
 
 ## 设计概念
 - 召之即来，挥之即走
