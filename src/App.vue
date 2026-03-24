@@ -23,6 +23,20 @@ const { latestVersion, updateAvailable, checkForUpdates, openReleasePage } = use
 // 当前页面：'editor' | 'settings' | 'search'
 const currentView = ref<'editor' | 'settings' | 'search'>('editor')
 
+// 更新提示 toast，8秒后自动消失
+const showUpdateToast = ref(false)
+let updateToastTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(updateAvailable, (val) => {
+  if (val) {
+    showUpdateToast.value = true
+    if (updateToastTimer) clearTimeout(updateToastTimer)
+    updateToastTimer = setTimeout(() => {
+      showUpdateToast.value = false
+    }, 8000)
+  }
+})
+
 function openSettings() {
   currentView.value = 'settings'
 }
@@ -98,7 +112,7 @@ onUnmounted(() => {
       <Editor v-else />
 
       <!-- 更新提示 -->
-      <div v-if="updateAvailable" class="update-toast">
+      <div v-if="showUpdateToast" class="update-toast">
         <div class="update-toast-content">
           <i class="i-mdi-update"></i>
           <span>发现新版本 v{{ latestVersion }}</span>

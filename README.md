@@ -15,6 +15,13 @@
 - **样式**: UnoCSS
 - **数据存储**: 本地 .md 文件（iCloud 目录）
 
+
+## 因签名问题，无法打开app
+
+```bash
+sudo xattr -r -d com.apple.quarantine /Applications/MarkNote.app/
+```
+
 ## 开发环境
 
 ### 前置要求
@@ -38,7 +45,8 @@ npm run tauri dev
 ### 构建
 
 ```bash
-npm run tauri build
+npm run tauri build -- --target aarch64-apple-darwin
+npm run tauri build -- --target x86_64-apple-darwin
 ```
 
 
