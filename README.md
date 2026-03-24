@@ -2,6 +2,12 @@
 
 一款 macOS 原生的AI Markdown 悬浮便签应用。一个完全是vibe coding开发的小笔记软件。支持icloud同步
 
+## 参考项目
+
+https://antinote.io/
+
+之前日常都是使用antinote， 但是antinote的AI功能不能够满足我的需求，所以决定自己开发一个。 非常感谢antinote！
+
 ## 设计概念
 - 召之即来，挥之即走
 - 所见即所得
