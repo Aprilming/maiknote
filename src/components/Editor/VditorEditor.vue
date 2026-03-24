@@ -25,9 +25,7 @@ const contextMenuVisible = ref(false)
 const contextMenuRef = ref<HTMLElement>()
 const contextMenuStyle = ref<{left: string, top: string}>({left: '0px', top: '0px'})
 
-const hasAIConfig = computed(() =>
-  !!settingStore.settings.aiUrl && !!settingStore.settings.aiKey
-)
+const hasAIConfig = computed(() => true) // 始终显示菜单，未配置时点击会提示
 
 const fontSizeStyle = computed(() => `${props.fontSize}px`)
 
@@ -166,6 +164,10 @@ function handleKeyDown(e: KeyboardEvent) {
 
 function handleAI(type: 'optimize' | 'todo' | 'prompt') {
   hideContextMenu()
+  if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
+    showToast('请先在设置中配置 AI')
+    return
+  }
   callAI(type)
 }
 
