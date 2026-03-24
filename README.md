@@ -18,13 +18,22 @@
 6. Cmd + N - 新建笔记
 7. Cmd + Back Space - 删除笔记
 8. Cmd + P - Pin置顶
+9. Cmd + ,  - 设置
 
 ## 截图
+
+### 主页面
 ![img.png](resources/img1.png)
 
+### 搜索页面
 ![img.png](resources/img2.png)
 
+### 设置页面
 ![img3.png](resources/img3.png)
+
+### 右键AI功能
+![img.png](resources/img.png)
+
 
 ## 技术栈
 

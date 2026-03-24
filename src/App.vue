@@ -16,7 +16,7 @@ import SearchPage from '@/components/Search/SearchPage.vue'
 // Initialize stores and composables
 const noteStore = useNoteStore()
 const settingStore = useSettingStore()
-useShortcuts()
+useShortcuts(openSettings)
 useGlobalShortcut()
 const { latestVersion, updateAvailable, checkForUpdates, openReleasePage } = useVersionCheck()
 

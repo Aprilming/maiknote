@@ -39,7 +39,7 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
 /**
  * Application-wide keyboard shortcuts
  */
-export function useShortcuts() {
+export function useShortcuts(onOpenSettings?: () => void) {
   const noteStore = useNoteStore()
   const settingStore = useSettingStore()
 
@@ -135,6 +135,13 @@ export function useShortcuts() {
       } catch (error) {
         console.error('Failed to hide window:', error)
       }
+      return
+    }
+
+    // Cmd+, : 打开设置
+    if (e.metaKey && e.key === ',') {
+      e.preventDefault()
+      onOpenSettings?.()
     }
   }
 
