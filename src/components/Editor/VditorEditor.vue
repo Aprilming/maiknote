@@ -401,6 +401,8 @@ defineExpose({getVditor: () => vditorInstance})
   display: flex !important;
   flex-direction: column !important;
   background: var(--color-background) !important;
+  border: none !important;
+  outline: none !important;
 }
 
 .vditor-content {
