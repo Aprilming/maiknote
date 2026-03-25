@@ -108,7 +108,7 @@ onUnmounted(() => {
   <div class="app-container">
     <div class="app-background" :class="{ 'show-grid': settingStore.settings.showGrid }"></div>
     <div class="app-content">
-      <TitleBar @open-settings="openSettings" @open-search="openSearchPage" />
+      <TitleBar v-if="currentView !== 'settings'" @open-settings="openSettings" @open-search="openSearchPage" />
       <SearchPage v-if="currentView === 'search'" @close="closeSearchPage" />
       <Settings v-else-if="currentView === 'settings'" @back="closeSettings" />
       <Editor v-else />

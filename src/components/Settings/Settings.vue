@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { useSettingStore, type ShortcutSettings } from '@/stores/settingStore'
@@ -17,6 +17,55 @@ onMounted(async () => {
   } catch (e) {
     console.error('Failed to check autostart status:', e)
   }
+})
+
+// 阻止设置页面中的笔记操作快捷键
+function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+  const parts = shortcut.split('+')
+  const key = parts[parts.length - 1].toLowerCase()
+  const modifiers = parts.slice(0, -1)
+
+  const ctrlMatch = modifiers.some(m => m.toLowerCase() === 'ctrl') ? e.ctrlKey : !e.ctrlKey
+  const altMatch = modifiers.some(m => m.toLowerCase() === 'alt') ? e.altKey : !e.altKey
+  const shiftMatch = modifiers.some(m => m.toLowerCase() === 'shift') ? e.shiftKey : !e.shiftKey
+  const cmdMatch = modifiers.some(m => m.toLowerCase() === 'cmd') ? e.metaKey : !e.metaKey
+
+  let keyMatch = false
+  if (key === 'arrowleft') {
+    keyMatch = e.key === 'ArrowLeft'
+  } else if (key === 'arrowright') {
+    keyMatch = e.key === 'ArrowRight'
+  } else if (key === 'backspace') {
+    keyMatch = e.key === 'Backspace'
+  } else if (key === 'n' || key === 'f' || key === 'p') {
+    keyMatch = e.key.toLowerCase() === key
+  } else if (key === '[') {
+    keyMatch = e.key === '['
+  } else if (key === ']') {
+    keyMatch = e.key === ']'
+  }
+
+  return ctrlMatch && altMatch && shiftMatch && cmdMatch && keyMatch
+}
+
+function blockNoteShortcuts(e: KeyboardEvent) {
+  const shortcuts = settingStore.settings.shortcuts
+  const blockedShortcuts = [shortcuts.prevNote, shortcuts.nextNote, shortcuts.newNote, shortcuts.deleteNote]
+
+  for (const shortcut of blockedShortcuts) {
+    if (matchesShortcut(e, shortcut)) {
+      e.stopPropagation()
+      break
+    }
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', blockNoteShortcuts, true)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', blockNoteShortcuts, true)
 })
 
 // 切换自启动
