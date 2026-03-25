@@ -129,7 +129,7 @@ npm run tauri build -- --target x86_64-apple-darwin
 macOS Gatekeeper 阻止了未签名的应用，执行以下命令解除隔离：
 
 ```bash
-sudo xattr -r -d com.apple.quarantine /Applications/MarkNote.app/
+sudo xattr -r -d com.apple.quarantine /Applications/MaikNote.app/
 ```
 
 ---

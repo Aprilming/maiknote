@@ -128,7 +128,7 @@ npm run tauri build -- --target x86_64-apple-darwin
 macOS Gatekeeper blocks unsigned apps. Run the following to remove the quarantine flag:
 
 ```bash
-sudo xattr -r -d com.apple.quarantine /Applications/MarkNote.app/
+sudo xattr -r -d com.apple.quarantine /Applications/MaikNote.app/
 ```
 
 ---
