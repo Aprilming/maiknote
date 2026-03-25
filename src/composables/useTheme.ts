@@ -17,7 +17,7 @@ function getSystemTheme(): 'light' | 'dark' {
 
 // 根据设置计算当前应使用的主题
 function computeTheme(): 'light' | 'dark' {
-  const settings = localStorage.getItem('marknote-settings')
+  const settings = localStorage.getItem('maiknote-settings')
   if (settings) {
     try {
       const parsed = JSON.parse(settings)
@@ -41,7 +41,7 @@ function applyTheme(theme: 'light' | 'dark') {
 
 // 监听系统主题变化
 function handleSystemThemeChange(e: MediaQueryListEvent) {
-  const settings = localStorage.getItem('marknote-settings')
+  const settings = localStorage.getItem('maiknote-settings')
   let theme: string = 'auto'
   if (settings) {
     try {

@@ -10,8 +10,8 @@ const latestVersion = ref<string | null>(null)
 const isLoading = ref(false)
 const updateAvailable = ref(false)
 const checkError = ref<string | null>(null)
-const releaseUrl = 'https://github.com/Aprilming/marknote/releases'
-const tagsUrl = 'https://github.com/Aprilming/marknote/tags'
+const releaseUrl = 'https://github.com/Aprilming/maiknote/releases'
+const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
 
 // 比较版本号
 function compareVersions(current: string, latest: string): boolean {
@@ -35,7 +35,7 @@ async function checkForUpdates(): Promise<boolean> {
 
   try {
     // 请求 releases/latest，跟随重定向获取最终 URL
-    const response = await fetch('https://github.com/Aprilming/marknote/releases/latest', {
+    const response = await fetch('https://github.com/Aprilming/maiknote/releases/latest', {
       method: 'GET',
       redirect: 'follow'
     })
@@ -43,7 +43,7 @@ async function checkForUpdates(): Promise<boolean> {
     // 获取重定向后的最终 URL
     const finalUrl = response.url
 
-    // 从 URL 中提取版本号，格式: https://github.com/Aprilming/marknote/releases/tag/v0.2.0
+    // 从 URL 中提取版本号，格式: https://github.com/Aprilming/maiknote/releases/tag/v0.2.0
     const match = finalUrl.match(/\/releases\/tag\/(v?[\d.]+)/)
 
     if (match) {

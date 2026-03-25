@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MarkNote",
+  "productName": "MaikNote",
   "version": "0.5.0",
-  "identifier": "com.april.marknote",
+  "identifier": "com.april.maiknote",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "MarkNote",
+        "title": "MaikNote",
         "width": 600,
         "height": 400,
         "minWidth": 600,

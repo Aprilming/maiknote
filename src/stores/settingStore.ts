@@ -105,7 +105,7 @@ export const useSettingStore = defineStore('setting', () => {
 
   function loadSettings() {
     try {
-      const saved = localStorage.getItem('marknote-settings')
+      const saved = localStorage.getItem('maiknote-settings')
       if (saved) {
         const parsed = JSON.parse(saved)
         settings.value = { ...settings.value, ...parsed }
@@ -117,7 +117,7 @@ export const useSettingStore = defineStore('setting', () => {
 
   function saveSettings() {
     try {
-      localStorage.setItem('marknote-settings', JSON.stringify(settings.value))
+      localStorage.setItem('maiknote-settings', JSON.stringify(settings.value))
     } catch (e) {
       console.error('Failed to save settings:', e)
     }
