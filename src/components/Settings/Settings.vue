@@ -2,11 +2,30 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
-import { ElMessage } from 'element-plus'
 import { useSettingStore, type ShortcutSettings } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
+
+// Toast 通知
+function showToast(message: string, duration = 2000) {
+  const toast = document.createElement('div')
+  toast.textContent = message
+  toast.style.cssText = `
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 4px;
+    z-index: 10000;
+    font-size: 14px;
+  `
+  document.body.appendChild(toast)
+  setTimeout(() => toast.remove(), duration)
+}
 
 const { currentVersion, latestVersion, isLoading: checkLoading, updateAvailable, checkError, checkForUpdates, openReleasePage, tagsUrl } = useVersionCheck()
 
@@ -217,12 +236,12 @@ const userAssistants = computed(() => {
 async function handleTemplateClick(template: Assistant) {
   // 检查是否已存在相同 prompt 的用户助手
   if (assistantsStore.hasUserPrompt(template.prompt)) {
-    ElMessage.warning('该助手已添加')
+    showToast('该助手已添加')
     return
   }
   // 添加到用户助手列表
   await assistantsStore.addAssistant(template.name, template.prompt)
-  ElMessage.success('添加成功')
+  showToast('添加成功')
 }
 
 // 点击添加助手
