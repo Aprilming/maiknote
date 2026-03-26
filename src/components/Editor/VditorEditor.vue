@@ -232,7 +232,10 @@ function handleAI(assistantId: string) {
   callAI(assistantId)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 确保助手数据已加载
+  await assistantsStore.loadAssistants()
+
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
       const vditorReset = editorContainer.value?.querySelector('.vditor-reset')
@@ -383,13 +386,11 @@ defineExpose({getVditor: () => vditorInstance})
           class="context-menu-item"
           @click="handleAI(assistant.id)"
         >
-          <span class="context-menu-icon">📝</span>
           <span>{{ assistant.name }}</span>
         </div>
       </template>
       <template v-else-if="hasAIConfig">
         <div class="context-menu-item context-menu-item--disabled">
-          <span class="context-menu-icon">📝</span>
           <span>暂无助手</span>
         </div>
       </template>
