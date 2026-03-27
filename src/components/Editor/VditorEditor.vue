@@ -28,6 +28,8 @@ const isAILoading = ref(false)
 const contextMenuVisible = ref(false)
 const contextMenuRef = ref<HTMLElement>()
 const contextMenuStyle = ref<{left: string, top: string}>({left: '0px', top: '0px'})
+const savedSelectionText = ref('') // 保存右键菜单打开时的选中文本
+let pendingSelectionText = '' // 待处理的选中文本（用于传递给AI）
 
 const hasAIConfig = computed(() => true) // 始终显示菜单，未配置时点击会提示
 
@@ -58,11 +60,32 @@ function showToast(message: string, duration = 2000) {
   setTimeout(() => toast.remove(), duration)
 }
 
-// 获取选中文本或全部内容
+// 获取选中文本，如果没有选中则返回全部内容
 function getSelectionText(): string {
+
+  // 优先使用 handleAI 保存的待处理选中文本
+  if (pendingSelectionText) {
+    return pendingSelectionText
+  }
+
+  // 尝试从编辑器获取当前选中文本
   const selection = window.getSelection()
-  const text = selection?.toString().trim()
-  return text || props.initialContent
+  const selectedText = selection?.toString().trim()
+
+  // 如果有选中文本且在编辑器内，则返回选中文本
+  if (selectedText) {
+    const editorEl = editorContainer.value?.querySelector('.vditor-reset')
+    if (editorEl?.contains(selection?.anchorNode)) {
+      return selectedText
+    }
+  }
+
+  // 如果没有选中文本，返回整个编辑器内容
+  if (vditorInstance) {
+    const fullContent = vditorInstance.getValue()
+    return fullContent
+  }
+  return props.initialContent
 }
 
 // AbortController 用于取消 AI 请求
@@ -174,6 +197,7 @@ async function callAI(assistantId: string) {
     isAILoading.value = false
     document.body.style.cursor = ''
     aiAbortController = null
+    pendingSelectionText = '' // 清除待处理的选中文本
   }
 }
 
@@ -213,6 +237,7 @@ function handleContextMenu(e: MouseEvent) {
 // 隐藏右键菜单
 function hideContextMenu() {
   contextMenuVisible.value = false
+  savedSelectionText.value = ''
 }
 
 // ESC 键监听
@@ -224,12 +249,26 @@ function handleKeyDown(e: KeyboardEvent) {
 
 
 function handleAI(assistantId: string) {
+  // 先保存选中文本（避免 hideContextMenu 清空它）
+  pendingSelectionText = savedSelectionText.value
+
   hideContextMenu()
   if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
     showToast('请先在设置中配置 AI')
     return
   }
   callAI(assistantId)
+}
+
+// mousedown 时保存选中文本（右键点击时比 contextmenu 更早触发）
+function handleMouseDown(e: MouseEvent) {
+  if (e.button === 2) { // 右键
+    const selection = window.getSelection()
+    const text = selection?.toString().trim()
+    if (text) {
+      savedSelectionText.value = text
+    }
+  }
 }
 
 onMounted(async () => {
@@ -260,6 +299,8 @@ onMounted(async () => {
       }
     }
   }, true)
+
+  document.addEventListener('mousedown', handleMouseDown)
 
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
@@ -350,6 +391,7 @@ onUnmounted(() => {
   if (aiAbortController) {
     aiAbortController.abort()
   }
+  document.removeEventListener('mousedown', handleMouseDown)
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
   document.removeEventListener('keydown', handleKeyDown)
