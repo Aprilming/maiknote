@@ -14,6 +14,18 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { all, createLowlight } from 'lowlight'
 import 'highlight.js/styles/tokyo-night-dark.css'
 import { createSlashCommand } from './extensions/SlashCommandExtension'
+import GlobalDragHandle from 'tiptap-extension-global-drag-handle'
+import { Color } from '@tiptap/extension-color'
+import TextStyle from '@tiptap/extension-text-style'
+import Highlight from '@tiptap/extension-highlight'
+import Underline from '@tiptap/extension-underline'
+import FontFamily from '@tiptap/extension-font-family'
+import { BlockMenuExtension } from './extensions/BlockMenuExtension'
+import BlockMenuPopover from '../BlockMenuPopover.vue'
+import Table from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
 
 const lowlight = createLowlight(all)
 
@@ -72,8 +84,20 @@ function showToast(message: string, duration = 2000) {
   setTimeout(() => toast.remove(), duration)
 }
 
+// 停止 AI 请求
+function stopAI() {
+  if (aiAbortController) {
+    aiAbortController.abort()
+    aiAbortController = null
+    isAILoading.value = false
+    document.body.style.cursor = ''
+    showToast('已停止')
+  }
+}
+
 // 右键菜单处理
 function handleContextMenu(e: MouseEvent) {
+
   // 检查是否有选中文本
   if (editor.value) {
     const { from, to } = editor.value.state.selection
@@ -396,13 +420,31 @@ const editor = useEditor({
     }),
     Markdown,
     Placeholder.configure({
-      placeholder: 'Start typing...'
+      placeholder: ''
     }),
     Image.configure({
       inline: true,
       allowBase64: true,
     }),
     createSlashCommand(),
+    // ---- 新增扩展 ----
+    GlobalDragHandle.configure({
+      dragHandleWidth: 20,
+      scrollTreshold: 100,
+    }),
+    TextStyle,
+    Color,
+    Highlight.configure({ multicolor: true }),
+    Underline,
+    FontFamily,
+    BlockMenuExtension,
+    // 表格扩展
+    Table.configure({
+      resizable: true,
+    }),
+    TableRow,
+    TableCell,
+    TableHeader,
   ],
   content: props.initialContent,
   onUpdate: ({ editor }) => {
@@ -434,6 +476,10 @@ onMounted(() => {
   document.addEventListener('mousedown', handleMouseDown)
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
+  // 存储 editor view 供 block menu 拖拽使用
+  if (editor.value) {
+    ;(window as any).__tiptapEditorView = editor.value.view
+  }
 })
 
 onUnmounted(() => {
@@ -441,11 +487,22 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', handleMouseDown)
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
+  ;(window as any).__tiptapEditorView = null
 })
 </script>
 
 <template>
   <div class="tiptap-wrapper">
+    <!-- AI 加载指示器 -->
+    <div v-if="isAILoading" class="ai-loading-indicator">
+      <div class="ai-loading-content">
+        <span class="ai-loading-text">AI 思考中...</span>
+        <button class="ai-stop-btn" @click="stopAI">
+          <i class="i-mdi-stop"></i>
+          停止
+        </button>
+      </div>
+    </div>
     <EditorContent :editor="editor" />
     <BubbleMenu
       v-if="editor"
@@ -453,30 +510,49 @@ onUnmounted(() => {
       :tippy-options="{ duration: 100, placement: 'top' }"
       class="bubble-menu"
     >
-      <button
-        @click="editor.chain().focus().toggleBold().run()"
-        :class="{ 'is-active': editor.isActive('bold') }"
-      >
-        B
-      </button>
-      <button
-        @click="editor.chain().focus().toggleItalic().run()"
-        :class="{ 'is-active': editor.isActive('italic') }"
-      >
-        I
-      </button>
-      <button
-        @click="editor.chain().focus().toggleStrike().run()"
-        :class="{ 'is-active': editor.isActive('strike') }"
-      >
-        S
-      </button>
-      <button
-        @click="editor.chain().focus().toggleCode().run()"
-        :class="{ 'is-active': editor.isActive('code') }"
-      >
-        Code
-      </button>
+      <!-- 格式 -->
+      <button @click="editor.chain().focus().toggleBold().run()"
+        :class="{ 'is-active': editor.isActive('bold') }"><b>B</b></button>
+      <button @click="editor.chain().focus().toggleItalic().run()"
+        :class="{ 'is-active': editor.isActive('italic') }"><i>I</i></button>
+      <button @click="editor.chain().focus().toggleUnderline().run()"
+        :class="{ 'is-active': editor.isActive('underline') }"><u>U</u></button>
+      <button @click="editor.chain().focus().toggleStrike().run()"
+        :class="{ 'is-active': editor.isActive('strike') }"><s>S</s></button>
+      <button @click="editor.chain().focus().toggleCode().run()"
+        :class="{ 'is-active': editor.isActive('code') }">Code</button>
+
+      <div class="bm-sep" />
+
+      <!-- 字体颜色 inline picker -->
+      <div class="bm-color-picker">
+        <span class="bm-label">A</span>
+        <input
+          type="color"
+          class="bm-color-input"
+          @input="(e) => editor?.chain().focus().setColor((e.target as HTMLInputElement).value).run()"
+        />
+      </div>
+
+      <!-- 背景色 inline picker -->
+      <div class="bm-color-picker">
+        <span class="bm-label" style="background: #ffe066; padding: 0 3px; border-radius: 2px;">A</span>
+        <input
+          type="color"
+          class="bm-color-input"
+          @input="(e) => editor?.chain().focus().setHighlight({ color: (e.target as HTMLInputElement).value }).run()"
+        />
+      </div>
+
+      <div class="bm-sep" />
+
+      <!-- 块类型快速切 -->
+      <button @click="editor.chain().focus().setHeading({ level: 1 }).run()"
+        :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }">H1</button>
+      <button @click="editor.chain().focus().setHeading({ level: 2 }).run()"
+        :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }">H2</button>
+      <button @click="editor.chain().focus().toggleBlockquote().run()"
+        :class="{ 'is-active': editor.isActive('blockquote') }">"</button>
     </BubbleMenu>
     <!-- 右键菜单 -->
     <Teleport to="body">
@@ -504,6 +580,8 @@ onUnmounted(() => {
         </template>
       </div>
     </Teleport>
+    <!-- 块左侧菜单弹窗 -->
+    <BlockMenuPopover :editor="editor" />
   </div>
 </template>
 
@@ -513,6 +591,53 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 40px 48px;
   background: var(--color-background);
+}
+
+/* AI 加载指示器 */
+.ai-loading-indicator {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  background: rgba(30, 30, 30, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.ai-loading-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-loading-text {
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+.ai-stop-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(255, 100, 100, 0.9);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ai-stop-btn:hover {
+  background: rgba(255, 80, 80, 1);
+}
+
+.ai-stop-btn i {
+  font-size: 14px;
 }
 
 :deep(.tiptap) {
@@ -532,7 +657,7 @@ onUnmounted(() => {
 }
 
 .bubble-menu button {
-  padding: 6px 10px;
+  padding: 6px 6px;
   border: none;
   background: transparent;
   color: #e0e0e0;
@@ -619,6 +744,76 @@ onUnmounted(() => {
   background: transparent;
 }
 
+/* 块左侧触发按钮 */
+:deep(.block-menu-trigger) {
+  position: absolute;
+  left: -28px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+:deep(.ProseMirror:hover .block-menu-trigger),
+:deep(.block-menu-trigger:hover) {
+  opacity: 1;
+  background: var(--color-surface);
+}
+
+/* BubbleMenu 新增元素 */
+.bm-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 0 2px;
+}
+.bm-color-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.bm-label {
+  font-size: 13px;
+  font-weight: bold;
+  color: #e0e0e0;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.bm-color-input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.bm-label:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* 拖拽手柄样式覆盖 */
+:deep(.drag-handle) {
+  opacity: 0;
+  transition: opacity 0.15s;
+  cursor: grab;
+}
+:deep(.ProseMirror:hover .drag-handle) {
+  opacity: 0.4;
+}
+:deep(.drag-handle:hover) {
+  opacity: 1 !important;
+}
+
+/* 编辑器左侧留白（给块按钮 + 拖拽手柄腾空间） */
+.tiptap-wrapper {
+  padding: 40px 48px 40px 72px; /* 左侧从 48px 改为 72px */
+}
+
 :deep(.tiptap pre) {
   background: var(--color-surface);
   border-radius: 8px;
@@ -660,7 +855,7 @@ onUnmounted(() => {
 .tiptap > .ProseMirror {
   height: auto;
   min-height: 100%;
-  padding: 40px 48px;
+  padding: 40px 48px 40px 72px;
   background: var(--color-background);
   color: var(--color-text);
 }

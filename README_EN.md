@@ -65,7 +65,7 @@ MarkNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 **Implemented**
 
 - ✅ Borderless floating window
-- ✅ WYSIWYG Markdown editor (Vditor)
+- ✅ WYSIWYG Markdown editor (Tiptap, Notion-style block operations)
 - ✅ Auto-save with debounce
 - ✅ Global shortcut to summon/hide
 - ✅ Note search
@@ -75,6 +75,8 @@ MarkNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 - ✅ iCloud directory storage
 - ✅ Import / Export
 - ✅ Dark / Light theme toggle
+- ✅ Block drag and drop reordering
+- ✅ Block operation menu (convert type, font style, colors, move up/down, duplicate, delete)
 
 **Planned**
 
@@ -96,7 +98,7 @@ Notes are stored in your iCloud directory for seamless multi-device sync:
 | Layer | Technology |
 |:---|:---|
 | Framework | Tauri 2.x + Vue 3.x + TypeScript |
-| Editor | Vditor |
+| Editor | Tiptap (Notion-style block operations) |
 | State | Pinia 2.x |
 | Styling | UnoCSS |
 | Storage | Local `.md` files (iCloud directory) |

@@ -63,7 +63,7 @@ MarkNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdo
 **已实现**
 
 - ✅ 无边框悬浮窗口
-- ✅ 所见即所得 Markdown 编辑器（Vditor）
+- ✅ 所见即所得 Markdown 编辑器（Tiptap，Notion 风格块操作）
 - ✅ 自动保存（防抖）
 - ✅ 全局快捷键唤起
 - ✅ 笔记搜索
@@ -73,6 +73,8 @@ MarkNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdo
 - ✅ iCloud 目录文件存储
 - ✅ 导入 / 导出
 - ✅ 深色 / 浅色主题切换
+- ✅ 块拖拽排序
+- ✅ 块操作菜单（转换类型、字体样式、颜色、上移、下移、复制、删除）
 
 **计划中**
 
@@ -95,7 +97,7 @@ MarkNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdo
 | 层级 | 技术 |
 |:---|:---|
 | 框架 | Tauri 2.x + Vue 3.x + TypeScript |
-| 编辑器 | Vditor |
+| 编辑器 | Tiptap（Notion 风格块操作） |
 | 状态管理 | Pinia 2.x |
 | 样式 | UnoCSS |
 | 存储 | 本地 `.md` 文件（iCloud 目录） |

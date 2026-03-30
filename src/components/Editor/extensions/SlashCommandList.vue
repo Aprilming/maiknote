@@ -1,32 +1,88 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, defineExpose, nextTick } from 'vue'
 import type { Editor } from '@tiptap/vue-3'
 
 const props = defineProps<{
   command: (item: { title: string; command: string }) => void
   editor: Editor
+  items: Array<{ title: string; command: string }>
+  range?: { from: number; to: number }
 }>()
 
 const selectedIndex = ref(0)
+const listRef = ref<HTMLElement>()
 
-const items = [
-  { title: 'Todo', command: 'todo' },
-  { title: 'Code Block', command: 'code' },
-  { title: 'Heading 1', command: 'heading1' },
-  { title: 'Heading 2', command: 'heading2' },
-  { title: 'Heading 3', command: 'heading3' },
-  { title: 'Bullet List', command: 'bulletList' },
-  { title: 'Ordered List', command: 'orderedList' },
-  { title: 'Quote', command: 'blockquote' },
+// 滚动到选中项
+function scrollToSelected() {
+  nextTick(() => {
+    if (!listRef.value) return
+    const buttons = listRef.value.querySelectorAll('.slash-item')
+    const selectedBtn = buttons[selectedIndex.value] as HTMLElement
+    if (!selectedBtn) return
+
+    const listHeight = listRef.value.clientHeight
+    const itemTop = selectedBtn.offsetTop
+    const itemBottom = itemTop + selectedBtn.offsetHeight
+
+    if (itemTop < listRef.value.scrollTop) {
+      listRef.value.scrollTop = itemTop
+    } else if (itemBottom > listRef.value.scrollTop + listHeight) {
+      listRef.value.scrollTop = itemBottom - listHeight
+    }
+  })
+}
+
+// 分组的命令列表
+const COMMAND_GROUPS = [
+  {
+    label: '基础块',
+    items: [
+      { title: 'H1[标题1]', command: 'heading1', icon: 'H1' },
+      { title: 'H2[标题2]', command: 'heading2', icon: 'H2' },
+      { title: 'H3[标题3]', command: 'heading3', icon: 'H3' },
+    ]
+  },
+  {
+    label: '列表',
+    items: [
+      { title: 'disorder[无序]', command: 'bulletList', icon: '•' },
+      { title: 'ordered[有序]', command: 'orderedList', icon: '1.' },
+      { title: 'todo[任务]', command: 'todo', icon: '☑' },
+    ]
+  },
+  {
+    label: '高级',
+    items: [
+      { title: 'quote[引用]', command: 'blockquote', icon: '"' },
+      { title: 'code[代码]', command: 'code', icon: '<>' },
+      { title: 'table[表格]', command: 'table', icon: '⊞' },
+    ]
+  }
 ]
 
-const executeCommand = (cmd: string) => {
+// 过滤后的项目（用于显示）
+const filteredItems = ref<Array<{ title: string; command: string; icon: string }>>([])
+
+// 根据 query 更新过滤项
+function updateFilteredItems(query: string) {
+  if (!query) {
+    filteredItems.value = COMMAND_GROUPS.flatMap(g => g.items)
+  } else {
+    filteredItems.value = COMMAND_GROUPS
+      .flatMap(g => g.items)
+      .filter(item => item.title.toLowerCase().includes(query.toLowerCase()))
+  }
+  selectedIndex.value = 0
+}
+
+// 执行命令
+function runCommand(command: string) {
   const editor = props.editor
   if (!editor) return
 
-  switch (cmd) {
+  switch (command) {
     case 'todo':
-      editor.chain().focus().insertContent('- [ ] ').run()
+      editor.chain().focus().toggleTaskList().run()
       break
     case 'code':
       editor.chain().focus().toggleCodeBlock().run()
@@ -49,79 +105,144 @@ const executeCommand = (cmd: string) => {
     case 'blockquote':
       editor.chain().focus().toggleBlockquote().run()
       break
+    case 'table':
+      editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+      break
   }
 }
 
-const selectItem = (index: number) => {
-  const item = items[index]
-  if (item) {
-    executeCommand(item.command)
+// 选择项
+function selectItem(index: number) {
+  const item = filteredItems.value[index]
+  if (!item) return
+
+  const editor = props.editor
+  if (!editor) return
+
+  // 如果有 range，先删除 / 及搜索文本
+  if (props.range) {
+    editor.chain().focus().deleteRange(props.range).run()
   }
+
+  // 执行命令
+  runCommand(item.command)
 }
 
-const onKeyDown = (event: KeyboardEvent) => {
-  if (event.key === 'ArrowUp') {
-    selectedIndex.value = (selectedIndex.value - 1 + items.length) % items.length
-    return true
-  }
-  if (event.key === 'ArrowDown') {
-    selectedIndex.value = (selectedIndex.value + 1) % items.length
-    return true
-  }
-  if (event.key === 'Enter') {
-    selectItem(selectedIndex.value)
-    return true
-  }
-  return false
-}
+// 暴露方法给外部
+defineExpose({
+  onKeyDown: (event: KeyboardEvent) => {
+    if (filteredItems.value.length === 0) return false
 
-onMounted(() => {
-  document.addEventListener('keydown', onKeyDown)
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedIndex.value = (selectedIndex.value - 1 + filteredItems.value.length) % filteredItems.value.length
+      scrollToSelected()
+      return true
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedIndex.value = (selectedIndex.value + 1) % filteredItems.value.length
+      scrollToSelected()
+      return true
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      selectItem(selectedIndex.value)
+      return true
+    }
+    return false
+  },
+  onQueryUpdate: (query: string) => {
+    updateFilteredItems(query)
+  }
 })
 
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', onKeyDown)
-})
+// 初始化
+updateFilteredItems('')
 </script>
 
 <template>
-  <div class="slash-command-list">
-    <button
-      v-for="(item, index) in items"
-      :key="index"
-      :class="{ 'is-selected': index === selectedIndex }"
-      @click="selectItem(index)"
-      @mouseenter="selectedIndex = index"
-    >
-      {{ item.title }}
-    </button>
+  <div class="slash-command-popup">
+    <div ref="listRef" class="slash-command-list">
+      <template v-if="filteredItems.length === 0">
+        <div class="slash-empty">无匹配命令</div>
+      </template>
+      <template v-else>
+        <button
+          v-for="(item, index) in filteredItems"
+          :key="item.command + index"
+          class="slash-item"
+          :class="{ 'is-selected': index === selectedIndex }"
+          @click="selectItem(index)"
+          @mouseenter="selectedIndex = index"
+        >
+          <span class="slash-icon">{{ item.icon }}</span>
+          <span class="slash-title">{{ item.title }}</span>
+        </button>
+      </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.slash-command-popup {
+  background: #ffffff;
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
 .slash-command-list {
   padding: 6px;
-  background: rgba(30, 30, 30, 0.95);
-  border-radius: 8px;
-  min-width: 160px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
-.slash-command-list button {
-  display: block;
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px 10px;
   border: none;
-  background: transparent;
-  color: #e0e0e0;
+  background: none;
+  border-radius: 6px;
   cursor: pointer;
-  border-radius: 4px;
-  text-align: left;
   font-size: 13px;
+  color: var(--color-text, #1a1a1a);
+  text-align: left;
+  transition: background 0.1s;
 }
 
-.slash-command-list button.is-selected,
-.slash-command-list button:hover {
-  background: rgba(255, 255, 255, 0.1);
+.slash-item:hover,
+.slash-item.is-selected {
+  background: var(--color-hover, rgba(0,0,0,0.06));
+}
+
+.slash-icon {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-hover, rgba(0,0,0,0.06));
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary, #666);
+  flex-shrink: 0;
+}
+
+.slash-title {
+  flex: 1;
+}
+
+.slash-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-text-secondary, #888);
+  font-size: 13px;
 }
 </style>

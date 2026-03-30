@@ -25,7 +25,8 @@
         "resizable": true,
         "center": true,
         "backgroundColor": "#00000000",
-        "visibleOnAllWorkspaces": false
+        "visibleOnAllWorkspaces": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

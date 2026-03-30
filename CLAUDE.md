@@ -27,8 +27,16 @@ npm run tauri build -- --target x86_64-apple-darwin
 ### Frontend (src/)
 - **Pinia stores** (`stores/`): `noteStore.ts` manages notes with debounced iCloud sync, `settingStore.ts` for app settings, `assistantsStore.ts` for AI assistants
 - **Composables** (`composables/`): `useFileSystem.ts` wraps Tauri invoke commands, `useTheme.ts` handles dark/light theme, `useGlobalShortcut.ts` manages global hotkeys
-- **Components**: `Editor/` (MilkdownEditor.vue - main editor), `Sidebar/`, `TitleBar/`, `Settings/`, `Search/`, `Assistant/`
-- **Vditor** is the markdown editor (see `VditorEditor.vue`)
+- **Components**: `Editor/` (TiptapEditor.vue - main editor), `Sidebar/`, `TitleBar/`, `Settings/`, `Search/`, `Assistant/`
+- **Tiptap** is the markdown editor with Notion-style block operations (see `TiptapEditor.vue`)
+
+### Editor Features (Tiptap)
+- Block left-side menu button (hover to show drag handle + block menu trigger)
+- Block operation popover (convert block type, font style, colors, move, duplicate, delete)
+- BubbleMenu with formatting: Bold, Italic, Underline, Strikethrough, Code, Color pickers, Heading shortcuts
+- Global drag handle for block reordering
+- Slash command menu for block insertion
+- Task list, code blocks with syntax highlighting
 
 ### Backend (src-tauri/)
 - **lib.rs**: Tauri commands for file I/O (`read_note`, `write_note`, `delete_note`, `read_metadata`, `write_metadata`), global shortcut registration, window alpha, and macOS-specific vibrancy effects
