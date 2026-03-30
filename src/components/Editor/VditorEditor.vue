@@ -32,6 +32,7 @@ const savedSelectionText = ref('') // 保存右键菜单打开时的选中文本
 let pendingSelectionText = '' // 待处理的选中文本（用于传递给AI）
 let contentBeforeSelection = '' // 选中内容之前的内容
 let contentAfterSelection = '' // 选中内容之后的内容
+let userHadSelection = false   // 用户发起 AI 请求时是否有选中文本
 
 const hasAIConfig = computed(() => true) // 始终显示菜单，未配置时点击会提示
 
@@ -152,16 +153,14 @@ async function callAI(assistantId: string) {
     let fullContent = ''
 
     // 根据是否有选中文本决定初始内容
-    // 只有当 pendingSelectionText 存在时才清空相关内容，否则保留原内容
+    // 有选中文本时：handleAI 已经删除了选中内容，编辑器现在只有 contentBeforeSelection + contentAfterSelection
+    // 无选中文本时：清空编辑器
     if (vditorInstance) {
-      if (pendingSelectionText && contentBeforeSelection !== undefined) {
-        // 有选中文本：只保留选中前的内容
-        vditorInstance.setValue(contentBeforeSelection)
-      } else if (!pendingSelectionText) {
+      if (!userHadSelection) {
         // 没有选中文本：清空所有内容
         vditorInstance.setValue('')
       }
-      // 如果 pendingSelectionText 存在但 contentBeforeSelection 未定义，说明 vditorInstance 可能未就绪，保留原内容
+      // userHadSelection 为 true 时，编辑器内容已经在 handleAI 中设置好了
     }
 
     while (true) {
@@ -182,9 +181,9 @@ async function callAI(assistantId: string) {
               fullContent += content
               // 流式更新编辑器内容
               if (vditorInstance) {
-                if (contentBeforeSelection) {
-                  // 有选中文本：拼接 选中前内容 + AI回复
-                  vditorInstance.setValue(contentBeforeSelection + fullContent)
+                if (userHadSelection) {
+                  // 有选中文本：拼接 选中前内容 + AI回复 + 选中后内容
+                  vditorInstance.setValue(contentBeforeSelection + fullContent + contentAfterSelection)
                 } else {
                   // 没有选中文本：直接显示AI回复
                   vditorInstance.setValue(fullContent)
@@ -278,24 +277,29 @@ function handleAI(assistantId: string) {
   // 先保存选中文本（避免 hideContextMenu 清空它）
   pendingSelectionText = savedSelectionText.value
 
-  // 如果有选中文本，尝试在内容中查找并保留前后内容
-  if (pendingSelectionText && vditorInstance) {
+  // 使用 savedSelectionText 判断是否有选中文本（不需要依赖 vditor.getSelection()）
+  userHadSelection = false
+  contentBeforeSelection = ''
+  contentAfterSelection = ''
+
+  if (vditorInstance && pendingSelectionText) {
     const fullContent = vditorInstance.getValue()
-    const startIndex = fullContent.indexOf(pendingSelectionText)
+    let startIndex = fullContent.indexOf(pendingSelectionText)
+
+    // 如果 indexOf 失败，尝试规范化后匹配（换行符差异）
+    if (startIndex === -1) {
+      const normalizedContent = fullContent.replace(/\r\n/g, '\n')
+      const normalizedPending = pendingSelectionText.replace(/\r\n/g, '\n')
+      startIndex = normalizedContent.indexOf(normalizedPending)
+    }
+
     if (startIndex !== -1) {
-      // 找到了选中文本，保存前后内容
+      userHadSelection = true
       contentBeforeSelection = fullContent.slice(0, startIndex)
       contentAfterSelection = fullContent.slice(startIndex + pendingSelectionText.length)
-    } else {
-      // 选中文本不在 Markdown 源码中（可能是渲染后的特殊元素）
-      // 保留原内容，不替换
-      pendingSelectionText = ''
-      contentBeforeSelection = ''
-      contentAfterSelection = ''
+      // 删除选中内容：设置内容为选中前+选中后
+      vditorInstance.setValue(contentBeforeSelection + contentAfterSelection)
     }
-  } else {
-    contentBeforeSelection = ''
-    contentAfterSelection = ''
   }
 
   hideContextMenu()
