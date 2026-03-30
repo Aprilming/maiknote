@@ -296,32 +296,51 @@ function handleAI(assistantId: string) {
   contentAfterSelection = ''
   originalContent = ''
 
-  // 使用首尾片段匹配来定位选中文本
+  // 使用首尾片段匹配来定位选中文本（逐步递减长度）
   if (vditorInstance && savedSelectionText.value) {
     const fullContent = vditorInstance.getValue()
     const text = pendingSelectionText
 
-    // 取前15个字和后15个字
-    const prefixLength = 5
-    const suffixLength = 5
-    const prefix = text.slice(0, prefixLength)
-    const suffix = text.slice(-suffixLength)
+    const MAX_PREFIX_SUFFIX = 15
+    const MIN_PREFIX_SUFFIX = 5
+
+    let prefixIndex = -1
+    let suffixIndex = -1
+    let matchedPrefixLength = 0
+    let matchedSuffixLength = 0
+
+    // 前缀匹配：从长到短递减，直到匹配成功或小于最小长度
+    for (let len = MAX_PREFIX_SUFFIX; len >= MIN_PREFIX_SUFFIX; len--) {
+      const prefix = text.slice(0, len)
+      prefixIndex = fullContent.indexOf(prefix)
+      if (prefixIndex !== -1) {
+        matchedPrefixLength = len
+        console.log('[DEBUG handleAI] prefix matched at length:', len, 'index:', prefixIndex)
+        break
+      }
+    }
+
+    // 后缀匹配：从长到短递减，直到匹配成功或小于最小长度
+    for (let len = MAX_PREFIX_SUFFIX; len >= MIN_PREFIX_SUFFIX; len--) {
+      const suffix = text.slice(-len)
+      const searchFrom = prefixIndex !== -1 ? prefixIndex : 0
+      const found = fullContent.indexOf(suffix, searchFrom)
+      if (found !== -1) {
+        suffixIndex = found
+        matchedSuffixLength = len
+        console.log('[DEBUG handleAI] suffix matched at length:', len, 'index:', suffixIndex)
+        break
+      }
+    }
 
     console.log('[DEBUG handleAI] fullContent:', JSON.stringify(fullContent.slice(0, 500)))
     console.log('[DEBUG handleAI] selected text:', JSON.stringify(text.slice(0, 500)))
-    console.log('[DEBUG handleAI] prefix:', JSON.stringify(prefix))
-    console.log('[DEBUG handleAI] suffix:', JSON.stringify(suffix))
-
-    // 找前缀和后缀在编辑器内容中的位置
-    const prefixIndex = fullContent.indexOf(prefix)
-    const suffixIndex = fullContent.indexOf(suffix, prefixIndex !== -1 ? prefixIndex : 0)
-
-    console.log('[DEBUG handleAI] prefix index:', prefixIndex, 'suffix index:', suffixIndex)
+    console.log('[DEBUG handleAI] prefix matched:', matchedPrefixLength, 'suffix matched:', matchedSuffixLength)
 
     if (prefixIndex !== -1 && suffixIndex !== -1 && prefixIndex < suffixIndex) {
       // 找到了前缀和后缀，用它们来精确计算位置
       contentBeforeSelection = fullContent.slice(0, prefixIndex)
-      contentAfterSelection = fullContent.slice(suffixIndex + suffixLength)
+      contentAfterSelection = fullContent.slice(suffixIndex + matchedSuffixLength)
 
       // 删除选中内容：设置内容为选中前+选中后
       vditorInstance.setValue(contentBeforeSelection + contentAfterSelection)
