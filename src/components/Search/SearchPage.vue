@@ -232,6 +232,7 @@ onUnmounted(() => {
       >
         <div class="result-header">
           <div class="result-title" v-html="highlightKeyword(note.title, localQuery)"></div>
+          <i v-if="note.isLocked" class="i-mdi-lock result-locked-icon"></i>
           <div class="result-date">{{ formatDate(note.updatedAt) }}</div>
         </div>
         <div class="result-preview" v-html="highlightKeyword(getPreview(note.content), localQuery)"></div>
@@ -387,6 +388,13 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.result-locked-icon {
+  font-size: 14px;
+  color: var(--color-primary);
+  margin-left: 6px;
+  flex-shrink: 0;
 }
 
 .result-date {

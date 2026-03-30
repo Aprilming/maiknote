@@ -25,7 +25,7 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
     keyMatch = event.key === 'ArrowRight'
   } else if (key === 'backspace') {
     keyMatch = event.key === 'Backspace'
-  } else if (key === 'n' || key === 'f' || key === 'p') {
+  } else if (key === 'n' || key === 'f' || key === 'p' || key === 'l') {
     keyMatch = event.key.toLowerCase() === key
   } else if (key === '[') {
     keyMatch = event.key === '['
@@ -91,6 +91,15 @@ export function useShortcuts(onOpenSettings?: () => void) {
         settingStore.updateSettings('alwaysOnTop', newValue)
       } catch (error) {
         console.error('Failed to toggle pin:', error)
+      }
+      return
+    }
+
+    // 锁定/解锁笔记
+    if (matchesShortcut(e, shortcuts.lock)) {
+      e.preventDefault()
+      if (noteStore.currentNoteId) {
+        noteStore.toggleLock(noteStore.currentNoteId)
       }
       return
     }

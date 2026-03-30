@@ -12,6 +12,12 @@
   --color-success: #22c55e;
   --color-warning: #f59e0b;
 
+  /* Popup theme variables */
+  --color-popup-bg: rgba(255, 255, 255, 0.95);
+  --color-popup-border: rgba(226, 232, 240, 0.4);
+  --color-popup-text: #1e293b;
+  --color-popup-hover: rgba(0, 0, 0, 0.06);
+
   --font-size-base: 15px;
   --font-size-sm: 13px;
   --font-size-lg: 17px;
@@ -44,6 +50,12 @@
   --color-danger: #ef4444;
   --color-success: #22c55e;
   --color-warning: #f59e0b;
+
+  /* Popup theme variables */
+  --color-popup-bg: rgba(30, 30, 30, 0.95);
+  --color-popup-border: rgba(255, 255, 255, 0.1);
+  --color-popup-text: #e0e0e0;
+  --color-popup-hover: rgba(255, 255, 255, 0.1);
 }
 
 /* Reset and base styles */

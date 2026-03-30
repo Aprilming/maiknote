@@ -145,6 +145,7 @@ export const useNoteStore = defineStore('note', () => {
           updatedAt: item.updatedAt,
           tags: item.tags,
           isPinned: item.isPinned,
+          isLocked: item.isLocked,
         })
       }
 
@@ -182,6 +183,7 @@ export const useNoteStore = defineStore('note', () => {
         updatedAt: note.updatedAt,
         tags: note.tags,
         isPinned: note.isPinned,
+        isLocked: note.isLocked,
       })),
     }
 
@@ -238,6 +240,7 @@ export const useNoteStore = defineStore('note', () => {
       createdAt: now,
       updatedAt: now,
       isPinned: false,
+      isLocked: false,
     }
     notes.value.unshift(newNote)
     currentNoteId.value = newNote.id
@@ -257,6 +260,7 @@ export const useNoteStore = defineStore('note', () => {
       createdAt: now,
       updatedAt: now,
       isPinned: false,
+      isLocked: false,
     }
     notes.value.push(newNote)
     currentNoteId.value = newNote.id
@@ -276,6 +280,7 @@ export const useNoteStore = defineStore('note', () => {
       createdAt: now,
       updatedAt: now,
       isPinned: false,
+      isLocked: false,
     }
 
     // Find current note index directly to ensure accuracy
@@ -305,6 +310,7 @@ export const useNoteStore = defineStore('note', () => {
       createdAt: now,
       updatedAt: now,
       isPinned: false,
+      isLocked: false,
     }
 
     // Insert after current note
@@ -341,6 +347,10 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   async function deleteNote(id: string) {
+    const note = notes.value.find(n => n.id === id)
+    if (note?.isLocked) {
+      return // Cannot delete locked note
+    }
     const index = notes.value.findIndex(n => n.id === id)
     if (index !== -1) {
       notes.value.splice(index, 1)
@@ -360,6 +370,17 @@ export const useNoteStore = defineStore('note', () => {
     const note = notes.value.find(n => n.id === id)
     if (note) {
       note.isPinned = !note.isPinned
+      note.updatedAt = Date.now()
+
+      // Schedule metadata save to iCloud (debounced)
+      scheduleSave() // Will save metadata
+    }
+  }
+
+  function toggleLock(id: string) {
+    const note = notes.value.find(n => n.id === id)
+    if (note) {
+      note.isLocked = !note.isLocked
       note.updatedAt = Date.now()
 
       // Schedule metadata save to iCloud (debounced)
@@ -509,6 +530,7 @@ export const useNoteStore = defineStore('note', () => {
     updateNote,
     deleteNote,
     togglePin,
+    toggleLock,
     reorderNotes,
     selectPrev,
     selectNext,

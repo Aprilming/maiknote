@@ -186,8 +186,8 @@ updateFilteredItems('')
 
 <style scoped>
 .slash-command-popup {
-  background: #ffffff;
-  border: 1px solid var(--color-border, #eee);
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   overflow: hidden;
@@ -211,14 +211,14 @@ updateFilteredItems('')
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--color-text, #1a1a1a);
+  color: var(--color-text);
   text-align: left;
   transition: background 0.1s;
 }
 
 .slash-item:hover,
 .slash-item.is-selected {
-  background: var(--color-hover, rgba(0,0,0,0.06));
+  background: var(--color-surface);
 }
 
 .slash-icon {
@@ -227,11 +227,11 @@ updateFilteredItems('')
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-hover, rgba(0,0,0,0.06));
+  background: var(--color-surface);
   border-radius: 5px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary);
   flex-shrink: 0;
 }
 
@@ -242,7 +242,7 @@ updateFilteredItems('')
 .slash-empty {
   padding: 16px;
   text-align: center;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 </style>

@@ -10,6 +10,7 @@ export interface ShortcutSettings {
   newNote: string       // 新增页面
   deleteNote: string   // 删除页面
   pin: string          // 置顶窗口
+  lock: string         // 锁定/解锁笔记
 }
 
 export interface AppSettings {
@@ -55,6 +56,7 @@ export const useSettingStore = defineStore('setting', () => {
       newNote: 'Cmd+N',
       deleteNote: 'Cmd+Backspace',
       pin: 'Cmd+P',
+      lock: 'Cmd+L',
     },
     aiUrl: 'https://api.deepseek.com/chat/completions',
     aiKey: '',
@@ -143,6 +145,7 @@ export const useSettingStore = defineStore('setting', () => {
         newNote: 'Cmd+N',
         deleteNote: 'Cmd+Backspace',
         pin: 'Cmd+P',
+        lock: 'Cmd+L',
       },
       aiUrl: 'https://api.deepseek.com/chat/completions',
       aiKey: '',

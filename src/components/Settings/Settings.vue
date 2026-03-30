@@ -74,7 +74,7 @@ function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
 
 function blockNoteShortcuts(e: KeyboardEvent) {
   const shortcuts = settingStore.settings.shortcuts
-  const blockedShortcuts = [shortcuts.prevNote, shortcuts.nextNote, shortcuts.newNote, shortcuts.deleteNote]
+  const blockedShortcuts = [shortcuts.prevNote, shortcuts.nextNote, shortcuts.newNote, shortcuts.deleteNote, shortcuts.lock]
 
   for (const shortcut of blockedShortcuts) {
     if (matchesShortcut(e, shortcut)) {
@@ -126,6 +126,7 @@ const shortcutLabels: Record<keyof ShortcutSettings, string> = {
   newNote: '新增页面',
   deleteNote: '删除页面',
   pin: '置顶窗口',
+  lock: '锁定/解锁笔记',
 }
 
 // 快捷键说明
@@ -136,6 +137,7 @@ const shortcutDescs: Record<keyof ShortcutSettings, string> = {
   newNote: '应用内快捷键，新建一条笔记',
   deleteNote: '应用内快捷键，删除当前笔记',
   pin: '应用内快捷键，切换窗口置顶状态',
+  lock: '应用内快捷键，锁定/解锁当前笔记',
 }
 
 // 开始录制快捷键
@@ -167,6 +169,16 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.altKey) parts.push('Option')
   if (e.shiftKey) parts.push('Shift')
   if (e.metaKey) parts.push('Cmd')
+
+  // 禁止单个键（没有任何修饰键）
+  if (parts.length === 0) {
+    return
+  }
+
+  // 最多4个组合键
+  if (parts.length > 4) {
+    return
+  }
 
   // 使用 e.code 获取物理键名
   let keyName: string

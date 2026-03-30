@@ -19,63 +19,49 @@
         <span class="bm-icon">{{ t.icon }}</span>{{ t.label }}
       </button>
 
-      <div class="bm-divider" />
+<!--      <div class="bm-divider" />-->
 
-      <!-- 字体样式 -->
-      <div class="bm-section-label">文字样式</div>
+<!--      &lt;!&ndash; 字体样式 &ndash;&gt;-->
+<!--      <div class="bm-section-label">文字样式</div>-->
 
-      <!-- 字号 -->
-      <div class="bm-row">
-        <span class="bm-row-label">字号</span>
-        <div class="bm-size-buttons">
-          <button
-            v-for="s in FONT_SIZES"
-            :key="s.value"
-            class="bm-size-btn"
-            :class="{ active: currentFontSize === s.value }"
-            @click="setFontSize(s.value)"
-          >{{ s.label }}</button>
-        </div>
-      </div>
+<!--      &lt;!&ndash; 字重 &ndash;&gt;-->
+<!--      <div class="bm-row">-->
+<!--        <span class="bm-row-label">字重</span>-->
+<!--        <div class="bm-size-buttons">-->
+<!--          <button class="bm-size-btn" @click="editor?.chain().focus().setBold().run()">粗体</button>-->
+<!--          <button class="bm-size-btn" @click="editor?.chain().focus().unsetBold().run()">正常</button>-->
+<!--        </div>-->
+<!--      </div>-->
 
-      <!-- 字重 -->
-      <div class="bm-row">
-        <span class="bm-row-label">字重</span>
-        <div class="bm-size-buttons">
-          <button class="bm-size-btn" @click="editor?.chain().focus().setBold().run()">粗体</button>
-          <button class="bm-size-btn" @click="editor?.chain().focus().unsetBold().run()">正常</button>
-        </div>
-      </div>
+<!--      &lt;!&ndash; 字体颜色 &ndash;&gt;-->
+<!--      <div class="bm-row">-->
+<!--        <span class="bm-row-label">字色</span>-->
+<!--        <div class="bm-colors">-->
+<!--          <button-->
+<!--            v-for="c in TEXT_COLORS"-->
+<!--            :key="c.value"-->
+<!--            class="bm-color-dot"-->
+<!--            :style="{ background: c.value, border: c.value === 'inherit' ? '1px solid #ccc' : 'none' }"-->
+<!--            :title="c.label"-->
+<!--            @click="setTextColor(c.value)"-->
+<!--          />-->
+<!--        </div>-->
+<!--      </div>-->
 
-      <!-- 字体颜色 -->
-      <div class="bm-row">
-        <span class="bm-row-label">字色</span>
-        <div class="bm-colors">
-          <button
-            v-for="c in TEXT_COLORS"
-            :key="c.value"
-            class="bm-color-dot"
-            :style="{ background: c.value, border: c.value === 'inherit' ? '1px solid #ccc' : 'none' }"
-            :title="c.label"
-            @click="setTextColor(c.value)"
-          />
-        </div>
-      </div>
-
-      <!-- 背景色 -->
-      <div class="bm-row">
-        <span class="bm-row-label">背景</span>
-        <div class="bm-colors">
-          <button
-            v-for="c in BG_COLORS"
-            :key="c.value"
-            class="bm-color-dot"
-            :style="{ background: c.value, border: c.value === 'none' ? '1px solid #ccc' : 'none' }"
-            :title="c.label"
-            @click="setBgColor(c.value)"
-          />
-        </div>
-      </div>
+<!--      &lt;!&ndash; 背景色 &ndash;&gt;-->
+<!--      <div class="bm-row">-->
+<!--        <span class="bm-row-label">背景</span>-->
+<!--        <div class="bm-colors">-->
+<!--          <button-->
+<!--            v-for="c in BG_COLORS"-->
+<!--            :key="c.value"-->
+<!--            class="bm-color-dot"-->
+<!--            :style="{ background: c.value, border: c.value === 'none' ? '1px solid #ccc' : 'none' }"-->
+<!--            :title="c.label"-->
+<!--            @click="setBgColor(c.value)"-->
+<!--          />-->
+<!--        </div>-->
+<!--      </div>-->
 
       <div class="bm-divider" />
 
@@ -110,7 +96,6 @@ const pos = ref({ x: 0, y: 0 })
 const menuRef = ref<HTMLElement>()
 const currentPos = ref(0)
 const currentNodeSize = ref(0)
-const currentFontSize = ref('16px')
 
 // ---- 数据 ----
 
@@ -133,15 +118,6 @@ const BLOCK_TYPES = [
     run: (e: Editor) => e.chain().focus().toggleBlockquote().run() },
   { name: 'codeBlock', icon: '<>', label: '代码块',
     run: (e: Editor) => e.chain().focus().toggleCodeBlock().run() },
-  { name: 'table', icon: '⊞', label: '表格',
-    run: (e: Editor) => e.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
-]
-
-const FONT_SIZES = [
-  { label: 'S', value: '13px' },
-  { label: 'M', value: '16px' },
-  { label: 'L', value: '20px' },
-  { label: 'XL', value: '26px' },
 ]
 
 const TEXT_COLORS = [
@@ -175,19 +151,6 @@ function focusBlock() {
 function convert(type: typeof BLOCK_TYPES[0]) {
   focusBlock()
   type.run(props.editor!)
-  close()
-}
-
-function setFontSize(size: string) {
-  currentFontSize.value = size
-  focusBlock()
-  // 选中整块内容再设置字号
-  props.editor
-    ?.chain()
-    .focus()
-    .selectAll()
-    .setMark('textStyle', { fontSize: size })
-    .run()
   close()
 }
 
@@ -329,8 +292,8 @@ onUnmounted(() => {
 .bm-popover {
   position: fixed;
   z-index: 9999;
-  background: #ffffff;
-  border: 1px solid var(--color-border, #eee);
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   padding: 6px;
@@ -344,7 +307,7 @@ onUnmounted(() => {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--color-text-secondary, #aaa);
+  color: var(--color-text-secondary);
   padding: 4px 10px 2px;
 }
 
@@ -359,12 +322,12 @@ onUnmounted(() => {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--color-text, #1a1a1a);
+  color: var(--color-text);
   text-align: left;
   transition: background 0.1s;
 }
-.bm-item:hover { background: var(--color-hover, rgba(0,0,0,0.06)); }
-.bm-item.danger { color: #e03e3e; }
+.bm-item:hover { background: var(--color-surface); }
+.bm-item.danger { color: var(--color-danger); }
 .bm-item.danger:hover { background: rgba(224, 62, 62, 0.08); }
 
 .bm-icon {
@@ -373,17 +336,17 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-hover, rgba(0,0,0,0.06));
+  background: var(--color-surface);
   border-radius: 5px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-text-secondary, #666);
+  color: var(--color-text-secondary);
   flex-shrink: 0;
 }
 
 .bm-divider {
   height: 1px;
-  background: var(--color-border, #f0f0f0);
+  background: var(--color-border);
   margin: 4px 0;
 }
 
@@ -396,7 +359,7 @@ onUnmounted(() => {
 }
 .bm-row-label {
   font-size: 12px;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
   width: 28px;
   flex-shrink: 0;
 }
@@ -406,16 +369,16 @@ onUnmounted(() => {
 }
 .bm-size-btn {
   padding: 3px 8px;
-  border: 1px solid var(--color-border, #e0e0e0);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   background: none;
   cursor: pointer;
   font-size: 12px;
-  color: var(--color-text, #333);
+  color: var(--color-text);
   transition: all 0.1s;
 }
 .bm-size-btn:hover, .bm-size-btn.active {
-  background: var(--color-primary, #4a9eff);
+  background: var(--color-primary);
   color: #fff;
   border-color: transparent;
 }

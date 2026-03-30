@@ -12,6 +12,16 @@ const { writeNote } = useFileSystem()
 
 const localContent = ref('')
 
+// 当前笔记是否锁定
+const isLocked = computed(() => currentNote.value?.isLocked ?? false)
+
+// 切换锁定状态
+function toggleLock() {
+  if (currentNote.value) {
+    noteStore.toggleLock(currentNote.value.id)
+  }
+}
+
 // 计算当前笔记字数
 const wordCount = computed(() => {
   const text = localContent.value || ''
@@ -120,6 +130,7 @@ function handleEditorUpdate(md: string) {
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"
+        :is-locked="isLocked"
         @update="handleEditorUpdate"
       />
 
@@ -135,6 +146,17 @@ function handleEditorUpdate(md: string) {
       <div class="note-indicator">
         {{ noteStore.currentIndex + 1 }} / {{ noteStore.notes.length }}
       </div>
+
+      <!-- lock button -->
+      <button
+        class="lock-button"
+        :class="{ 'is-locked': isLocked }"
+        @click.stop="toggleLock"
+        :title="isLocked ? '解锁笔记' : '锁定笔记'"
+      >
+        <i v-if="isLocked" class="i-mdi-lock"></i>
+        <i v-else class="i-mdi-lock-open-variant"></i>
+      </button>
 
       <!-- word count -->
       <div class="word-count">
@@ -215,6 +237,39 @@ function handleEditorUpdate(md: string) {
   pointer-events: none;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.lock-button {
+  position: absolute;
+  bottom: 5px;
+  right: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 20px;
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.lock-button:hover {
+  color: var(--color-text);
+  transform: scale(1.05);
+}
+
+.lock-button.is-locked {
+  color: var(--color-primary);
+}
+
+.lock-button i {
+  font-size: 16px;
 }
 
 .word-count {

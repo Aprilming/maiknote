@@ -9,6 +9,7 @@ export interface Note {
   updatedAt: number // Unix timestamp
   tags?: string[] // Optional tags
   isPinned: boolean // Whether the note is pinned
+  isLocked: boolean // Whether the note is locked (cannot edit or delete)
 }
 
 /**
@@ -26,4 +27,5 @@ export interface NoteMetadataItem {
   updatedAt: number
   tags?: string[]
   isPinned: boolean
+  isLocked: boolean
 }

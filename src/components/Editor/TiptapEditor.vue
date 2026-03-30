@@ -33,6 +33,7 @@ const props = defineProps<{
   initialContent: string
   fontSize: number
   fontFamily: string
+  isLocked: boolean
 }>()
 
 const emit = defineEmits<{
@@ -97,6 +98,11 @@ function stopAI() {
 
 // 右键菜单处理
 function handleContextMenu(e: MouseEvent) {
+  // 锁定状态下不显示右键菜单
+  if (props.isLocked) {
+    e.preventDefault()
+    return
+  }
 
   // 检查是否有选中文本
   if (editor.value) {
@@ -471,6 +477,13 @@ watch(() => props.fontFamily, (newFontFamily) => {
   }
 })
 
+// 监听锁定状态变化
+watch(() => props.isLocked, (locked) => {
+  if (editor.value) {
+    editor.value.setEditable(!locked)
+  }
+})
+
 onMounted(() => {
   assistantsStore.loadAssistants()
   document.addEventListener('mousedown', handleMouseDown)
@@ -492,7 +505,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="tiptap-wrapper">
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }">
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">
@@ -526,7 +539,7 @@ onUnmounted(() => {
 
       <!-- 字体颜色 inline picker -->
       <div class="bm-color-picker">
-        <span class="bm-label">A</span>
+        <span class="bm-label" style="color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
           class="bm-color-input"
@@ -536,7 +549,7 @@ onUnmounted(() => {
 
       <!-- 背景色 inline picker -->
       <div class="bm-color-picker">
-        <span class="bm-label" style="background: #ffe066; padding: 0 3px; border-radius: 2px;">A</span>
+        <span class="bm-label" style="background: #ff0000; padding: 0 3px; border-radius: 2px; color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
           class="bm-color-input"
@@ -651,7 +664,7 @@ onUnmounted(() => {
   display: flex;
   gap: 4px;
   padding: 6px;
-  background: rgba(30, 30, 30, 0.95);
+  background: var(--color-popup-bg, #2a2a2a);
   border-radius: 6px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
@@ -660,7 +673,7 @@ onUnmounted(() => {
   padding: 6px 6px;
   border: none;
   background: transparent;
-  color: #e0e0e0;
+  color: var(--color-popup-text, #e0e0e0);
   cursor: pointer;
   border-radius: 4px;
   font-size: 13px;
@@ -668,7 +681,7 @@ onUnmounted(() => {
 }
 
 .bubble-menu button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
 }
 
 .bubble-menu button.is-active {
@@ -711,9 +724,9 @@ onUnmounted(() => {
 /* 右键菜单 */
 .context-menu {
   position: fixed;
-  background: rgba(30, 30, 30, 0.95);
+  background: var(--color-popup-bg, rgba(30, 30, 30, 0.95));
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.1));
   border-radius: 8px;
   padding: 6px 0;
   min-width: 160px;
@@ -727,16 +740,16 @@ onUnmounted(() => {
   padding: 8px 14px;
   cursor: pointer;
   font-size: 13px;
-  color: #e0e0e0;
+  color: var(--color-popup-text, #e0e0e0);
   gap: 10px;
 }
 
 .context-menu-item:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
 }
 
 .context-menu-item--disabled {
-  color: #888;
+  color: var(--color-text-secondary);
   cursor: default;
 }
 
@@ -782,7 +795,7 @@ onUnmounted(() => {
 .bm-label {
   font-size: 13px;
   font-weight: bold;
-  color: #e0e0e0;
+  color: var(--color-popup-text, #e0e0e0);
   padding: 4px 6px;
   border-radius: 4px;
   cursor: pointer;
@@ -850,6 +863,23 @@ onUnmounted(() => {
   height: 100%;
   padding: 0;
   background: var(--color-background);
+}
+
+/* 锁定状态样式 */
+.tiptap-wrapper.is-locked .tiptap {
+  cursor: not-allowed;
+}
+
+.tiptap-wrapper.is-locked .ProseMirror {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+/* 锁定状态下隐藏块操作按钮和悬浮条 */
+.tiptap-wrapper.is-locked .block-menu-trigger,
+.tiptap-wrapper.is-locked .drag-handle,
+.tiptap-wrapper.is-locked .bubble-menu {
+  display: none !important;
 }
 
 .tiptap > .ProseMirror {
