@@ -451,6 +451,23 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * Reorder notes by a list of note IDs
+   */
+  function reorderNotes(noteIds: string[]) {
+    const noteMap = new Map(notes.value.map(n => [n.id, n]))
+    const reordered = noteIds.map(id => noteMap.get(id)).filter((n): n is Note => n !== undefined)
+
+    // Add any notes not in the reordered list at the end
+    const reorderedIds = new Set(noteIds)
+    const remaining = notes.value.filter(n => !reorderedIds.has(n.id))
+
+    notes.value = [...reordered, ...remaining]
+
+    // Schedule metadata save to iCloud (debounced)
+    scheduleSave()
+  }
+
+  /**
    * Initialize the store by loading notes from iCloud
    */
   async function initialize(): Promise<void> {
@@ -492,6 +509,7 @@ export const useNoteStore = defineStore('note', () => {
     updateNote,
     deleteNote,
     togglePin,
+    reorderNotes,
     selectPrev,
     selectNext,
     navigatePrevOrCreate,

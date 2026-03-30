@@ -203,7 +203,7 @@ function handleEditorUpdate(md: string) {
 
 .note-indicator {
   position: absolute;
-  bottom: 45px;
+  bottom: 5px;
   right: 10px;
   padding: 6px 14px;
   background-color: var(--color-surface);
@@ -219,7 +219,7 @@ function handleEditorUpdate(md: string) {
 
 .word-count {
   position: absolute;
-  bottom: 45px;
+  bottom: 5px;
   left: 10px;
   padding: 6px 14px;
   background-color: var(--color-surface);

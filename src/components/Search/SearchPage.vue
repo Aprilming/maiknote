@@ -10,6 +10,14 @@ const noteStore = useNoteStore()
 const searchInput = ref<HTMLInputElement | null>(null)
 const localQuery = ref('')
 
+// 拖拽状态
+const draggedIndex = ref<number | null>(null)
+const dragOverIndex = ref<number | null>(null)
+const isDragging = ref(false)
+const pendingSelectNote = ref<string | null>(null)
+const dragStartY = ref(0)
+const draggedNoteId = ref<string | null>(null)
+
 // 筛选后的搜索结果
 const searchResults = computed(() => {
   let results = noteStore.notes
@@ -25,6 +33,94 @@ const searchResults = computed(() => {
 
   return results.slice(0, 20) // 限制显示数量
 })
+
+// 拖拽开始
+function handleMouseDown(e: MouseEvent, noteId: string, index: number) {
+  e.preventDefault()
+  console.log('[DEBUG drag] handleMouseDown, noteId:', noteId, 'index:', index)
+  dragStartY.value = e.clientY
+  draggedIndex.value = index
+  draggedNoteId.value = noteId
+  isDragging.value = false // 还没开始拖拽，需要移动一定距离才触发
+}
+
+// 拖拽移动
+function handleMouseMove(e: MouseEvent) {
+  if (draggedIndex.value === null || !draggedNoteId.value) return
+
+  const deltaY = Math.abs(e.clientY - dragStartY.value)
+
+  // 如果移动距离超过 5px，才算开始拖拽
+  if (deltaY > 5 && !isDragging.value) {
+    console.log('[DEBUG drag] drag started')
+    isDragging.value = true
+  }
+
+  if (isDragging.value) {
+    e.preventDefault()
+
+    // 计算当前鼠标在哪个列表项上
+    const resultsEl = document.querySelector('.search-results')
+    if (!resultsEl) return
+
+    const items = resultsEl.querySelectorAll('.result-item')
+    let targetIndex = -1
+
+    for (let i = 0; i < items.length; i++) {
+      const rect = items[i].getBoundingClientRect()
+      const midY = rect.top + rect.height / 2
+
+      if (e.clientY < midY) {
+        targetIndex = i
+        break
+      }
+      targetIndex = i
+    }
+
+    if (targetIndex !== -1 && targetIndex !== dragOverIndex.value) {
+      console.log('[DEBUG drag] dragOverIndex:', targetIndex)
+      dragOverIndex.value = targetIndex
+    }
+  }
+}
+
+// 拖拽结束
+function handleMouseUp() {
+  console.log('[DEBUG drag] handleMouseUp, isDragging:', isDragging.value, 'draggedNoteId:', draggedNoteId.value)
+
+  if (isDragging.value && draggedIndex.value !== null && dragOverIndex.value !== null) {
+    console.log('[DEBUG drag] drop at targetIndex:', dragOverIndex.value)
+
+    // 执行重排序
+    const draggedNote = searchResults.value[draggedIndex.value]
+    const targetNote = searchResults.value[dragOverIndex.value]
+
+    if (draggedNote && targetNote) {
+      const noteIds = [...noteStore.notes.map(n => n.id)]
+      const draggedOriginalIndex = noteStore.notes.findIndex(n => n.id === draggedNote.id)
+      const targetOriginalIndex = noteStore.notes.findIndex(n => n.id === targetNote.id)
+
+      console.log('[DEBUG drag] original indices - dragged:', draggedOriginalIndex, 'target:', targetOriginalIndex)
+
+      const [removedId] = noteIds.splice(draggedOriginalIndex, 1)
+      noteIds.splice(targetOriginalIndex, 0, removedId)
+
+      console.log('[DEBUG drag] final noteIds:', noteIds)
+      noteStore.reorderNotes(noteIds)
+    }
+  } else if (draggedNoteId.value && !isDragging.value) {
+    // 非拖拽点击，选择笔记
+    console.log('[DEBUG drag] click select note:', draggedNoteId.value)
+    selectNote(draggedNoteId.value)
+  }
+
+  // 重置状态
+  draggedIndex.value = null
+  dragOverIndex.value = null
+  draggedNoteId.value = null
+  isDragging.value = false
+  pendingSelectNote.value = null
+}
 
 // 格式化日期
 function formatDate(timestamp: number): string {
@@ -61,6 +157,12 @@ function highlightKeyword(text: string, keyword: string): string {
 
 // 选择笔记
 function selectNote(noteId: string) {
+  // 如果正在拖拽，延迟选择
+  if (isDragging.value) {
+    pendingSelectNote.value = noteId
+    return
+  }
+
   localQuery.value = ''
   noteStore.selectNote(noteId)
   emit('close')
@@ -111,17 +213,22 @@ onUnmounted(() => {
 
 
     <!-- 搜索结果 -->
-    <div class="search-results">
+    <div
+      class="search-results"
+      @mousemove="handleMouseMove"
+      @mouseup="handleMouseUp"
+    >
       <div v-if="searchResults.length === 0" class="no-results">
         <template v-if="localQuery">未找到匹配的笔记</template>
         <template v-else>输入关键词开始搜索</template>
       </div>
 
       <div
-        v-for="note in searchResults"
+        v-for="(note, index) in searchResults"
         :key="note.id"
         class="result-item"
-        @click="selectNote(note.id)"
+        :class="{ 'is-dragging': isDragging && draggedIndex === index, 'is-drag-over': isDragging && dragOverIndex === index }"
+        @mousedown="handleMouseDown($event, note.id, index)"
       >
         <div class="result-header">
           <div class="result-title" v-html="highlightKeyword(note.title, localQuery)"></div>
@@ -248,6 +355,17 @@ onUnmounted(() => {
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.result-item.is-dragging {
+  opacity: 0.5;
+  background: var(--color-surface);
+}
+
+.result-item.is-drag-over {
+  border-top: 2px solid var(--color-primary);
 }
 
 .result-item:hover {
