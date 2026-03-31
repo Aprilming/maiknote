@@ -26,6 +26,8 @@ import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
+import { TextSelection } from 'prosemirror-state'
+import type { EditorView } from 'prosemirror-view'
 
 const lowlight = createLowlight(all)
 
@@ -154,6 +156,81 @@ function handleMouseDown(e: MouseEvent) {
       savedSelectionText.value = editor.value.state.doc.textBetween(from, to, ' ')
     }
   }
+}
+
+// 点击编辑器容器时确保光标正确放置
+function handleWrapperClick(e: MouseEvent) {
+  console.log('[DEBUG handleWrapperClick] clicked, target:', (e.target as HTMLElement).className, 'clientX:', e.clientX, 'clientY:', e.clientY)
+  if (!editor.value) {
+    console.log('[DEBUG handleWrapperClick] no editor')
+    return
+  }
+
+  // 如果点击的是编辑器内部元素，让编辑器自己处理
+  const target = e.target as HTMLElement
+  if (target.closest('.ProseMirror')) {
+    console.log('[DEBUG handleWrapperClick] clicking ProseMirror, letting editor handle')
+    return
+  }
+  if (target.closest('.bubble-menu') || target.closest('.ai-loading-indicator')) {
+    console.log('[DEBUG handleWrapperClick] clicking menu/indicator, ignoring')
+    return
+  }
+
+  // 点击空白区域时，将光标设置到点击位置
+  const view = editor.value.view
+  const coords = { left: e.clientX, top: e.clientY }
+  console.log('[DEBUG handleWrapperClick] coords:', coords)
+  let domPos = view.posAtCoords(coords)
+  console.log('[DEBUG handleWrapperClick] domPos:', domPos)
+
+  let targetPos: number
+
+  if (domPos && domPos.pos >= 0) {
+    console.log('[DEBUG handleWrapperClick] setting cursor to:', domPos.pos)
+    targetPos = domPos.pos
+  } else {
+    // posAtCoords 返回 null，说明点击在编辑器的 padding/margin 空白区域
+    // 我们使用 coordsAtPos 从文档末尾向前找到第一个在该点击 Y 坐标以上的块
+    console.log('[DEBUG handleWrapperClick] posAtCoords returned null, finding best position')
+
+    const doc = view.state.doc
+    const clickY = e.clientY
+
+    // 从文档末尾开始，使用二分查找的方式找到最佳位置
+    // 更简单的方法：直接找到文档的第一个块，用它作为参考
+    let bestPos = 0
+
+    // 遍历文档，找到最接近点击 Y 坐标的位置
+    doc.descendants((node, pos) => {
+      if (node.isBlock && pos >= 0) {
+        try {
+          const blockCoords = view.coordsAtPos(pos)
+          console.log('[DEBUG handleWrapperClick] block at pos', pos, 'blockTop:', blockCoords.top, 'clickY:', clickY)
+          // 找到第一个顶部超过点击 Y 位置的块
+          if (blockCoords.top >= clickY) {
+            bestPos = pos
+            return false // 停止遍历
+          }
+          // 记录最后一个块的结束位置作为后备
+          bestPos = pos + node.nodeSize
+        } catch (e) {
+          console.log('[DEBUG handleWrapperClick] coordsAtPos error:', e)
+        }
+      }
+    })
+
+    console.log('[DEBUG handleWrapperClick] bestPos:', bestPos, 'docSize:', doc.content.size)
+    // 确保 bestPos 在有效范围内
+    targetPos = Math.min(bestPos, doc.content.size)
+  }
+
+  // 设置光标位置并 focus 编辑器
+  const $pos = view.state.doc.resolve(targetPos)
+  const selection = TextSelection.near($pos, -1)
+  view.dispatch(view.state.tr.setSelection(selection))
+  view.dom.focus()
+  console.log('[DEBUG handleWrapperClick] cursor set and editor focused')
 }
 
 // AI 处理函数
@@ -437,6 +514,10 @@ const editor = useEditor({
     GlobalDragHandle.configure({
       dragHandleWidth: 20,
       scrollTreshold: 100,
+      handleClick: (_view: EditorView, _pos: number, _node: any, _nodePos: number, _direct: boolean) => {
+        // 原有的 handleClick 逻辑
+        return false
+      },
     }),
     TextStyle,
     Color,
@@ -453,6 +534,36 @@ const editor = useEditor({
     TableHeader,
   ],
   content: props.initialContent,
+  editorProps: {
+    handleClick(view, pos, event) {
+      // 只处理左键点击，右键点击保持选择状态
+      if (event.button !== 0) {
+        return false
+      }
+
+      console.log('[DEBUG editorProps.handleClick] pos:', pos, 'clientX:', event.clientX, 'clientY:', event.clientY)
+      // 尝试将光标设置到点击位置
+      const coords = { left: event.clientX, top: event.clientY }
+      const domPos = view.posAtCoords(coords)
+      console.log('[DEBUG editorProps.handleClick] domPos:', domPos)
+
+      if (domPos && domPos.pos >= 0) {
+        // 能找到有效位置，设置光标到该位置
+        const $pos = view.state.doc.resolve(domPos.pos)
+        const selection = TextSelection.near($pos, -1)
+        view.dispatch(view.state.tr.setSelection(selection))
+        console.log('[DEBUG editorProps.handleClick] set cursor to:', domPos.pos)
+        return true // 已处理，不再让 ProseMirror 执行默认行为
+      } else {
+        // 找不到有效位置，将光标设置到文档末尾
+        console.log('[DEBUG editorProps.handleClick] no valid domPos, placing at doc end')
+        const docEnd = view.state.doc.content.size
+        const selection = TextSelection.near(view.state.doc.resolve(docEnd), 1)
+        view.dispatch(view.state.tr.setSelection(selection))
+        return true
+      }
+    },
+  },
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     emit('update', markdown)
@@ -505,7 +616,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }">
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" @click="handleWrapperClick">
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">

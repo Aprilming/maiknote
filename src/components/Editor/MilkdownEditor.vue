@@ -173,15 +173,15 @@ function handleEditorUpdate(md: string) {
       </button>
 
       <!-- navigation hints -->
-      <div v-if="noteStore.currentIndex > 0" class="nav-hint left-hint" @click="noteStore.selectPrev()">
+      <div v-if="noteStore.currentIndex > 0" class="nav-hint left-hint" @click.stop="noteStore.selectPrev()">
         <i class="i-mdi-chevron-left"></i>
       </div>
-      <div v-if="noteStore.currentIndex < noteStore.notes.length - 1" class="nav-hint right-hint" @click="noteStore.selectNext()">
+      <div v-if="noteStore.currentIndex < noteStore.notes.length - 1" class="nav-hint right-hint" @click.stop="noteStore.selectNext()">
         <i class="i-mdi-chevron-right"></i>
       </div>
 
       <!-- note indicator -->
-      <div class="note-indicator">
+      <div class="note-indicator" @click.stop>
         {{ noteStore.currentIndex + 1 }} / {{ noteStore.notes.length }}
       </div>
 
@@ -197,12 +197,12 @@ function handleEditorUpdate(md: string) {
       </button>
 
       <!-- word count -->
-      <div class="word-count">
+      <div class="word-count" @click.stop>
         {{ wordCount }} 字
       </div>
 
       <!-- save indicator -->
-      <div v-if="isSaving" class="save-indicator">
+      <div v-if="isSaving" class="save-indicator" @click.stop>
         <i class="i-mdi-loading spinning"></i>
       </div>
     </div>
