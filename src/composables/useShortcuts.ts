@@ -139,15 +139,15 @@ export function useShortcuts(onOpenSettings?: () => void) {
       noteStore.searchQuery = ''
     }
 
-    // Cmd+F: 聚焦搜索框（保留默认功能）
-    if (e.metaKey && e.key === 'f') {
+    // Cmd+F: 聚焦搜索框
+    if (e.metaKey && e.code === 'KeyF') {
       e.preventDefault()
       const searchInput = document.querySelector('[data-search-input]') as HTMLInputElement
       searchInput?.focus()
     }
 
     // Cmd+W: 隐藏窗口
-    if (e.metaKey && e.key === 'w') {
+    if (e.metaKey && e.code === 'KeyW') {
       e.preventDefault()
       try {
         const appWindow = getCurrentWindow()
@@ -158,8 +158,8 @@ export function useShortcuts(onOpenSettings?: () => void) {
       return
     }
 
-    // Cmd+, : 打开设置
-    if (e.metaKey && e.key === ',') {
+    // Cmd+, : 打开设置（使用 e.code 判断物理按键，避开输入法干扰）
+    if (e.metaKey && e.code === 'Comma') {
       e.preventDefault()
       onOpenSettings?.()
     }
