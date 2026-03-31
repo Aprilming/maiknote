@@ -261,6 +261,7 @@ function handleEditorUpdate(md: string) {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+  z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -293,8 +294,9 @@ function handleEditorUpdate(md: string) {
 
 .note-indicator {
   position: absolute;
-  bottom: 5px;
+  bottom: 10px;
   right: 10px;
+  z-index: 11;
   padding: 6px 14px;
   background-color: var(--color-surface);
   border-radius: 20px;
@@ -311,6 +313,7 @@ function handleEditorUpdate(md: string) {
   position: absolute;
   bottom: 5px;
   right: 90px;
+  z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -344,6 +347,7 @@ function handleEditorUpdate(md: string) {
   position: absolute;
   bottom: 5px;
   right: 130px;
+  z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -375,8 +379,9 @@ function handleEditorUpdate(md: string) {
 
 .word-count {
   position: absolute;
-  bottom: 5px;
+  bottom: 10px;
   left: 10px;
+  z-index: 11;
   padding: 6px 14px;
   background-color: var(--color-surface);
   border-radius: 20px;
