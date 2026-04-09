@@ -160,87 +160,62 @@ function handleMouseDown(e: MouseEvent) {
 
 // 点击编辑器容器时确保光标正确放置
 function handleWrapperClick(e: MouseEvent) {
-  console.log('[DEBUG handleWrapperClick] clicked, target:', (e.target as HTMLElement).className, 'clientX:', e.clientX, 'clientY:', e.clientY)
   if (!editor.value) {
-    console.log('[DEBUG handleWrapperClick] no editor')
     return
   }
 
   // 如果点击的是编辑器内部元素，让编辑器自己处理
   const target = e.target as HTMLElement
   if (target.closest('.ProseMirror')) {
-    console.log('[DEBUG handleWrapperClick] clicking ProseMirror, letting editor handle')
     return
   }
   if (target.closest('.bubble-menu') || target.closest('.ai-loading-indicator')) {
-    console.log('[DEBUG handleWrapperClick] clicking menu/indicator, ignoring')
     return
   }
 
   // 点击空白区域时，将光标设置到点击位置
   const view = editor.value.view
   const coords = { left: e.clientX, top: e.clientY }
-  console.log('[DEBUG handleWrapperClick] coords:', coords)
   let domPos = view.posAtCoords(coords)
-  console.log('[DEBUG handleWrapperClick] domPos:', domPos)
 
   let targetPos: number
 
   if (domPos && domPos.pos >= 0) {
-    console.log('[DEBUG handleWrapperClick] setting cursor to:', domPos.pos)
     targetPos = domPos.pos
   } else {
-    // posAtCoords 返回 null，说明点击在编辑器的 padding/margin 空白区域
-    // 我们使用 coordsAtPos 从文档末尾向前找到第一个在该点击 Y 坐标以上的块
-    console.log('[DEBUG handleWrapperClick] posAtCoords returned null, finding best position')
-
     const doc = view.state.doc
     const clickY = e.clientY
 
-    // 从文档末尾开始，使用二分查找的方式找到最佳位置
-    // 更简单的方法：直接找到文档的第一个块，用它作为参考
     let bestPos = 0
 
-    // 遍历文档，找到最接近点击 Y 坐标的位置
     doc.descendants((node, pos) => {
       if (node.isBlock && pos >= 0) {
         try {
           const blockCoords = view.coordsAtPos(pos)
-          console.log('[DEBUG handleWrapperClick] block at pos', pos, 'blockTop:', blockCoords.top, 'clickY:', clickY)
-          // 找到第一个顶部超过点击 Y 位置的块
           if (blockCoords.top >= clickY) {
             bestPos = pos
-            return false // 停止遍历
+            return false
           }
-          // 记录最后一个块的结束位置作为后备
           bestPos = pos + node.nodeSize
         } catch (e) {
-          console.log('[DEBUG handleWrapperClick] coordsAtPos error:', e)
+          // ignore
         }
       }
     })
 
-    console.log('[DEBUG handleWrapperClick] bestPos:', bestPos, 'docSize:', doc.content.size)
-    // 确保 bestPos 在有效范围内
     targetPos = Math.min(bestPos, doc.content.size)
   }
 
-  // 设置光标位置并 focus 编辑器
   const $pos = view.state.doc.resolve(targetPos)
   const selection = TextSelection.near($pos, -1)
   view.dispatch(view.state.tr.setSelection(selection))
   view.dom.focus()
-  console.log('[DEBUG handleWrapperClick] cursor set and editor focused')
 }
 
 // AI 处理函数
 function handleAI(assistantId: string) {
   // 先保存选中文本（避免 hideContextMenu 清空它）
   pendingSelectionText = savedSelectionText.value
-
-  console.log('[DEBUG handleAI] start')
-  console.log('[DEBUG handleAI] savedSelectionText:', JSON.stringify(savedSelectionText.value?.slice(0, 100)))
-  console.log('[DEBUG handleAI] pendingSelectionText:', JSON.stringify(pendingSelectionText?.slice(0, 100)))
 
   // 判断是否有选中文本
   userHadSelection = false
@@ -253,9 +228,6 @@ function handleAI(assistantId: string) {
     const fullContent = editor.value.storage.markdown.getMarkdown()
     const text = pendingSelectionText
 
-    console.log('[DEBUG handleAI] fullContent:', JSON.stringify(fullContent?.slice(0, 200)))
-    console.log('[DEBUG handleAI] text:', JSON.stringify(text?.slice(0, 200)))
-
     const MAX_PREFIX_SUFFIX = 15
     const MIN_PREFIX_SUFFIX = 5
 
@@ -267,7 +239,6 @@ function handleAI(assistantId: string) {
     for (let len = MAX_PREFIX_SUFFIX; len >= MIN_PREFIX_SUFFIX; len--) {
       const prefix = text.slice(0, len)
       prefixIndex = fullContent.indexOf(prefix)
-      console.log(`[DEBUG handleAI] prefix len=${len}, prefix="${prefix}", found at=${prefixIndex}`)
       if (prefixIndex !== -1) {
         break
       }
@@ -278,7 +249,6 @@ function handleAI(assistantId: string) {
       const suffix = text.slice(-len)
       const searchFrom = prefixIndex !== -1 ? prefixIndex : 0
       const found = fullContent.indexOf(suffix, searchFrom)
-      console.log(`[DEBUG handleAI] suffix len=${len}, suffix="${suffix}", found at=${found}, searchFrom=${searchFrom}`)
       if (found !== -1) {
         suffixIndex = found
         matchedSuffixLength = len
@@ -286,32 +256,21 @@ function handleAI(assistantId: string) {
       }
     }
 
-    console.log(`[DEBUG handleAI] prefixIndex=${prefixIndex}, suffixIndex=${suffixIndex}, userHadSelection=${userHadSelection}`)
-
     if (prefixIndex !== -1 && suffixIndex !== -1 && prefixIndex < suffixIndex) {
       // 找到了前缀和后缀，用它们来精确计算位置
       contentBeforeSelection = fullContent.slice(0, prefixIndex)
       contentAfterSelection = fullContent.slice(suffixIndex + matchedSuffixLength)
       userHadSelection = true
-      console.log('[DEBUG handleAI] matched both prefix and suffix')
     } else if (prefixIndex !== -1) {
       // 只找到前缀，用 text.length 估算
       contentBeforeSelection = fullContent.slice(0, prefixIndex)
       contentAfterSelection = fullContent.slice(prefixIndex + text.length)
       userHadSelection = true
-      console.log('[DEBUG handleAI] matched prefix only')
     } else {
       // 匹配失败：保存原文用于流式输出
       originalContent = fullContent
-      console.log('[DEBUG handleAI] NOT matched, preserving original')
     }
-  } else {
-    console.log('[DEBUG handleAI] no selection or no editor, userHadSelection=false')
   }
-
-  console.log('[DEBUG handleAI] final userHadSelection:', userHadSelection)
-  console.log('[DEBUG handleAI] contentBeforeSelection length:', contentBeforeSelection.length)
-  console.log('[DEBUG handleAI] contentAfterSelection length:', contentAfterSelection.length)
 
   hideContextMenu()
   if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
@@ -332,12 +291,6 @@ async function callAI(assistantId: string) {
   isAILoading.value = true
   document.body.style.cursor = 'wait'
 
-  console.log('[DEBUG callAI] start')
-  console.log('[DEBUG callAI] userHadSelection:', userHadSelection)
-  console.log('[DEBUG callAI] pendingSelectionText:', JSON.stringify(pendingSelectionText?.slice(0, 100)))
-  console.log('[DEBUG callAI] contentBeforeSelection length:', contentBeforeSelection.length)
-  console.log('[DEBUG callAI] contentAfterSelection length:', contentAfterSelection.length)
-
   const text = String(pendingSelectionText || editor.value?.storage.markdown.getMarkdown() || '')
 
   // 根据ID获取助手配置
@@ -349,9 +302,6 @@ async function callAI(assistantId: string) {
     return
   }
   const prompt = String(assistant.prompt || '')
-
-  console.log('[DEBUG callAI] text to send:', JSON.stringify(text?.slice(0, 200)))
-  console.log('[DEBUG callAI] prompt:', JSON.stringify(prompt?.slice(0, 100)))
 
   aiAbortController = new AbortController()
   const signal = aiAbortController.signal
@@ -389,19 +339,15 @@ async function callAI(assistantId: string) {
     let fullContent = ''
 
     // 根据是否有选中文本决定初始内容
-    console.log('[DEBUG callAI] before content check, userHadSelection:', userHadSelection)
     if (editor.value) {
       if (userHadSelection) {
         // 有选中文本：先删除选中的内容，设置内容为选中前+选中后
-        console.log('[DEBUG callAI] userHadSelection=true, deleting selection and setting content')
         editor.value.commands.setContent(contentBeforeSelection + contentAfterSelection)
       } else if (!pendingSelectionText) {
         // 没有选中文本且没有待处理文本：清空编辑器
-        console.log('[DEBUG callAI] no selection, clearing editor')
         editor.value.commands.setContent('')
       } else {
         // 有 pendingSelectionText 但匹配失败：保留原文
-        console.log('[DEBUG callAI] pendingSelectionText exists but not matched, preserving original')
         editor.value.commands.setContent(originalContent)
       }
     }
@@ -535,28 +481,24 @@ const editor = useEditor({
   ],
   content: props.initialContent,
   editorProps: {
-    handleClick(view, pos, event) {
+    handleClick(view, _pos, event) {
       // 只处理左键点击，右键点击保持选择状态
       if (event.button !== 0) {
         return false
       }
 
-      console.log('[DEBUG editorProps.handleClick] pos:', pos, 'clientX:', event.clientX, 'clientY:', event.clientY)
       // 尝试将光标设置到点击位置
       const coords = { left: event.clientX, top: event.clientY }
       const domPos = view.posAtCoords(coords)
-      console.log('[DEBUG editorProps.handleClick] domPos:', domPos)
 
       if (domPos && domPos.pos >= 0) {
         // 能找到有效位置，设置光标到该位置
         const $pos = view.state.doc.resolve(domPos.pos)
         const selection = TextSelection.near($pos, -1)
         view.dispatch(view.state.tr.setSelection(selection))
-        console.log('[DEBUG editorProps.handleClick] set cursor to:', domPos.pos)
-        return true // 已处理，不再让 ProseMirror 执行默认行为
+        return true
       } else {
         // 找不到有效位置，将光标设置到文档末尾
-        console.log('[DEBUG editorProps.handleClick] no valid domPos, placing at doc end')
         const docEnd = view.state.doc.content.size
         const selection = TextSelection.near(view.state.doc.resolve(docEnd), 1)
         view.dispatch(view.state.tr.setSelection(selection))

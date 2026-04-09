@@ -1,6 +1,6 @@
 // src/components/extensions/BlockMenuExtension.ts
 import { Extension } from '@tiptap/core'
-import { Plugin, PluginKey, NodeSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Fragment } from '@tiptap/pm/model'
 
@@ -15,21 +15,25 @@ export const BlockMenuExtension = Extension.create({
         key: blockMenuKey,
         props: {
           handleDrop(view, event, _slice, _moved) {
-            console.log('[BlockMenu] handleDrop called')
             const sel = view.state.selection
             if (!(sel instanceof NodeSelection)) {
-              console.log('[BlockMenu] not a NodeSelection')
               return false
             }
 
             const coords = { left: event.clientX, top: event.clientY }
             const dropPos = view.posAtCoords(coords)
-            if (!dropPos) return false
+            if (!dropPos) {
+              return false
+            }
 
             const resolvedPos = view.state.doc.resolve(dropPos.pos)
             const node = sel.node
             const from = sel.from
             const to = sel.to
+
+            if (resolvedPos.depth < 1) {
+              return false
+            }
 
             let targetPos = resolvedPos.before(resolvedPos.depth)
             if (targetPos >= from) {
@@ -44,7 +48,6 @@ export const BlockMenuExtension = Extension.create({
             return true
           },
           decorations(state) {
-            console.log('[BlockMenu] decorations called, doc child count:', state.doc.childCount)
             const decorations: Decoration[] = []
 
             state.doc.forEach((node, offset) => {
@@ -65,7 +68,6 @@ export const BlockMenuExtension = Extension.create({
                   btn.dataset.nodePos = String(offset)
 
                   btn.addEventListener('dragstart', (e) => {
-                    console.log('[BlockMenu] dragstart fired on btn')
                     if (!(e instanceof DragEvent)) return
 
                     const editorView = (window as any).__tiptapEditorView
@@ -84,6 +86,23 @@ export const BlockMenuExtension = Extension.create({
                     e.dataTransfer!.effectAllowed = 'move'
 
                     editorView.dragging = { slice, move: true }
+                  })
+
+                  btn.addEventListener('dragend', (e) => {
+                    if (!(e instanceof DragEvent)) return
+
+                    const editorView = (window as any).__tiptapEditorView
+                    if (!editorView) return
+
+                    editorView.dragging = null
+
+                    const sel = editorView.state.selection
+                    if (sel instanceof NodeSelection) {
+                      const tr = editorView.state.tr.setSelection(
+                        TextSelection.create(editorView.state.doc, sel.from)
+                      )
+                      editorView.dispatch(tr)
+                    }
                   })
 
                   btn.addEventListener('mousedown', (e) => {

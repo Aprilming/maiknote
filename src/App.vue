@@ -24,6 +24,8 @@ const { latestVersion, updateAvailable, checkForUpdates, openReleasePage } = use
 
 // 当前页面：'editor' | 'settings' | 'search'
 const currentView = ref<'editor' | 'settings' | 'search'>('editor')
+// 初始化完成标志，防止开机自启时iCloud未准备好导致空白
+const isAppReady = ref(false)
 
 // 更新提示 toast，8秒后自动消失
 const showUpdateToast = ref(false)
@@ -95,6 +97,9 @@ onMounted(async () => {
 
   // 冷启动时自动检查更新
   await checkForUpdates()
+
+  // 标记初始化完成
+  isAppReady.value = true
 })
 
 onUnmounted(() => {
@@ -107,7 +112,14 @@ onUnmounted(() => {
 <template>
   <div class="app-container">
     <div class="app-background" :class="{ 'show-grid': settingStore.settings.showGrid }"></div>
-    <div class="app-content">
+    <!-- 加载遮罩 - 防止开机自启时iCloud未准备好导致空白 -->
+    <div v-if="!isAppReady" class="app-loading">
+      <div class="app-loading-content">
+        <i class="i-mdi-loading animate-spin"></i>
+        <span>加载中...</span>
+      </div>
+    </div>
+    <div v-else class="app-content">
       <TitleBar v-if="currentView !== 'settings'" @open-settings="openSettings" @open-search="openSearchPage" />
       <SearchPage v-if="currentView === 'search'" @close="closeSearchPage" />
       <Settings v-else-if="currentView === 'settings'" @back="closeSettings" />
@@ -190,6 +202,36 @@ onUnmounted(() => {
   background: transparent;
   /* 圆角 - 与原生 NSVisualEffectView 圆角 (12px) 保持一致 */
   border-radius: 12px;
+}
+
+/* 加载遮罩 */
+.app-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-background);
+  z-index: 100;
+}
+
+.app-loading-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.app-loading-content i {
+  font-size: 20px;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
 /* 更新提示 Toast */
