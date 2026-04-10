@@ -12,7 +12,6 @@ import { useSettingStore } from '@/stores/settingStore'
 import { useAssistantsStore } from '@/stores/assistantsStore'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { all, createLowlight } from 'lowlight'
-import 'highlight.js/styles/tokyo-night-dark.css'
 import { createSlashCommand } from './extensions/SlashCommandExtension'
 import GlobalDragHandle from 'tiptap-extension-global-drag-handle'
 import { Color } from '@tiptap/extension-color'
@@ -31,6 +30,40 @@ import type { EditorView } from 'prosemirror-view'
 
 const lowlight = createLowlight(all)
 
+const settingStore = useSettingStore()
+const assistantsStore = useAssistantsStore()
+
+// 动态加载代码高亮主题 CSS
+let currentHighlightCss: HTMLLinkElement | null = null
+
+function loadHighlightCss(theme: string) {
+  // 移除已加载的 CSS
+  if (currentHighlightCss) {
+    currentHighlightCss.remove()
+    currentHighlightCss = null
+  }
+
+  // 创建新的 link 元素
+  const link = document.createElement('link')
+  link.rel = 'stylesheet'
+  link.href = `highlight.js/styles/${theme}.css`
+  link.onload = () => {
+    currentHighlightCss = link
+  }
+  link.onerror = () => {
+    console.warn(`Failed to load highlight.js theme: ${theme}, falling back to default`)
+    // 加载默认主题作为后备
+    const defaultLink = document.createElement('link')
+    defaultLink.rel = 'stylesheet'
+    defaultLink.href = 'highlight.js/styles/default.css'
+    document.head.appendChild(defaultLink)
+  }
+  document.head.appendChild(link)
+}
+
+// 初始化加载默认主题
+loadHighlightCss(settingStore.settings.codeTheme)
+
 const props = defineProps<{
   initialContent: string
   fontSize: number
@@ -41,9 +74,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   update: [markdown: string]
 }>()
-
-const settingStore = useSettingStore()
-const assistantsStore = useAssistantsStore()
 
 // 右键菜单
 const contextMenuVisible = ref(false)
@@ -537,6 +567,11 @@ watch(() => props.isLocked, (locked) => {
   }
 })
 
+// 监听代码主题变化
+watch(() => settingStore.settings.codeTheme, (newTheme) => {
+  loadHighlightCss(newTheme)
+})
+
 onMounted(() => {
   assistantsStore.loadAssistants()
   document.addEventListener('mousedown', handleMouseDown)
@@ -888,10 +923,11 @@ onUnmounted(() => {
 }
 
 :deep(.tiptap pre code) {
-  background: none;
+  background: none !important;
   padding: 0;
   font-size: 13px;
-  color: var(--color-text);
+  /* 让 highlight.js 主题控制颜色 */
+  color: inherit;
 }
 </style>
 
@@ -1022,6 +1058,7 @@ onUnmounted(() => {
   padding: 0;
   font-size: 13px;
   font-family: 'Fira Code', 'Consolas', monospace;
+  color: inherit;
 }
 
 /* 行内代码样式 */

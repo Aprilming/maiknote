@@ -14,6 +14,18 @@ export interface ShortcutSettings {
   toggleSource: string // 切换源码模式
 }
 
+export type CodeTheme =
+  | 'github'
+  | 'github-dark'
+  | 'xcode'
+  | 'idea'
+  | 'vs2015'
+  | 'atom-one-dark'
+  | 'monokai'
+  | 'tokyo-night-dark'
+  | 'dracula'
+  | 'nord'
+
 export interface AppSettings {
   theme: Theme
   fontSize: number
@@ -27,6 +39,7 @@ export interface AppSettings {
   autoSaveInterval: number // milliseconds
   autoDeleteDays: number // 0 = disabled
   shortcuts: ShortcutSettings
+  codeTheme: CodeTheme
   // AI 设置
   aiUrl: string
   aiKey: string
@@ -50,6 +63,7 @@ export const useSettingStore = defineStore('setting', () => {
     globalHotkey: 'Option+Cmd+A',
     autoSaveInterval: 500,
     autoDeleteDays: 0,
+    codeTheme: 'tokyo-night-dark',
     shortcuts: {
       showMain: 'Option+Cmd+A',
       prevNote: 'Cmd+[',
@@ -140,6 +154,7 @@ export const useSettingStore = defineStore('setting', () => {
       globalHotkey: 'Option+Cmd+A',
       autoSaveInterval: 500,
       autoDeleteDays: 0,
+      codeTheme: 'tokyo-night-dark',
       shortcuts: {
         showMain: 'Option+Cmd+A',
         prevNote: 'Ctrl+[',

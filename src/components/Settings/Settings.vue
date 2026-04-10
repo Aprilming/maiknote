@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
-import { useSettingStore, type ShortcutSettings } from '@/stores/settingStore'
+import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
@@ -229,6 +229,20 @@ function cancelRecording(e: KeyboardEvent) {
   }
 }
 
+// 代码高亮主题选项
+const codeThemeOptions: { value: CodeTheme; label: string; icon: string }[] = [
+  { value: 'github', label: 'GitHub', icon: 'i-mdi-github' },
+  { value: 'github-dark', label: 'GitHub Dark', icon: 'i-mdi-github' },
+  { value: 'xcode', label: 'Xcode', icon: 'i-mdi-apple' },
+  { value: 'idea', label: 'IDEA', icon: 'i-mdi-lightbulb-outline' },
+  { value: 'vs2015', label: 'VS Code', icon: 'i-mdi-visual-studio' },
+  { value: 'atom-one-dark', label: 'Atom One Dark', icon: 'i-mdi-atom' },
+  { value: 'monokai', label: 'Monokai', icon: 'i-mdi-palette' },
+  { value: 'tokyo-night-dark', label: 'Tokyo Night', icon: 'i-mdi-weather-night' },
+  { value: 'dracula', label: 'Dracula', icon: 'i-mdi-bat' },
+  { value: 'nord', label: 'Nord', icon: 'i-mdi-snowflake' },
+]
+
 // 返回按钮
 const emit = defineEmits<{
   (e: 'back'): void
@@ -355,6 +369,24 @@ function getPromptPreview(prompt: string): string {
             @input="onAlphaChange"
             class="alpha-slider"
           />
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-name">代码主题</span>
+          </div>
+          <div class="code-theme-selector">
+            <button
+              v-for="theme in codeThemeOptions"
+              :key="theme.value"
+              class="code-theme-btn"
+              :class="{ active: settingStore.settings.codeTheme === theme.value }"
+              @click="settingStore.updateSettings('codeTheme', theme.value)"
+            >
+              <i :class="theme.icon"></i>
+              <span>{{ theme.label }}</span>
+            </button>
+          </div>
         </div>
 
         <div class="setting-item">
@@ -718,6 +750,44 @@ function getPromptPreview(prompt: string): string {
 
 .theme-btn i {
   font-size: 16px;
+}
+
+/* Code theme selector */
+.code-theme-selector {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.code-theme-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px 8px;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 12px;
+}
+
+.code-theme-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.code-theme-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.code-theme-btn i {
+  font-size: 18px;
 }
 
 .toggle-slider {
