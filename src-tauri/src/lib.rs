@@ -295,8 +295,17 @@ async fn set_window_alpha(app: AppHandle, alpha: f64) -> Result<(), String> {
     Ok(())
 }
 
+/// 检测是否是开机自启启动
+fn is_autolaunch_start(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--flag1")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 预先检测是否是开机自启，以便在 setup 中使用
+    let launch_args: Vec<String> = std::env::args().collect();
+    let is_autolaunch = is_autolaunch_start(&launch_args);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -309,7 +318,7 @@ pub fn run() {
         .manage(GlobalShortcutState {
             current_shortcut: Mutex::new(None),
         })
-        .setup(|app| {
+        .setup(move |app| {
             // 隐藏 macOS Dock 图标
             #[cfg(target_os = "macos")]
             {
@@ -340,6 +349,11 @@ pub fn run() {
                     // NSWindowCollectionBehaviorCanJoinAllSpaces = 1
                     // 初始设成这个，让窗口不被绑定到启动时的 space
                     let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 1usize];
+                }
+
+                // 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
+                if is_autolaunch {
+                    let _ = window.hide();
                 }
             }
 
