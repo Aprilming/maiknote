@@ -86,7 +86,7 @@ onMounted(async () => {
       appWindow.hide()
     }
   })
-  // 监听键盘快捷键 Cmd+F 打开搜索页面
+  // 监听键盘快捷键 Cmd+F 打开搜索页面，Cmd+W 关闭窗口
   window.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
       event.preventDefault()
@@ -95,6 +95,10 @@ onMounted(async () => {
     if ((event.metaKey || event.ctrlKey) && event.key === ',') {
       event.preventDefault()
       openSettings()
+    }
+    if (event.metaKey && event.code === 'KeyW') {
+      event.preventDefault()
+      appWindow.hide()
     }
   })
   // 标记初始化完成
