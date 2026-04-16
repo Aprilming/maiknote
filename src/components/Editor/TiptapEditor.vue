@@ -21,6 +21,7 @@ import Underline from '@tiptap/extension-underline'
 import FontFamily from '@tiptap/extension-font-family'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
+import { CodeBlockSelectAllExtension } from './extensions/CodeBlockSelectAllExtension'
 import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
@@ -503,6 +504,7 @@ const editor = useEditor({
     FontFamily,
     BlockMenuExtension,
     CodeBlockCopyExtension,
+    CodeBlockSelectAllExtension,
     // 表格扩展
     Table.configure({
       resizable: true,
