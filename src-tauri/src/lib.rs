@@ -4,11 +4,16 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
 /// 全局快捷键状态
 struct GlobalShortcutState {
     current_shortcut: Mutex<Option<Shortcut>>,
+}
+
+/// 用户设置的窗口透明度（失焦时需要补偿）
+struct WindowAlphaState {
+    alpha: Mutex<f64>,
 }
 
 
@@ -387,7 +392,17 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 
 /// Set window alpha transparency (0.0 - 1.0)
 #[tauri::command]
-async fn set_window_alpha(app: AppHandle, alpha: f64) -> Result<(), String> {
+async fn set_window_alpha(
+    app: AppHandle,
+    alpha_state: State<'_, WindowAlphaState>,
+    alpha: f64,
+) -> Result<(), String> {
+    // 保存用户设置的 alpha 值
+    {
+        let mut saved = alpha_state.alpha.lock().unwrap();
+        *saved = alpha;
+    }
+
     if let Some(window) = app.get_webview_window("main") {
         // Clamp alpha to valid range
         let clamped_alpha = alpha.max(0.1).min(1.0);
@@ -435,6 +450,9 @@ pub fn run() {
         .manage(GlobalShortcutState {
             current_shortcut: Mutex::new(None),
         })
+        .manage(WindowAlphaState {
+            alpha: Mutex::new(1.0),
+        })
         .setup(move |app| {
             // 隐藏 macOS Dock 图标
             #[cfg(target_os = "macos")]
@@ -452,10 +470,10 @@ pub fn run() {
                 use cocoa::base::id;
                 use objc2::msg_send;
 
-                apply_vibrancy(
+apply_vibrancy(
                     &window,
                     NSVisualEffectMaterial::HudWindow,
-                    None,
+                    Some(NSVisualEffectState::Active),
                     Some(12.0),
                 ).expect("vibrancy failed");
 
@@ -468,7 +486,7 @@ pub fn run() {
                     let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 1usize];
                 }
 
-                // 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
+// 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
                 if is_autolaunch {
                     let _ = window.hide();
                 }
