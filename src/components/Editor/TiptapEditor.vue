@@ -20,6 +20,7 @@ import Highlight from '@tiptap/extension-highlight'
 import Underline from '@tiptap/extension-underline'
 import FontFamily from '@tiptap/extension-font-family'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
+import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
@@ -501,6 +502,7 @@ const editor = useEditor({
     Underline,
     FontFamily,
     BlockMenuExtension,
+    CodeBlockCopyExtension,
     // 表格扩展
     Table.configure({
       resizable: true,
@@ -929,6 +931,40 @@ onUnmounted(() => {
   /* 让 highlight.js 主题控制颜色 */
   color: inherit;
 }
+
+/* 代码块复制按钮样式 */
+:deep(.code-block-copy-btn) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+:deep(.tiptap pre:hover .code-block-copy-btn) {
+  opacity: 1;
+}
+
+:deep(.code-block-copy-btn:hover) {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--color-text);
+}
+
+:deep(.code-block-copy-btn.copied) {
+  background: rgba(76, 175, 80, 0.3);
+  color: #4caf50;
+}
 </style>
 
 <style>
@@ -967,7 +1003,8 @@ onUnmounted(() => {
 /* 锁定状态下隐藏块操作按钮和悬浮条 */
 .tiptap-wrapper.is-locked .block-menu-trigger,
 .tiptap-wrapper.is-locked .drag-handle,
-.tiptap-wrapper.is-locked .bubble-menu {
+.tiptap-wrapper.is-locked .bubble-menu,
+.tiptap-wrapper.is-locked .code-block-copy-btn {
   display: none !important;
 }
 
@@ -1047,6 +1084,7 @@ onUnmounted(() => {
 
 /* 代码块样式增强 */
 .tiptap pre {
+  position: relative;
   background: var(--color-surface) !important;
   border-radius: 8px;
   padding: 12px 16px;
