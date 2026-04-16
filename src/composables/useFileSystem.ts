@@ -91,6 +91,39 @@ export function useFileSystem() {
     }
   }
 
+  /**
+   * Ensure images folder exists and return the path
+   */
+  async function ensureImagesFolder(): Promise<string> {
+    try {
+      const path = await getICloudPath()
+      return await safeInvoke<string>('ensure_images_folder', { basePath: path })
+    } catch (e) {
+      console.error('Failed to ensure images folder:', e)
+      throw new Error('Failed to access images directory')
+    }
+  }
+
+  /**
+   * Save image to the images folder
+   * @param imageData Base64 encoded image data (with or without data URL prefix)
+   * @param filename Filename to save as
+   * @returns Asset protocol URL for the saved image
+   */
+  async function saveImage(imageData: string, filename: string): Promise<string> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke<string>('save_image', { basePath: path, imageData, filename })
+      // Return asset:// URL for Tauri to serve the file
+      // Ensure proper URL encoding and single slash after localhost
+      const encodedPath = encodeURIComponent(`${path}/images/${filename}`)
+      return `asset://localhost/${encodedPath}`
+    } catch (e) {
+      console.error('Failed to save image:', e)
+      throw new Error('Failed to save image')
+    }
+  }
+
   return {
     getICloudPath,
     readMetadata,
@@ -98,5 +131,7 @@ export function useFileSystem() {
     readNote,
     writeNote,
     deleteNote,
+    ensureImagesFolder,
+    saveImage,
   }
 }

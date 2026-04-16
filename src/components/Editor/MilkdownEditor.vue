@@ -154,6 +154,7 @@ function handleEditorUpdate(md: string) {
       <!-- 正常 Markdown 编辑模式 -->
       <TiptapEditor
         v-else
+        :key="currentNote?.id"
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"

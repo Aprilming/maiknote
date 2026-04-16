@@ -27,13 +27,15 @@ import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
-import { TextSelection } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
+import { TextSelection } from 'prosemirror-state'
+import { useFileSystem } from '@/composables/useFileSystem'
 
 const lowlight = createLowlight(all)
 
 const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
+const fileSystem = useFileSystem()
 
 // 动态加载代码高亮主题 CSS
 let currentHighlightCss: HTMLLinkElement | null = null
@@ -485,7 +487,7 @@ const editor = useEditor({
     }),
     Image.configure({
       inline: true,
-      allowBase64: true,
+      allowBase64: false, // 禁用 base64，改为保存到文件
     }),
     createSlashCommand(),
     // ---- 新增扩展 ----
@@ -539,6 +541,127 @@ const editor = useEditor({
         return true
       }
     },
+    handlePaste(view, event) {
+      // 处理粘贴事件，特别是图片粘贴
+      const clipboardData = event.clipboardData
+      if (!clipboardData) return false
+
+      // 检查是否有图片
+      const items = clipboardData.items
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]
+        if (item.type.startsWith('image/')) {
+          event.preventDefault()
+
+          // 从剪贴板获取文件
+          let file = item.getAsFile()
+          // 如果 getAsFile 返回 null，尝试从 files 获取
+          if (!file && clipboardData.files.length > 0) {
+            for (let j = 0; j < clipboardData.files.length; j++) {
+              const f = clipboardData.files[j]
+              if (f.type.startsWith('image/')) {
+                file = f
+                break
+              }
+            }
+          }
+          if (!file) {
+            return true
+          }
+
+          const reader = new FileReader()
+          reader.onload = async (e) => {
+            const dataUrl = e.target?.result as string
+            if (!dataUrl) return
+
+            try {
+              // 生成唯一文件名
+              const timestamp = Date.now()
+              const randomStr = Math.random().toString(36).substring(2, 8)
+              const ext = item.type.split('/')[1] || 'png'
+              const filename = `img_${timestamp}_${randomStr}.${ext}`
+
+              // 保存图片到 iCloud 的 images 文件夹
+              const relativePath = await fileSystem.saveImage(dataUrl, filename)
+
+              // 插入图片到编辑器（relativePath 已经是 asset:// URL）
+              const imageNode = view.state.schema.nodes.image.create({ src: relativePath, alt: '', title: '' })
+              view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
+            } catch (err) {
+              console.error('Failed to save image:', err)
+              showToast('图片保存失败')
+            }
+          }
+          reader.readAsDataURL(file)
+          return true
+        }
+      }
+
+      // 非图片内容，让编辑器正常处理
+      return false
+    },
+    handleDrop(view, event) {
+      // 处理外部文件（特别是图片）拖入
+      const dataTransfer = event.dataTransfer
+      if (!dataTransfer) return false
+
+      // 检查是否有文件
+      const files = dataTransfer.files
+
+      if (files.length === 0) return false
+
+      // 检查是否是图片文件
+      const imageFiles: File[] = []
+      for (let i = 0; i < files.length; i++) {
+        if (files[i].type.startsWith('image/')) {
+          imageFiles.push(files[i])
+        }
+      }
+
+      if (imageFiles.length === 0) return false
+
+      event.preventDefault()
+
+      // 获取插入位置
+      const coords = { left: event.clientX, top: event.clientY }
+      const pos = view.posAtCoords(coords)
+      if (!pos) return true
+
+      // 设置光标位置
+      const $pos = view.state.doc.resolve(pos.pos)
+      const selection = TextSelection.near($pos)
+      view.dispatch(view.state.tr.setSelection(selection))
+
+      // 异步处理每个图片
+      for (const file of imageFiles) {
+        const reader = new FileReader()
+        reader.onload = async (e) => {
+          const dataUrl = e.target?.result as string
+          if (!dataUrl) return
+
+          try {
+            // 生成唯一文件名
+            const timestamp = Date.now()
+            const randomStr = Math.random().toString(36).substring(2, 8)
+            const ext = file.type.split('/')[1] || 'png'
+            const filename = `img_${timestamp}_${randomStr}.${ext}`
+
+            // 保存图片到 iCloud 的 images 文件夹
+            const relativePath = await fileSystem.saveImage(dataUrl, filename)
+
+            // 插入图片到编辑器（relativePath 已经是完整的 file:// URL）
+            const imageNode = view.state.schema.nodes.image.create({ src: relativePath, alt: '', title: '' })
+            view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
+          } catch (err) {
+            console.error('Failed to save image:', err)
+            showToast('图片保存失败')
+          }
+        }
+        reader.readAsDataURL(file)
+      }
+
+      return true
+    },
   },
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
@@ -581,6 +704,7 @@ onMounted(() => {
   document.addEventListener('mousedown', handleMouseDown)
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
+
   // 存储 editor view 供 block menu 拖拽使用
   if (editor.value) {
     ;(window as any).__tiptapEditorView = editor.value.view

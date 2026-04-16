@@ -30,7 +30,13 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/Library/Mobile Documents/com~apple~CloudDocs/**"
+        ]
+      }
     },
     "macOSPrivateApi": true
   },

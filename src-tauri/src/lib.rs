@@ -268,6 +268,79 @@ async fn delete_note(base_path: String, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Ensure images folder exists and return the path
+#[tauri::command]
+async fn ensure_images_folder(base_path: String) -> Result<String, String> {
+    let path = PathBuf::from(&base_path).join("images");
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Save image to the images folder
+#[tauri::command]
+async fn save_image(base_path: String, image_data: String, filename: String) -> Result<String, String> {
+    // Ensure images folder exists
+    let images_path = PathBuf::from(&base_path).join("images");
+    fs::create_dir_all(&images_path).map_err(|e| e.to_string())?;
+
+    // Decode base64 image data
+    let data_parts: Vec<&str> = image_data.split(',').collect();
+    let base64_data = if data_parts.len() > 1 {
+        data_parts[1]
+    } else {
+        &image_data
+    };
+
+    let image_bytes = base64_decode(base64_data)?;
+
+    // Write the file
+    let file_path = images_path.join(&filename);
+    fs::write(&file_path, &image_bytes).map_err(|e| e.to_string())?;
+
+    // Return relative path
+    Ok(format!("images/{}", filename))
+}
+
+/// Simple base64 decoder
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    // Remove whitespace
+    let input: String = input.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // Calculate padding
+    let padding = if input.ends_with('=') {
+        if input.ends_with("==") { 2 } else { 1 }
+    } else { 0 };
+
+    let mut output = Vec::new();
+    let mut buffer: u32 = 0;
+    let mut bits_collected = 0;
+
+    for c in input.chars() {
+        if c == '=' { break; }
+
+        let value = ALPHABET.iter().position(|&x| x as char == c)
+            .ok_or_else(|| format!("Invalid base64 character: {}", c))? as u32;
+
+        buffer = (buffer << 6) | value;
+        bits_collected += 6;
+
+        if bits_collected >= 8 {
+            bits_collected -= 8;
+            output.push((buffer >> bits_collected) as u8);
+            buffer &= (1 << bits_collected) - 1;
+        }
+    }
+
+    // Remove padding bytes if any
+    if padding > 0 && !output.is_empty() {
+        output.truncate(output.len() - padding);
+    }
+
+    Ok(output)
+}
+
 /// Set window alpha transparency (0.0 - 1.0)
 #[tauri::command]
 async fn set_window_alpha(app: AppHandle, alpha: f64) -> Result<(), String> {
@@ -368,6 +441,8 @@ pub fn run() {
             read_note,
             write_note,
             delete_note,
+            ensure_images_folder,
+            save_image,
             register_global_shortcut,
             toggle_window,
             set_window_alpha
