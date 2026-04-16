@@ -1,11 +1,30 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
+
+// 安全获取 Tauri 窗口
+const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+const appWindow = isTauri ? getCurrentWindow() : null
+
+// 拖拽功能
+async function startDrag(e: MouseEvent) {
+  if ((e.target as HTMLElement).closest('button, input, .back-btn')) {
+    return
+  }
+  if (e.buttons === 1 && appWindow) {
+    try {
+      await appWindow.startDragging()
+    } catch (err) {
+      console.error('Drag error:', err)
+    }
+  }
+}
 
 // Toast 通知
 function showToast(message: string, duration = 2000) {
@@ -312,7 +331,7 @@ function getPromptPreview(prompt: string): string {
 
 <template>
   <div class="settings-page" @keydown="handleKeydown" @keyup="cancelRecording" tabindex="0">
-    <div class="settings-header">
+    <div class="settings-header" data-tauri-drag-region @mousedown="startDrag">
       <button class="back-btn" @click="goBack">
         <i class="i-mdi-arrow-left"></i>
       </button>
@@ -682,7 +701,7 @@ function getPromptPreview(prompt: string): string {
   width: 100%;
   height: 4px;
   appearance: none;
-  background: var(--color-border);
+  background: #666;
   border-radius: 2px;
   outline: none;
 }

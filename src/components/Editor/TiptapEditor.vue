@@ -22,6 +22,7 @@ import FontFamily from '@tiptap/extension-font-family'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import { CodeBlockSelectAllExtension } from './extensions/CodeBlockSelectAllExtension'
+import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
 import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
@@ -507,6 +508,7 @@ const editor = useEditor({
     BlockMenuExtension,
     CodeBlockCopyExtension,
     CodeBlockSelectAllExtension,
+    CodeBlockLanguageExtension,
     // 表格扩展
     Table.configure({
       resizable: true,
@@ -706,6 +708,21 @@ onMounted(() => {
   document.addEventListener('mousedown', handleMouseDown)
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
+
+  // 监听代码块语言变更
+  document.addEventListener('codeblock-language-change', ((e: CustomEvent) => {
+    const { pos, language } = e.detail
+    if (editor.value) {
+      const node = editor.value.state.doc.nodeAt(pos)
+      if (node && node.type.name === 'codeBlock') {
+        const tr = editor.value.state.tr.setNodeMarkup(pos, undefined, {
+          ...node.attrs,
+          language: language,
+        })
+        editor.value.view.dispatch(tr)
+      }
+    }
+  }) as EventListener)
 
   // 存储 editor view 供 block menu 拖拽使用
   if (editor.value) {
@@ -1046,7 +1063,7 @@ onUnmounted(() => {
 
 :deep(.tiptap pre) {
   background: var(--color-code-bg, #f5f5f5);
-  border: 4px solid var(--color-code-border, #e0e0e0);
+  border: 2px solid var(--color-code-border, #e0e0e0);
   border-radius: 8px;
   padding: 12px 16px;
   margin: 16px 0;
@@ -1093,6 +1110,89 @@ onUnmounted(() => {
   background: rgba(76, 175, 80, 0.3);
   color: #4caf50;
 }
+
+/* 代码块语言选择器样式 */
+:deep(.code-block-language-selector) {
+  position: absolute;
+  bottom: -32px;
+  right: 0;
+  z-index: 10;
+}
+
+:deep(.code-block-lang-btn) {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s;
+}
+
+:deep(.tiptap pre:hover .code-block-lang-btn) {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+:deep(.code-block-lang-btn:hover) {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--color-text);
+}
+
+:deep(.code-block-lang-dropdown) {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: var(--color-popup-bg, #2a2a2a);
+  border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  min-width: 200px;
+  max-height: 300px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.code-block-lang-search) {
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--color-popup-text, #e0e0e0);
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+
+:deep(.code-block-lang-search::placeholder) {
+  color: var(--color-text-secondary);
+}
+
+:deep(.code-block-lang-list) {
+  overflow-y: auto;
+  max-height: 250px;
+  padding: 4px 0;
+}
+
+:deep(.code-block-lang-item) {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-popup-text, #e0e0e0);
+  transition: background 0.1s;
+}
+
+:deep(.code-block-lang-item:hover) {
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
+}
+
+:deep(.code-block-lang-item.active) {
+  background: var(--color-primary);
+  color: white;
+}
 </style>
 
 <style>
@@ -1132,7 +1232,8 @@ onUnmounted(() => {
 .tiptap-wrapper.is-locked .block-menu-trigger,
 .tiptap-wrapper.is-locked .drag-handle,
 .tiptap-wrapper.is-locked .bubble-menu,
-.tiptap-wrapper.is-locked .code-block-copy-btn {
+.tiptap-wrapper.is-locked .code-block-copy-btn,
+.tiptap-wrapper.is-locked .code-block-lang-btn {
   display: none !important;
 }
 

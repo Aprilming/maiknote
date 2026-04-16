@@ -4,7 +4,7 @@
   --color-primary: #3b82f6;
   --color-primary-hover: #2563eb;
   --color-background: #ffffff;
-  --color-surface: rgba(235, 238, 242, 0);
+  --color-surface: rgba(235, 238, 242, 0.85);
   --color-text: #1e293b;
   --color-text-secondary: #64748b;
   --color-border: rgba(226, 232, 240, 0.4);
@@ -14,7 +14,7 @@
 
   /* Code block variables */
   --color-code-bg: #000000;
-  --color-code-border: #000000;
+  --color-code-border: #7c7c7c;
 
   /* Popup theme variables */
   --color-popup-bg: rgba(255, 255, 255, 0.95);
@@ -47,7 +47,7 @@
   --color-primary: #3b82f6;
   --color-primary-hover: #60a5fa;
   --color-background: #1a1a1a;
-  --color-surface: rgba(255, 255, 255, 0);
+  --color-surface: rgba(30, 30, 30, 0.85);
   --color-text: #f1f5f9;
   --color-text-secondary: #f8f8f8;
   --color-border: #3a3a3a;
@@ -56,8 +56,8 @@
   --color-warning: #f59e0b;
 
   /* Code block variables */
-  --color-code-bg: #f5f5f5;
-  --color-code-border: #ffffff;
+  --color-code-bg: #757575;
+  --color-code-border: #777777;
 
   /* Popup theme variables */
   --color-popup-bg: rgba(30, 30, 30, 0.95);
