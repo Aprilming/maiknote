@@ -7,7 +7,7 @@ const codeBlockLanguageKey = new PluginKey('codeBlockLanguage')
 
 // 常见编程语言列表
 export const PROGRAMMING_LANGUAGES = [
-  { id: 'shell', name: 'Shell', alias: ['bash', 'sh', 'zsh'] },
+  { id: 'bash', name: 'bash', alias: ['shell', 'sh', 'zsh', 'bash'] },
   { id: 'python', name: 'Python', alias: ['py'] },
   { id: 'go', name: 'Go', alias: ['golang'] },
   { id: 'javascript', name: 'JavaScript', alias: ['js'] },
