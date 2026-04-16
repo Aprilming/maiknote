@@ -377,11 +377,18 @@ export const useNoteStore = defineStore('note', () => {
     }
   }
 
-  function toggleLock(id: string) {
+  async function toggleLock(id: string) {
     const note = notes.value.find(n => n.id === id)
     if (note) {
       note.isLocked = !note.isLocked
       note.updatedAt = Date.now()
+
+      // Set file permission based on lock state
+      if (note.isLocked) {
+        await fs.setNoteReadonly(id)
+      } else {
+        await fs.setNoteReadwrite(id)
+      }
 
       // Schedule metadata save to iCloud (debounced)
       scheduleSave() // Will save metadata

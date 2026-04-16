@@ -92,6 +92,30 @@ export function useFileSystem() {
   }
 
   /**
+   * Set note file to read-only (locked)
+   */
+  async function setNoteReadonly(id: string): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke('set_note_readonly', { basePath: path, id })
+    } catch (e) {
+      console.error(`Failed to set note ${id} readonly:`, e)
+    }
+  }
+
+  /**
+   * Set note file to read-write (unlocked)
+   */
+  async function setNoteReadwrite(id: string): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke('set_note_readwrite', { basePath: path, id })
+    } catch (e) {
+      console.error(`Failed to set note ${id} readwrite:`, e)
+    }
+  }
+
+  /**
    * Ensure images folder exists and return the path
    */
   async function ensureImagesFolder(): Promise<string> {
@@ -131,6 +155,8 @@ export function useFileSystem() {
     readNote,
     writeNote,
     deleteNote,
+    setNoteReadonly,
+    setNoteReadwrite,
     ensureImagesFolder,
     saveImage,
   }

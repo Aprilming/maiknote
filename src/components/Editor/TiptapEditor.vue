@@ -672,6 +672,8 @@ const editor = useEditor({
 watch(() => props.initialContent, (newContent) => {
   if (editor.value && newContent !== editor.value.storage.markdown.getMarkdown()) {
     editor.value.commands.setContent(newContent)
+    // 切换笔记时滚动到顶部
+    editor.value.commands.scrollToTop()
   }
 })
 
@@ -818,8 +820,7 @@ onUnmounted(() => {
 .tiptap-wrapper {
   height: 100%;
   overflow-y: auto;
-  padding: 40px 48px;
-  background: var(--color-background);
+  background: transparent;
 }
 
 /* AI 加载指示器 */
@@ -1113,7 +1114,7 @@ onUnmounted(() => {
 .tiptap {
   height: 100%;
   padding: 0;
-  background: var(--color-background);
+  background: transparent;
 }
 
 /* 锁定状态样式 */
@@ -1138,8 +1139,9 @@ onUnmounted(() => {
   height: auto;
   min-height: 100%;
   padding: 40px 48px 40px 72px;
-  background: var(--color-background);
+  background: var(--color-surface) !important;
   color: var(--color-text);
+  border-radius: 8px;
 }
 
 /* 标题样式 */

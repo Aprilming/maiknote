@@ -268,6 +268,50 @@ async fn delete_note(base_path: String, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Set note file to read-only (444 permission)
+#[tauri::command]
+async fn set_note_readonly(base_path: String, id: String) -> Result<(), String> {
+    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+
+    if path.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
+            perms.set_mode(0o444);
+            fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, id);
+        }
+    }
+
+    Ok(())
+}
+
+/// Set note file to read-write (644 permission)
+#[tauri::command]
+async fn set_note_readwrite(base_path: String, id: String) -> Result<(), String> {
+    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+
+    if path.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
+            perms.set_mode(0o644);
+            fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, id);
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure images folder exists and return the path
 #[tauri::command]
 async fn ensure_images_folder(base_path: String) -> Result<String, String> {
@@ -441,6 +485,8 @@ pub fn run() {
             read_note,
             write_note,
             delete_note,
+            set_note_readonly,
+            set_note_readwrite,
             ensure_images_folder,
             save_image,
             register_global_shortcut,

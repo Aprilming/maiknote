@@ -38,23 +38,38 @@ const currentNote = computed(() => noteStore.currentNote)
 // update local content when current note changes
 watch(
   () => currentNote.value?.id,
-  () => {
+  async (newId, oldId) => {
+    // 如果是从源码模式切换笔记，需要先同步保存当前笔记的编辑内容
+    if (isSourceMode.value && oldId && newId !== oldId) {
+      // 确保 textarea 的内容完全同步到 localContent
+      if (sourceTextareaRef.value) {
+        // 手动同步 textarea 的值到 localContent
+        localContent.value = sourceTextareaRef.value.value
+      }
+      // 直接调用 writeNote 同步保存，不依赖防抖机制
+      await writeNote(oldId, localContent.value)
+      noteStore.updateNote(oldId, { content: localContent.value })
+    }
     localContent.value = currentNote.value?.content || ''
-    // 切换笔记时重置源码模式
-    isSourceMode.value = false
+    // 切换笔记时保持源码模式状态，不强制重置
+    // isSourceMode.value = false
   },
   { immediate: true }
 )
 
 // 监听源码模式切换，确保 textarea 内容同步
-watch(isSourceMode, (newVal) => {
+watch(isSourceMode, (newVal, oldVal) => {
   if (newVal) {
     // 源码模式激活时，等待 DOM 更新后聚焦
     setTimeout(() => {
       sourceTextareaRef.value?.focus()
     }, 50)
+  } else if (oldVal && !newVal) {
+    // 从源码模式切换到普通模式时，确保内容已同步
+    // 这里不需要额外处理，因为 handleSourceInput 已经实时同步了内容
   }
 })
+
 
 // auto-save
 const { isSaving } = useAutoSave(
@@ -115,6 +130,13 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  // 在组件卸载前同步源码模式下的内容
+  if (isSourceMode.value && sourceTextareaRef.value && currentNote.value) {
+    // 确保 textarea 的内容同步到 localContent 和 store
+    localContent.value = sourceTextareaRef.value.value
+    noteStore.updateNote(currentNote.value.id, { content: sourceTextareaRef.value.value })
+  }
+
   const editor = document.querySelector('.editor-container')
   if (editor) {
     editor.removeEventListener('wheel', handleWheel as EventListener)
@@ -127,6 +149,29 @@ function handleEditorUpdate(md: string) {
   if (currentNote.value) {
     noteStore.updateNote(currentNote.value.id, { content: md })
   }
+}
+
+// 处理源码模式下的输入事件，确保内容实时同步
+function handleSourceInput(e: Event) {
+  const target = e.target as HTMLTextAreaElement
+  localContent.value = target.value
+  if (currentNote.value) {
+    noteStore.updateNote(currentNote.value.id, { content: target.value })
+  }
+}
+
+// 自定义切换源码模式函数，确保内容同步
+function handleToggleSourceMode() {
+  // 如果当前是源码模式，切换到普通模式前确保内容同步
+  if (isSourceMode.value && sourceTextareaRef.value) {
+    // 手动同步 textarea 的内容到 localContent
+    localContent.value = sourceTextareaRef.value.value
+    if (currentNote.value) {
+      noteStore.updateNote(currentNote.value.id, { content: sourceTextareaRef.value.value })
+    }
+  }
+  // 切换模式
+  toggleSourceMode()
 }
 </script>
 
@@ -145,7 +190,8 @@ function handleEditorUpdate(md: string) {
       <textarea
         v-if="isSourceMode"
         ref="sourceTextareaRef"
-        v-model="localContent"
+        :value="localContent"
+        @input="handleSourceInput"
         class="source-textarea"
         :readonly="isLocked"
         placeholder="在此输入 Markdown 源码..."
@@ -166,7 +212,7 @@ function handleEditorUpdate(md: string) {
       <button
         class="source-mode-button"
         :class="{ 'is-active': isSourceMode }"
-        @click.stop="toggleSourceMode"
+        @click.stop="handleToggleSourceMode"
         :title="isSourceMode ? '切换到 Markdown' : '切换到源码'"
       >
         <i v-if="isSourceMode" class="i-mdi-markdown"></i>
@@ -226,6 +272,8 @@ function handleEditorUpdate(md: string) {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding: 8px;
+  background: transparent;
 }
 
 .source-textarea {
@@ -236,7 +284,7 @@ function handleEditorUpdate(md: string) {
   height: 100%;
   padding: 40px 48px 40px 72px;
   overflow: auto;
-  background: var(--color-background);
+  background: var(--color-surface) !important;
   color: var(--color-text);
   border: none;
   outline: none;
@@ -247,6 +295,10 @@ function handleEditorUpdate(md: string) {
   white-space: pre-wrap;
   word-wrap: break-word;
   box-sizing: border-box;
+  border-radius: 8px;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
 }
 
 .source-textarea::placeholder {
