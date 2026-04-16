@@ -1045,7 +1045,8 @@ onUnmounted(() => {
 }
 
 :deep(.tiptap pre) {
-  background: var(--color-surface);
+  background: var(--color-code-bg, #f5f5f5);
+  border: 4px solid var(--color-code-border, #e0e0e0);
   border-radius: 8px;
   padding: 12px 16px;
   margin: 16px 0;
