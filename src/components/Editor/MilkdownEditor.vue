@@ -327,6 +327,8 @@ function handleToggleSourceMode() {
   transition: opacity 0.2s;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .left-hint {
@@ -360,6 +362,8 @@ function handleToggleSourceMode() {
   pointer-events: none;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .lock-button {
@@ -381,6 +385,8 @@ function handleToggleSourceMode() {
   transition: all 0.15s;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .lock-button:hover {
@@ -415,6 +421,8 @@ function handleToggleSourceMode() {
   transition: all 0.15s;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .source-mode-button:hover {
@@ -445,6 +453,8 @@ function handleToggleSourceMode() {
   pointer-events: none;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .save-indicator {
@@ -463,6 +473,8 @@ function handleToggleSourceMode() {
   pointer-events: none;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .spinning {
@@ -498,6 +510,11 @@ function handleToggleSourceMode() {
 .navigation-hint i {
   font-size: 18px;
   color: var(--color-primary);
+}
+
+.navigation-hint {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .hint-fade-enter-active,

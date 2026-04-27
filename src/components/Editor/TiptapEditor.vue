@@ -21,7 +21,6 @@ import Underline from '@tiptap/extension-underline'
 import FontFamily from '@tiptap/extension-font-family'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
-import { CodeBlockSelectAllExtension } from './extensions/CodeBlockSelectAllExtension'
 import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
 import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
@@ -29,7 +28,7 @@ import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import type { EditorView } from 'prosemirror-view'
-import { TextSelection } from 'prosemirror-state'
+import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
 
 const lowlight = createLowlight(all)
@@ -507,7 +506,6 @@ const editor = useEditor({
     FontFamily,
     BlockMenuExtension,
     CodeBlockCopyExtension,
-    CodeBlockSelectAllExtension,
     CodeBlockLanguageExtension,
     // 表格扩展
     Table.configure({
@@ -519,6 +517,53 @@ const editor = useEditor({
   ],
   content: props.initialContent,
   editorProps: {
+    handleKeyDown(view, event) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'a') {
+        event.preventDefault()
+        const { state, dispatch } = view
+
+        // ProseMirror 的 AllSelection 映射到 DOM 为容器级选区 (DIV offset 0→N)，
+        // 浏览器对跨元素容器级选区不渲染 ::selection（尤其 <pre>、<ul> 等块）。
+        // 这里改为文本节点级选区，并临时解除 contenteditable="false" 的编辑宿主隔离。
+        dispatch(state.tr.setSelection(new AllSelection(state.doc)))
+
+        requestAnimationFrame(() => {
+          const domSel = window.getSelection()
+          if (!domSel) return
+
+          // 找到编辑器内第一个和最后一个文本节点
+          const walker = document.createTreeWalker(view.dom, NodeFilter.SHOW_TEXT)
+          const first = walker.nextNode() as Text | null
+          if (!first) return
+          let last: Text = first
+          let node: Node | null
+          while ((node = walker.nextNode())) last = node as Text
+
+          // 临时解除 NodeView 外壳的 contenteditable="false"，使选区跨宿主可行
+          const nonEditables = view.dom.querySelectorAll('[contenteditable="false"]')
+          nonEditables.forEach((el: any) => el.setAttribute('contenteditable', 'true'))
+
+          try {
+            view.domObserver.disconnectSelection()
+            domSel.setBaseAndExtent(first, 0, last, (last.textContent || '').length)
+            view.domObserver.setCurSelection()
+          } finally {
+            view.domObserver.connectSelection()
+          }
+
+          // 等浏览器渲染完选区后，在下次用户交互时恢复 contenteditable
+          const restore = () => {
+            nonEditables.forEach((el: any) => el.setAttribute('contenteditable', 'false'))
+            view.dom.removeEventListener('mousedown', restore)
+            view.dom.removeEventListener('keydown', restore)
+          }
+          view.dom.addEventListener('mousedown', restore, { once: true })
+          view.dom.addEventListener('keydown', restore, { once: true })
+        })
+        return true
+      }
+      return false
+    },
     handleClick(view, _pos, event) {
       // 只处理左键点击，右键点击保持选择状态
       if (event.button !== 0) {
@@ -1196,21 +1241,6 @@ onUnmounted(() => {
 </style>
 
 <style>
-/* 全局样式 - 确保代码块内的选中文本颜色一致 */
-.tiptap pre::selection,
-.tiptap pre code::selection,
-.tiptap code::selection {
-  background-color: var(--color-primary) !important;
-  color: white !important;
-}
-
-.tiptap pre::-moz-selection,
-.tiptap pre code::-moz-selection,
-.tiptap code::-moz-selection {
-  background-color: var(--color-primary) !important;
-  color: white !important;
-}
-
 /* Tiptap 基础样式覆盖 */
 .tiptap {
   height: 100%;
