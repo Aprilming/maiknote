@@ -454,6 +454,7 @@ async function callAI(assistantId: string) {
 }
 
 const editor = useEditor({
+  editable: !props.isLocked,
   extensions: [
     StarterKit.configure({
       codeBlock: false,
@@ -1276,6 +1277,10 @@ onUnmounted(() => {
 .tiptap-wrapper.is-locked .code-block-copy-btn,
 .tiptap-wrapper.is-locked .code-block-lang-btn {
   display: none !important;
+}
+
+.tiptap-wrapper.is-locked ul[data-type="taskList"] li > label input[type="checkbox"] {
+  pointer-events: none !important;
 }
 
 .tiptap > .ProseMirror {
