@@ -545,11 +545,11 @@ const editor = useEditor({
           nonEditables.forEach((el: any) => el.setAttribute('contenteditable', 'true'))
 
           try {
-            view.domObserver.disconnectSelection()
+            ;(view as any).domObserver.disconnectSelection()
             domSel.setBaseAndExtent(first, 0, last, (last.textContent || '').length)
-            view.domObserver.setCurSelection()
+            ;(view as any).domObserver.setCurSelection()
           } finally {
-            view.domObserver.connectSelection()
+            ;(view as any).domObserver.connectSelection()
           }
 
           // 等浏览器渲染完选区后，在下次用户交互时恢复 contenteditable
@@ -732,7 +732,7 @@ watch(() => props.initialContent, (newContent) => {
   if (editor.value && newContent !== editor.value.storage.markdown.getMarkdown()) {
     editor.value.commands.setContent(newContent)
     // 切换笔记时滚动到顶部
-    editor.value.commands.scrollToTop()
+    editor.value.view.dom.scrollTop = 0
   }
 })
 
