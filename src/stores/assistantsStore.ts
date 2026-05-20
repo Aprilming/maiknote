@@ -11,6 +11,12 @@ export interface Assistant {
   createdAt: number // timestamp in milliseconds
 }
 
+export interface AiConfig {
+  url: string
+  key: string
+  model: string
+}
+
 // Default template assistants - using string literals to avoid Pinia initialization issues
 export const defaultAssistants: Assistant[] = [
   {
@@ -65,10 +71,20 @@ export const defaultAssistants: Assistant[] = [
   },
 ]
 
+export const defaultAiConfig: AiConfig = {
+  url: 'https://api.deepseek.com/chat/completions',
+  key: '',
+  model: 'deepseek-chat',
+}
+
 export const useAssistantsStore = defineStore('assistants', () => {
   // State
   const assistants = ref<Assistant[]>([])
   const isLoaded = ref(false)
+  const aiUrl = ref(defaultAiConfig.url)
+  const aiKey = ref(defaultAiConfig.key)
+  const aiModel = ref(defaultAiConfig.model)
+  const aiConfigExists = ref(false)
 
   // File system operations
   const { getICloudPath } = useFileSystem()
@@ -91,6 +107,14 @@ export const useAssistantsStore = defineStore('assistants', () => {
       if (content) {
         const parsed = JSON.parse(content)
         assistants.value = parsed.assistants || []
+
+        // Load AI config from iCloud
+        if (parsed.aiConfig) {
+          aiUrl.value = parsed.aiConfig.url || defaultAiConfig.url
+          aiKey.value = parsed.aiConfig.key || defaultAiConfig.key
+          aiModel.value = parsed.aiConfig.model || defaultAiConfig.model
+          aiConfigExists.value = true
+        }
       }
 
       isLoaded.value = true
@@ -103,12 +127,16 @@ export const useAssistantsStore = defineStore('assistants', () => {
   }
 
   /**
-   * Save assistants to iCloud file
+   * Save assistants and AI config to iCloud file
    */
   async function saveAssistants(): Promise<void> {
     try {
       const path = await getICloudPath()
-      const content = JSON.stringify({ version: 1, assistants: assistants.value }, null, 2)
+      const content = JSON.stringify({
+        version: 1,
+        assistants: assistants.value,
+        aiConfig: { url: aiUrl.value, key: aiKey.value, model: aiModel.value },
+      }, null, 2)
       await invoke('write_assistants', { basePath: path, content })
     } catch (e) {
       console.error('Failed to save assistants:', e)
@@ -190,9 +218,23 @@ export const useAssistantsStore = defineStore('assistants', () => {
     )
   }
 
+  /**
+   * Update AI config (url, key, model) and persist to iCloud
+   */
+  async function updateAiConfig(url: string, key: string, model: string): Promise<void> {
+    aiUrl.value = url
+    aiKey.value = key
+    aiModel.value = model
+    await saveAssistants()
+  }
+
   return {
     assistants,
     isLoaded,
+    aiConfigExists,
+    aiUrl,
+    aiKey,
+    aiModel,
     loadAssistants,
     saveAssistants,
     addAssistant,
@@ -201,5 +243,6 @@ export const useAssistantsStore = defineStore('assistants', () => {
     getAssistantById,
     hasPrompt,
     hasUserPrompt,
+    updateAiConfig,
   }
 })

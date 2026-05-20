@@ -54,6 +54,13 @@ const assistantsStore = useAssistantsStore()
 // 初始化助手数据
 onMounted(async () => {
   await assistantsStore.loadAssistants()
+  // 从 iCloud 同步 AI 配置到设置
+  if (assistantsStore.aiConfigExists) {
+    settingStore.settings.aiUrl = assistantsStore.aiUrl
+    settingStore.settings.aiKey = assistantsStore.aiKey
+    settingStore.settings.aiModel = assistantsStore.aiModel
+    settingStore.saveSettings()
+  }
   try {
     const enabled = await isEnabled()
     settingStore.updateSettings('autoLaunch', enabled)

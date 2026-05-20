@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useAssistantsStore } from '@/stores/assistantsStore'
 
 export type Theme = 'light' | 'dark' | 'auto'
 
@@ -119,6 +120,16 @@ export const useSettingStore = defineStore('setting', () => {
     settings.value[key] = value
     // Save to localStorage
     saveSettings()
+
+    // Sync AI config to iCloud via assistantsStore
+    if (key === 'aiUrl' || key === 'aiKey' || key === 'aiModel') {
+      const assistantsStore = useAssistantsStore()
+      assistantsStore.updateAiConfig(
+        settings.value.aiUrl,
+        settings.value.aiKey,
+        settings.value.aiModel,
+      )
+    }
   }
 
   function loadSettings() {
@@ -205,6 +216,13 @@ export const useSettingStore = defineStore('setting', () => {
           '若存在矛盾规则，以最后出现的为准并合并'
     }
     saveSettings()
+    // 重置 iCloud 中的 AI 配置
+    const assistantsStore = useAssistantsStore()
+    assistantsStore.updateAiConfig(
+      settings.value.aiUrl,
+      settings.value.aiKey,
+      settings.value.aiModel,
+    )
   }
 
   // Initialize

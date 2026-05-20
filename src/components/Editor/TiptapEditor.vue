@@ -760,8 +760,15 @@ watch(() => settingStore.settings.codeTheme, (newTheme) => {
   loadHighlightCss(newTheme)
 })
 
-onMounted(() => {
-  assistantsStore.loadAssistants()
+onMounted(async () => {
+  await assistantsStore.loadAssistants()
+  // 从 iCloud 同步 AI 配置到设置
+  if (assistantsStore.aiConfigExists) {
+    settingStore.settings.aiUrl = assistantsStore.aiUrl
+    settingStore.settings.aiKey = assistantsStore.aiKey
+    settingStore.settings.aiModel = assistantsStore.aiModel
+    settingStore.saveSettings()
+  }
   document.addEventListener('mousedown', handleMouseDown)
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
