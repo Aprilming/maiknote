@@ -399,6 +399,22 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="setting-name">字体大小</span>
+            <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
+          </div>
+          <input
+            type="range"
+            min="10"
+            max="32"
+            step="1"
+            :value="settingStore.settings.fontSize"
+            @input="settingStore.updateSettings('fontSize', parseInt(($event.target as HTMLInputElement).value))"
+            class="alpha-slider"
+          />
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="setting-name">代码主题</span>
           </div>
           <div class="code-theme-selector">
