@@ -101,6 +101,7 @@ MaikNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdo
 | 状态管理 | Pinia 2.x |
 | 样式 | UnoCSS |
 | 存储 | 本地 `.md` 文件（iCloud 目录） |
+| AI | DeepSeek API
 
 ## 开发指南
 
