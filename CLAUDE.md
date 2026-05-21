@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MarkNote is a macOS-native AI Markdown floating note app built with Tauri 2.x + Vue 3.x + TypeScript. Notes are stored as individual `.md` files in iCloud (`~/Library/Mobile Documents/com~apple~CloudDocs/MaikNote/`).
+MaikNote is a macOS-native AI Markdown floating note app built with Tauri 2.x + Vue 3.x + TypeScript. Notes are stored as individual `.md` files in iCloud (`~/Library/Mobile Documents/com~apple~CloudDocs/MaikNote/`).
 
 ## Commands
 

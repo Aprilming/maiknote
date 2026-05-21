@@ -13,7 +13,7 @@ async function createNewNote() {
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <h1 class="app-title">MarkNote</h1>
+      <h1 class="app-title">MaikNote</h1>
       <button class="new-note-btn" @click="createNewNote" title="New Note (Cmd+N)">
         <i class="i-mdi-plus"></i>
       </button>

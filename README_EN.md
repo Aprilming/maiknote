@@ -3,7 +3,7 @@
 </div>
 
 <div align="center">
-  <h1>MarkNote</h1>
+  <h1>MaikNote</h1>
   <p>A native macOS AI-powered floating Markdown note app</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-macOS-black?style=flat-square&logo=apple" />
@@ -17,7 +17,7 @@
 
 ## About
 
-MarkNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-assisted writing, and automatic iCloud sync. Inspired by [Antinote](https://antinote.io/) — built to go further with deeper AI integration. Many thanks to the Antinote team!
+MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-assisted writing, and automatic iCloud sync. Inspired by [Antinote](https://antinote.io/) — built to go further with deeper AI integration. Many thanks to the Antinote team!
 
 > This project was developed entirely via vibe coding.
 
@@ -87,7 +87,7 @@ MarkNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 Notes are stored in your iCloud directory for seamless multi-device sync:
 
 ```
-~/Library/Mobile Documents/com~apple~CloudDocs/MarkNote/
+~/Library/Mobile Documents/com~apple~CloudDocs/MaikNote/
 ├── metadata.json       # Note index
 ├── note_<uuid>.md      # Note content
 └── ...
@@ -141,7 +141,7 @@ sudo xattr -r -d com.apple.quarantine /Applications/MaikNote.app/
 
 ## License
 
-**Copyright © 2025-2026 MarkNote**
+**Copyright © 2025-2026 MaikNote**
 
 This software is for personal learning, research, and private use only. Commercial use of any kind is strictly prohibited.
 

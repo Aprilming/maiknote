@@ -3,7 +3,7 @@
 </div>
 
 <div align="center">
-  <h1>MarkNote</h1>
+  <h1>MaikNote</h1>
   <p>一款 macOS 原生的 AI Markdown 悬浮便签应用</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-macOS-black?style=flat-square&logo=apple" />
@@ -17,7 +17,7 @@
 
 ## 简介
 
-MarkNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdown 编辑、AI 辅助写作与 iCloud 自动同步。灵感来源于 [Antinote](https://antinote.io/)，在其基础上深度整合了 AI 能力。感谢 Antinote 的启发！
+MaikNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdown 编辑、AI 辅助写作与 iCloud 自动同步。灵感来源于 [Antinote](https://antinote.io/)，在其基础上深度整合了 AI 能力。感谢 Antinote 的启发！
 
 > 本项目完全通过 vibe coding 方式开发。
 
@@ -86,7 +86,7 @@ MarkNote 是一款 macOS 原生悬浮便签应用，支持所见即所得 Markdo
 笔记存储在 iCloud 目录下，天然支持多设备同步：
 
 ```
-~/Library/Mobile Documents/com~apple~CloudDocs/MarkNote/
+~/Library/Mobile Documents/com~apple~CloudDocs/MaikNote/
 ├── metadata.json       # 笔记索引
 ├── note_<uuid>.md      # 笔记内容
 └── ...
@@ -140,7 +140,7 @@ sudo xattr -r -d com.apple.quarantine /Applications/MaikNote.app/
 
 ## 许可协议
 
-**版权所有 © 2025-2026 MarkNote**
+**版权所有 © 2025-2026 MaikNote**
 
 本软件仅供个人学习、研究和私人使用，禁止用于任何商业目的。
 
