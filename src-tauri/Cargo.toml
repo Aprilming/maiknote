@@ -1,6 +1,6 @@
 [package]
 name = "maiknote"
-version = "0.8.2"
+version = "0.8.3"
 description = "A macOS Markdown note-taking app"
 authors = ["april"]
 edition = "2021"
@@ -33,6 +33,9 @@ cocoa = "0.25"
 window-vibrancy = "0.5"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.5"
+libc = "0.2"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

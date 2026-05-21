@@ -6,6 +6,12 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGShieldingWindowLevel() -> i32;
+}
+
 /// 全局快捷键状态
 struct GlobalShortcutState {
     current_shortcut: Mutex<Option<Shortcut>>,
@@ -109,22 +115,85 @@ async fn register_global_shortcut(
     let app_handle = app.clone();
     app.global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                println!("Global shortcut triggered!");
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    // Toggle 逻辑
-                    let is_visible = window.is_visible().unwrap_or(false);
-                    if is_visible {
-                        let _ = window.hide();
-                    } else {
-                        let app_clone = app_handle.clone();
-                        let _ = app_handle.run_on_main_thread(move || {
+                if event.state == ShortcutState::Pressed {
+                    println!("Global shortcut triggered!");
+                    let app_clone = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        if let Some(window) = app_clone.get_webview_window("main") {
+                            let is_on_active_space = window.is_visible().unwrap_or(false);
+                            // 用原生方法判断是否在当前 Space 且可见
+                            #[cfg(target_os = "macos")]
+                            {
+                                use objc2::msg_send;
+                                use objc2::runtime::AnyObject;
+                                use cocoa::base::id;
+                                use std::ffi::CString;
+
+                                let ns_window = window.ns_window().unwrap() as id;
+                                let ns_window_ptr = ns_window as *mut AnyObject;
+                                let is_on_space: bool = unsafe { msg_send![ns_window_ptr, isOnActiveSpace] };
+                                let is_visible: bool = unsafe { msg_send![ns_window_ptr, isVisible] };
+                                println!("is_on_space={} is_visible={}", is_on_space, is_visible);
+                                if is_on_space && is_visible {
+                                    // 隐藏前先从 Space 移除，确保下次 isOnActiveSpace=false
+                                    unsafe {
+                                        let lib_name = CString::new("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight").unwrap();
+                                        let handle = libc::dlopen(lib_name.as_ptr(), libc::RTLD_LAZY);
+                                        if !handle.is_null() {
+                                            let sym0 = CString::new("CGSMainConnectionID").unwrap();
+                                            let sym1 = CString::new("CGSGetActiveSpace").unwrap();
+                                            let sym2 = CString::new("CGSRemoveWindowsFromSpaces").unwrap();
+                                            let ptr0 = libc::dlsym(handle, sym0.as_ptr());
+                                            let ptr1 = libc::dlsym(handle, sym1.as_ptr());
+                                            let ptr2 = libc::dlsym(handle, sym2.as_ptr());
+                                            if !ptr0.is_null() && !ptr1.is_null() && !ptr2.is_null() {
+                                                type Fn0 = extern "C" fn() -> u32;
+                                                type Fn1 = extern "C" fn(u32) -> u64;
+                                                type Fn2 = extern "C" fn(u32, *const libc::c_void, *const libc::c_void);
+                                                let cgs_main_conn: Fn0 = std::mem::transmute(ptr0);
+                                                let cgs_get_space: Fn1 = std::mem::transmute(ptr1);
+                                                let cgs_remove_windows: Fn2 = std::mem::transmute(ptr2);
+
+                                                let window_id: u32 = msg_send![ns_window_ptr, windowNumber];
+                                                let cid = cgs_main_conn();
+                                                let active_space = cgs_get_space(cid);
+
+                                                let cf_lib = CString::new("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation").unwrap();
+                                                let cf_handle = libc::dlopen(cf_lib.as_ptr(), libc::RTLD_LAZY);
+                                                type CFNumberCreate = extern "C" fn(*const libc::c_void, i64, *const libc::c_void) -> *const libc::c_void;
+                                                type CFArrayCreate = extern "C" fn(*const libc::c_void, *const *const libc::c_void, i64, *const libc::c_void) -> *const libc::c_void;
+                                                type CFRelease = extern "C" fn(*const libc::c_void);
+                                                let cf_number_create: CFNumberCreate = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFNumberCreate").unwrap().as_ptr()));
+                                                let cf_array_create: CFArrayCreate = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFArrayCreate").unwrap().as_ptr()));
+                                                let cf_release: CFRelease = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFRelease").unwrap().as_ptr()));
+
+                                                let wid_64 = window_id as i64;
+                                                let space_64 = active_space as i64;
+                                                let wid_num = cf_number_create(std::ptr::null(), 4, &wid_64 as *const i64 as *const libc::c_void);
+                                                let space_num = cf_number_create(std::ptr::null(), 4, &space_64 as *const i64 as *const libc::c_void);
+                                                let win_arr = cf_array_create(std::ptr::null(), &wid_num, 1, std::ptr::null());
+                                                let space_arr = cf_array_create(std::ptr::null(), &space_num, 1, std::ptr::null());
+
+                                                cgs_remove_windows(cid, win_arr, space_arr);
+
+                                                cf_release(win_arr);
+                                                cf_release(space_arr);
+                                                cf_release(wid_num);
+                                                cf_release(space_num);
+                                                libc::dlclose(cf_handle);
+                                            }
+                                            libc::dlclose(handle);
+                                        }
+                                    }
+                                    let _ = window.hide();
+                                    return;
+                                }
+                            }
                             show_window_current_space_impl(&app_clone);
-                        });
-                    }
+                        }
+                    });
                 }
-            }
-        })
+            })
         .map_err(|e| e.to_string())?;
 
     // 保存当前快捷键
@@ -153,40 +222,109 @@ async fn toggle_window(app: AppHandle) -> Result<(), String> {
 }
 
 /// 在当前空间显示窗口（macOS专用）
+
 #[cfg(target_os = "macos")]
 fn show_window_current_space_impl(app: &AppHandle) {
-    use cocoa::base::id;
+    use cocoa::base::{id, nil};
     use cocoa::appkit::NSApp;
     use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use std::ffi::CString;
 
     if let Some(window) = app.get_webview_window("main") {
         let ns_window = window.ns_window().unwrap() as id;
-        let ns_window_ptr = ns_window as *mut objc2::runtime::AnyObject;
-        let nil: *mut objc2::runtime::AnyObject = std::ptr::null_mut();
-        let ns_app = unsafe { NSApp() } as *mut objc2::runtime::AnyObject;
+        let ns_window_ptr = ns_window as *mut AnyObject;
+        let nil_ptr = nil as *mut AnyObject;
+        let ns_app = unsafe { NSApp() } as *mut AnyObject;
 
-        // 读取用户保存的透明度
         let alpha_state = app.state::<WindowAlphaState>();
         let saved_alpha = *alpha_state.alpha.lock().unwrap();
-        let restore_alpha = saved_alpha.max(0.1).min(1.0);
+        let restore_alpha = saved_alpha.max(0.1).min(1.0) as f64;
 
         unsafe {
-            // 切换到 MoveToActiveSpace，显示后出现在当前 space
-            let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 2usize];
-            // 先设置 alpha 为 0 再隐藏，避免黑色闪烁
-            let _: () = msg_send![ns_window_ptr, setAlphaValue: 0.0 as cocoa::appkit::CGFloat];
-            let _: () = msg_send![ns_window_ptr, orderOut: nil];
-            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
-            let _: () = msg_send![ns_window_ptr, makeKeyAndOrderFront: nil];
-            // 恢复为用户设置的透明度
-            let _: () = msg_send![ns_window_ptr, setAlphaValue: restore_alpha as cocoa::appkit::CGFloat];
-            // 恢复成 CanJoinAllSpaces，避免下次还绑在这个 space
-            let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 1usize];
+            // 1. 先设置 collectionBehavior（包含 FullScreenAuxiliary），让 CGSAddWindowsToSpaces 能加入全屏 Space
+            let level = CGShieldingWindowLevel();
+            let _: () = msg_send![ns_window_ptr, setLevel: level as i64];
+            let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 769usize];
+
+            // 2. 用 CGS 私有 API 把窗口加入当前 Space
+            let lib_name = CString::new("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight").unwrap();
+            let handle = libc::dlopen(lib_name.as_ptr(), libc::RTLD_LAZY);
+            if !handle.is_null() {
+                let sym0 = CString::new("CGSMainConnectionID").unwrap();
+                let sym1 = CString::new("CGSGetActiveSpace").unwrap();
+                let sym2 = CString::new("CGSAddWindowsToSpaces").unwrap();
+                let ptr0 = libc::dlsym(handle, sym0.as_ptr());
+                let ptr1 = libc::dlsym(handle, sym1.as_ptr());
+                let ptr2 = libc::dlsym(handle, sym2.as_ptr());
+
+                if !ptr0.is_null() && !ptr1.is_null() && !ptr2.is_null() {
+                    type Fn0 = extern "C" fn() -> u32;
+                    type Fn1 = extern "C" fn(u32) -> u64;
+                    type Fn2 = extern "C" fn(u32, *const libc::c_void, *const libc::c_void);
+                    let cgs_main_conn: Fn0 = std::mem::transmute(ptr0);
+                    let cgs_get_space: Fn1 = std::mem::transmute(ptr1);
+                    let cgs_add_windows: Fn2 = std::mem::transmute(ptr2);
+
+                    let window_id: u32 = msg_send![ns_window_ptr, windowNumber];
+                    let cid = cgs_main_conn();
+                    let active_space = cgs_get_space(cid);
+                    println!("windowNumber={} cid={} activeSpace={}", window_id, cid, active_space);
+
+                    let cf_lib = CString::new("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation").unwrap();
+                    let cf_handle = libc::dlopen(cf_lib.as_ptr(), libc::RTLD_LAZY);
+                    type CFNumberCreate = extern "C" fn(*const libc::c_void, i64, *const libc::c_void) -> *const libc::c_void;
+                    type CFArrayCreate = extern "C" fn(*const libc::c_void, *const *const libc::c_void, i64, *const libc::c_void) -> *const libc::c_void;
+                    type CFRelease = extern "C" fn(*const libc::c_void);
+                    let cf_number_create: CFNumberCreate = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFNumberCreate").unwrap().as_ptr()));
+                    let cf_array_create: CFArrayCreate = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFArrayCreate").unwrap().as_ptr()));
+                    let cf_release: CFRelease = std::mem::transmute(libc::dlsym(cf_handle, CString::new("CFRelease").unwrap().as_ptr()));
+
+                    let wid_64 = window_id as i64;
+                    let space_64 = active_space as i64;
+                    let wid_num = cf_number_create(std::ptr::null(), 4, &wid_64 as *const i64 as *const libc::c_void);
+                    let space_num = cf_number_create(std::ptr::null(), 4, &space_64 as *const i64 as *const libc::c_void);
+                    let win_arr = cf_array_create(std::ptr::null(), &wid_num, 1, std::ptr::null());
+                    let space_arr = cf_array_create(std::ptr::null(), &space_num, 1, std::ptr::null());
+                    cgs_add_windows(cid, win_arr, space_arr);
+                    println!("CGSAddWindowsToSpaces done");
+                    cf_release(win_arr);
+                    cf_release(space_arr);
+                    cf_release(wid_num);
+                    cf_release(space_num);
+                    libc::dlclose(cf_handle);
+                }
+                libc::dlclose(handle);
+            }
+
+            // 3. 最后显示窗口（此时窗口已加入当前 Space + 有 FullScreenAuxiliary 标志）
+            let _: () = msg_send![ns_window_ptr, orderFrontRegardless];
+            let _: () = msg_send![ns_window_ptr, setAlphaValue: restore_alpha];
         }
 
-        let _ = window.set_focus();
+        // 4. 独立线程 sleep 100ms 后回主线程抢焦点
+        let app_handle = app.clone();
+        let ns_window_ptr_addr = ns_window_ptr as usize;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = app_handle.run_on_main_thread(move || {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                use cocoa::base::{id, nil};
+                use cocoa::appkit::NSApp;
+                let ptr = ns_window_ptr_addr as *mut AnyObject;
+                let nil_ptr = nil as *mut AnyObject;
+                let ns_app = unsafe { NSApp() } as *mut AnyObject;
+                unsafe {
+                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                    let _: () = msg_send![ptr, makeKeyAndOrderFront: nil_ptr];
+                }
+            });
+        });
     }
 }
+
+
 
 #[cfg(not(target_os = "macos"))]
 async fn show_window_current_space_impl(app: &AppHandle) {
@@ -482,13 +620,13 @@ apply_vibrancy(
                     Some(12.0),
                 ).expect("vibrancy failed");
 
-                // 初始化时不绑定任何 space
+                // 窗口在所有 Space 上可见（包括全屏 Space）
                 let ns_window = window.ns_window().unwrap() as id;
                 let ns_window_ptr = ns_window as *mut objc2::runtime::AnyObject;
                 unsafe {
-                    // NSWindowCollectionBehaviorCanJoinAllSpaces = 1
-                    // 初始设成这个，让窗口不被绑定到启动时的 space
-                    let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 1usize];
+                    let level = CGShieldingWindowLevel();
+                    let _: () = msg_send![ns_window_ptr, setLevel: level as i64];
+                    let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 769usize];
                 }
 
 // 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
