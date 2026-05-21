@@ -44,7 +44,7 @@ jobs:
             runner: macos-latest
             artifact: MaikNote-aarch64
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-latest
             artifact: MaikNote-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
