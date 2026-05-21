@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['**']
   pull_request:
     branches: [main]
 
@@ -17,18 +17,17 @@ env:
 jobs:
   # 快速验证：PR 或 push 到 main 时只构建 aarch64
   check:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: aarch64-apple-darwin
-      - run: npm ci
+      - run: npm install
       - run: npm run tauri build -- --target aarch64-apple-darwin
       - uses: actions/upload-artifact@v4
         with:
@@ -37,7 +36,7 @@ jobs:
 
   # 发布：tag 推送时构建双架构
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
         include:
@@ -53,11 +52,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
-      - run: npm ci
+      - run: npm install
       - run: npm run tauri build -- --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
@@ -66,7 +64,7 @@ jobs:
 
   # 合并双架构产物，创建 GitHub Release
   create-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: release
     runs-on: ubuntu-latest
     steps:
