@@ -1,6 +1,6 @@
 [package]
 name = "maiknote"
-version = "0.8.4"
+version = "0.9.0"
 description = "A macOS Markdown note-taking app"
 authors = ["april"]
 edition = "2021"
