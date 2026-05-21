@@ -116,12 +116,9 @@ async fn register_global_shortcut(
     app.global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
-                    println!("Global shortcut triggered!");
                     let app_clone = app_handle.clone();
                     let _ = app_handle.run_on_main_thread(move || {
                         if let Some(window) = app_clone.get_webview_window("main") {
-                            let is_on_active_space = window.is_visible().unwrap_or(false);
-                            // 用原生方法判断是否在当前 Space 且可见
                             #[cfg(target_os = "macos")]
                             {
                                 use objc2::msg_send;
@@ -132,7 +129,6 @@ async fn register_global_shortcut(
                                 let ns_window_ptr = ns_window as *mut AnyObject;
                                 let is_on_space: bool = unsafe { msg_send![ns_window_ptr, isOnActiveSpace] };
                                 let is_visible: bool = unsafe { msg_send![ns_window_ptr, isVisible] };
-                                println!("is_on_space={} is_visible={}", is_on_space, is_visible);
                                 if is_on_space && is_visible {
                                     let _ = window.hide();
                                     return;
@@ -176,16 +172,13 @@ async fn toggle_window(app: AppHandle) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn show_window_current_space_impl(app: &AppHandle) {
-    use cocoa::base::{id, nil};
-    use cocoa::appkit::NSApp;
+    use cocoa::base::id;
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
 
     if let Some(window) = app.get_webview_window("main") {
         let ns_window = window.ns_window().unwrap() as id;
         let ns_window_ptr = ns_window as *mut AnyObject;
-        let nil_ptr = nil as *mut AnyObject;
-        let ns_app = unsafe { NSApp() } as *mut AnyObject;
 
         let alpha_state = app.state::<WindowAlphaState>();
         let saved_alpha = *alpha_state.alpha.lock().unwrap();
@@ -207,7 +200,7 @@ fn show_window_current_space_impl(app: &AppHandle) {
             let _ = app_handle.run_on_main_thread(move || {
                 use objc2::msg_send;
                 use objc2::runtime::AnyObject;
-                use cocoa::base::{id, nil};
+                use cocoa::base::nil;
                 use cocoa::appkit::NSApp;
                 use std::ffi::CString;
                 let ptr = ns_window_ptr_addr as *mut AnyObject;
@@ -239,7 +232,6 @@ fn show_window_current_space_impl(app: &AppHandle) {
                             let window_id: u32 = msg_send![ptr, windowNumber];
                             let cid = cgs_main_conn();
                             let active_space = cgs_get_space(cid);
-                            println!("(delayed) windowNumber={} cid={} activeSpace={}", window_id, cid, active_space);
 
                             let cf_lib = CString::new("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation").unwrap();
                             let cf_handle = libc::dlopen(cf_lib.as_ptr(), libc::RTLD_LAZY);
@@ -257,7 +249,6 @@ fn show_window_current_space_impl(app: &AppHandle) {
                             let win_arr = cf_array_create(std::ptr::null(), &wid_num, 1, std::ptr::null());
                             let space_arr = cf_array_create(std::ptr::null(), &space_num, 1, std::ptr::null());
                             cgs_add_windows(cid, win_arr, space_arr);
-                            println!("(delayed) CGSAddWindowsToSpaces done");
                             cf_release(win_arr);
                             cf_release(space_arr);
                             cf_release(wid_num);
