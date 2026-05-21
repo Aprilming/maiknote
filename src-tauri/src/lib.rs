@@ -552,7 +552,7 @@ pub fn run() {
                 use cocoa::base::id;
                 use objc2::msg_send;
 
-apply_vibrancy(
+                apply_vibrancy(
                     &window,
                     NSVisualEffectMaterial::HudWindow,
                     Some(NSVisualEffectState::Active),
@@ -568,7 +568,7 @@ apply_vibrancy(
                     let _: () = msg_send![ns_window_ptr, setCollectionBehavior: 769usize];
                 }
 
-// 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
+                // 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
                 if is_autolaunch {
                     let _ = window.hide();
                 }

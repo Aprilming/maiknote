@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { useNoteStore } from '@/stores/noteStore'
@@ -41,6 +41,16 @@ watch(updateAvailable, (val) => {
   }
 })
 
+// 监听透明度变化，同步 surface 背景色
+watch(() => settingStore.settings.windowAlpha, updateSurfaceColor, { immediate: true })
+
+// 当 windowAlpha = 1.0 时，内容容器使用不透明背景，防止任何透明区域露出毛玻璃
+const contentStyle = computed(() => {
+  return settingStore.settings.windowAlpha >= 1.0
+    ? { background: 'var(--color-background)' }
+    : { background: 'transparent' }
+})
+
 function openSettings() {
   currentView.value = 'settings'
 }
@@ -59,6 +69,21 @@ function closeSearchPage() {
 }
 
 let unlistenFocus: (() => void) | null = null
+let themeObserver: MutationObserver | null = null
+
+// 根据 windowAlpha 同步 --color-surface 的透明度
+// 当 windowAlpha = 1.0 时，surface 应为完全不透明（用户期望不透明）
+// 当 windowAlpha < 1.0 时，surface 保持半透明以显示毛玻璃效果
+function updateSurfaceColor() {
+  const alpha = settingStore.settings.windowAlpha
+  const root = document.documentElement
+  if (alpha >= 1.0) {
+    const isDark = root.getAttribute('data-theme') === 'dark'
+    root.style.setProperty('--color-surface', isDark ? '#1e1e1e' : '#ebeef2')
+  } else {
+    root.style.setProperty('--color-surface', '')
+  }
+}
 
 onMounted(async () => {
   // 获取 Tauri 窗口实例
@@ -101,6 +126,10 @@ onMounted(async () => {
       appWindow.hide()
     }
   })
+  // 监听系统主题变化，同步 surface 背景色
+  themeObserver = new MutationObserver(() => updateSurfaceColor())
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+
   // 标记初始化完成
   isAppReady.value = true
   // 冷启动时自动检查更新
@@ -110,6 +139,9 @@ onMounted(async () => {
 onUnmounted(() => {
   if (unlistenFocus) {
     unlistenFocus()
+  }
+  if (themeObserver) {
+    themeObserver.disconnect()
   }
 })
 </script>
@@ -124,7 +156,7 @@ onUnmounted(() => {
         <span>加载中...</span>
       </div>
     </div>
-    <div v-else class="app-content">
+    <div v-else class="app-content" :style="contentStyle">
       <TitleBar v-if="currentView !== 'settings'" @open-settings="openSettings" @open-search="openSearchPage" />
       <SearchPage v-if="currentView === 'search'" @close="closeSearchPage" />
       <Settings v-else-if="currentView === 'settings'" @back="closeSettings" />
