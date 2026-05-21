@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.8.4",
   "type": "module",
+  "contributors": [
+    "deepseek-ai (https://github.com/deepseek-ai)"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
