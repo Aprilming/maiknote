@@ -22,6 +22,7 @@ import FontFamily from '@tiptap/extension-font-family'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
+import { InlineSearchExtension, searchPluginKey } from './extensions/InlineSearchExtension'
 import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
@@ -508,6 +509,7 @@ const editor = useEditor({
     BlockMenuExtension,
     CodeBlockCopyExtension,
     CodeBlockLanguageExtension,
+    InlineSearchExtension,
     // 表格扩展
     Table.configure({
       resizable: true,
@@ -800,6 +802,30 @@ onUnmounted(() => {
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
   ;(window as any).__tiptapEditorView = null
+})
+
+defineExpose({
+  setSearchQuery(query: string) {
+    editor.value?.commands.setSearchQuery(query)
+  },
+  searchNext() {
+    editor.value?.commands.searchNext()
+  },
+  searchPrev() {
+    editor.value?.commands.searchPrev()
+  },
+  clearSearch() {
+    editor.value?.commands.clearSearch()
+  },
+  getSearchState() {
+    if (!editor.value) return { matches: 0, currentIndex: 0 }
+    const state = searchPluginKey.getState(editor.value.state) as any
+    if (!state) return { matches: 0, currentIndex: 0 }
+    return {
+      matches: state.matches?.length ?? 0,
+      currentIndex: state.currentIndex ?? 0,
+    }
+  },
 })
 </script>
 
@@ -1448,5 +1474,19 @@ onUnmounted(() => {
 .tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
   text-decoration: line-through;
   color: var(--color-text-secondary);
+}
+
+/* 笔记内搜索高亮 */
+.search-match {
+  background-color: rgba(255, 213, 0, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.search-match-current {
+  background-color: rgba(255, 183, 0, 0.6);
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(255, 160, 0, 0.5);
 }
 </style>

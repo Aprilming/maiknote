@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import TiptapEditor from './TiptapEditor.vue'
 import { useNoteStore } from '@/stores/noteStore'
 import { useSettingStore } from '@/stores/settingStore'
@@ -144,6 +144,72 @@ onUnmounted(() => {
   clearTimeout(wheelEndTimer)
 })
 
+const editorRef = ref<InstanceType<typeof TiptapEditor> | null>(null)
+const searchVisible = ref(false)
+const searchQuery = ref('')
+const searchMatchCount = ref(0)
+const searchCurrentIndex = ref(0)
+
+function openSearch() {
+  searchVisible.value = true
+  searchQuery.value = ''
+  searchMatchCount.value = 0
+  searchCurrentIndex.value = 0
+  nextTick(() => {
+    document.querySelector<HTMLInputElement>('.search-input')?.focus()
+  })
+}
+
+function closeSearch() {
+  searchVisible.value = false
+  searchQuery.value = ''
+  searchMatchCount.value = 0
+  searchCurrentIndex.value = 0
+  editorRef.value?.clearSearch()
+}
+
+function handleSearchInput(e: Event) {
+  const query = (e.target as HTMLInputElement).value
+  searchQuery.value = query
+  editorRef.value?.setSearchQuery(query)
+  const state = editorRef.value?.getSearchState()
+  if (state) {
+    searchMatchCount.value = state.matches
+    searchCurrentIndex.value = state.matches > 0 ? state.currentIndex + 1 : 0
+  }
+}
+
+function handleSearchPrev() {
+  if (searchMatchCount.value === 0) return
+  editorRef.value?.searchPrev()
+  const state = editorRef.value?.getSearchState()
+  if (state) {
+    searchCurrentIndex.value = state.currentIndex + 1
+  }
+}
+
+function handleSearchNext() {
+  if (searchMatchCount.value === 0) return
+  editorRef.value?.searchNext()
+  const state = editorRef.value?.getSearchState()
+  if (state) {
+    searchCurrentIndex.value = state.currentIndex + 1
+  }
+}
+
+function handleSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    closeSearch()
+  } else if (e.key === 'Enter') {
+    if (e.shiftKey) {
+      handleSearchPrev()
+    } else {
+      handleSearchNext()
+    }
+    e.preventDefault()
+  }
+}
+
 function handleEditorUpdate(md: string) {
   localContent.value = md
   if (currentNote.value) {
@@ -200,6 +266,7 @@ function handleToggleSourceMode() {
       <!-- 正常 Markdown 编辑模式 -->
       <TiptapEditor
         v-else
+        ref="editorRef"
         :key="currentNote?.id"
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
@@ -246,6 +313,50 @@ function handleToggleSourceMode() {
       <!-- word count -->
       <div class="word-count" @click.stop>
         {{ wordCount }} 字
+      </div>
+
+      <!-- search toggle -->
+      <button
+        v-if="!isSourceMode && !searchVisible"
+        class="search-toggle-btn"
+        @click.stop="openSearch"
+        title="在笔记中搜索"
+      >
+        <i class="i-mdi-magnify"></i>
+      </button>
+
+      <!-- search bar -->
+      <div v-if="!isSourceMode && searchVisible" class="search-bar" @click.stop>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="搜索..."
+          :value="searchQuery"
+          @input="handleSearchInput"
+          @keydown="handleSearchKeydown"
+        />
+        <span v-if="searchQuery" class="search-count">
+          {{ searchMatchCount > 0 ? `${searchCurrentIndex}/${searchMatchCount}` : '0/0' }}
+        </span>
+        <button
+          class="search-nav-btn"
+          @click="handleSearchPrev"
+          :disabled="searchMatchCount === 0"
+          title="上一个匹配 (Shift+Enter)"
+        >
+          <i class="i-mdi-chevron-up"></i>
+        </button>
+        <button
+          class="search-nav-btn"
+          @click="handleSearchNext"
+          :disabled="searchMatchCount === 0"
+          title="下一个匹配 (Enter)"
+        >
+          <i class="i-mdi-chevron-down"></i>
+        </button>
+        <button class="search-close-btn" @click="closeSearch" title="关闭搜索 (Esc)">
+          <i class="i-mdi-close"></i>
+        </button>
       </div>
 
       <!-- save indicator -->
@@ -455,6 +566,129 @@ function handleToggleSourceMode() {
   -webkit-backdrop-filter: blur(10px);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.search-toggle-btn {
+  position: absolute;
+  bottom: 10px;
+  left: 80px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 20px;
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.search-toggle-btn:hover {
+  color: var(--color-text);
+  transform: scale(1.05);
+}
+
+.search-toggle-btn i {
+  font-size: 16px;
+}
+
+.search-bar {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background-color: var(--color-surface);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.search-input {
+  width: 140px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12px;
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.search-count {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  min-width: 30px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.search-nav-btn:hover:not(:disabled) {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.search-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.search-nav-btn i {
+  font-size: 14px;
+}
+
+.search-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.search-close-btn:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.search-close-btn i {
+  font-size: 14px;
 }
 
 .save-indicator {
