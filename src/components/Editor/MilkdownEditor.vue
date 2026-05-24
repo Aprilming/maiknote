@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, watchEffect, onMounted, onUnmounted, nextTick } from 'vue'
 import TiptapEditor from './TiptapEditor.vue'
 import DirectoryTree from '@/components/Search/DirectoryTree.vue'
 import { useNoteStore } from '@/stores/noteStore'
@@ -8,6 +8,8 @@ import { useSettingStore } from '@/stores/settingStore'
 import { useAutoSave } from '@/composables/useAutoSave'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useSourceMode } from '@/composables/useSourceMode'
+import { useTheme } from '@/composables/useTheme'
+import NoteColorPicker from '@/components/NoteColorPicker.vue'
 
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
@@ -21,6 +23,48 @@ const currentDirName = computed(() => {
 })
 const { writeNote } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
+
+const { isDark } = useTheme()
+
+const LIGHT_COLORS = [
+  { name: '暖黄', value: '#fff9e6' },
+  { name: '柔粉', value: '#fce4ec' },
+  { name: '淡紫', value: '#f3e5f5' },
+  { name: '天蓝', value: '#e3f2fd' },
+  { name: '薄荷', value: '#e0f2f1' },
+  { name: '淡橙', value: '#fff3e0' },
+  { name: '灰蓝', value: '#e8eaf6' },
+  { name: '淡灰', value: '#f5f5f5' },
+  { name: '浅绿', value: '#e8f5e9' },
+  { name: '米色', value: '#faf8f5' },
+]
+
+const DARK_COLORS = [
+  { name: '暗蓝', value: '#1e293b' },
+  { name: '暗紫', value: '#2a1a3e' },
+  { name: '暗绿', value: '#1a2e24' },
+  { name: '暗红', value: '#3d1a1a' },
+  { name: '深灰', value: '#1f2937' },
+  { name: '暗青', value: '#1a2e2e' },
+  { name: '暗橙', value: '#3d2a1a' },
+  { name: '墨蓝', value: '#0f172a' },
+  { name: '暗粉', value: '#2e1a2a' },
+  { name: '暗棕', value: '#2e241a' },
+]
+
+const NOTE_COLORS = computed(() => isDark() ? DARK_COLORS : LIGHT_COLORS)
+
+const colorPickerVisible = ref(false)
+
+function toggleColorPicker() {
+  colorPickerVisible.value = !colorPickerVisible.value
+}
+
+function handleColorSelect(color: string | undefined) {
+  if (currentNote.value) {
+    noteStore.updateNote(currentNote.value.id, { backgroundColor: color })
+  }
+}
 
 const localContent = ref('')
 const sourceTextareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -137,6 +181,27 @@ onMounted(() => {
   if (editor) {
     editor.addEventListener('wheel', handleWheel as EventListener, { passive: false })
   }
+
+  // 直接监听背景色变化并设置DOM样式
+  watchEffect(() => {
+    const color = currentNote.value?.backgroundColor
+    const wrapper = document.querySelector('.editor-wrapper') as HTMLElement | null
+    if (wrapper) {
+      if (color) {
+        wrapper.style.setProperty('--note-bg', color)
+      } else {
+        wrapper.style.removeProperty('--note-bg')
+      }
+    }
+    const textarea = document.querySelector('.source-textarea') as HTMLElement | null
+    if (textarea) {
+      if (color) {
+        textarea.style.setProperty('background', color, 'important')
+      } else {
+        textarea.style.removeProperty('background')
+      }
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -274,7 +339,9 @@ function handleToggleSourceMode() {
       </div>
     </Transition>
 
-    <div class="editor-wrapper">
+    <div
+      class="editor-wrapper"
+    >
       <!-- 源码模式编辑 -->
       <textarea
         v-if="isSourceMode"
@@ -282,6 +349,7 @@ function handleToggleSourceMode() {
         :value="localContent"
         @input="handleSourceInput"
         class="source-textarea"
+        :style="currentNote?.backgroundColor ? { background: currentNote.backgroundColor + ' !important' } : {}"
         :readonly="isLocked"
         placeholder="在此输入 Markdown 源码..."
       ></textarea>
@@ -296,6 +364,7 @@ function handleToggleSourceMode() {
         :font-family="settingStore.settings.fontFamily"
         :is-locked="isLocked"
         :block-mode="settingStore.settings.blockMode"
+        :note-bg-color="currentNote?.backgroundColor"
         @update="handleEditorUpdate"
       />
 
@@ -351,6 +420,27 @@ function handleToggleSourceMode() {
       <!-- word count -->
       <div class="word-count" @click.stop>
         {{ wordCount }} 字
+      </div>
+
+      <!-- color button -->
+      <button
+        class="color-btn"
+        :class="{ 'has-color': currentNote?.backgroundColor }"
+        @click.stop="toggleColorPicker"
+        title="笔记背景颜色"
+      >
+        <i class="i-mdi-palette-outline"></i>
+      </button>
+
+      <!-- color picker popup -->
+      <div v-if="colorPickerVisible" class="color-picker-overlay" @click="colorPickerVisible = false">
+        <NoteColorPicker
+          class="color-picker-wrapper"
+          :model-value="currentNote?.backgroundColor"
+          :colors="NOTE_COLORS"
+          @update:model-value="handleColorSelect"
+          @close="colorPickerVisible = false"
+        />
       </div>
 
       <!-- search toggle -->
@@ -433,7 +523,7 @@ function handleToggleSourceMode() {
   height: 100%;
   padding: 40px 48px 40px 72px;
   overflow: auto;
-  background: var(--color-surface) !important;
+  background: var(--note-bg, transparent) !important;
   color: var(--color-text);
   border: none;
   outline: none;
@@ -580,14 +670,14 @@ function handleToggleSourceMode() {
 
 .lock-button {
   position: absolute;
-  bottom: 5px;
+  bottom: 10px;
   right: 90px;
   z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 20px;
   background-color: var(--color-surface);
@@ -616,14 +706,14 @@ function handleToggleSourceMode() {
 
 .source-mode-button {
   position: absolute;
-  bottom: 5px;
+  bottom: 10px;
   right: 130px;
   z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 20px;
   background-color: var(--color-surface);
@@ -672,7 +762,7 @@ function handleToggleSourceMode() {
 .search-toggle-btn {
   position: absolute;
   bottom: 10px;
-  left: 80px;
+  left: 94px;
   z-index: 11;
   display: flex;
   align-items: center;
@@ -699,6 +789,57 @@ function handleToggleSourceMode() {
 
 .search-toggle-btn i {
   font-size: 16px;
+}
+
+.color-btn {
+  position: absolute;
+  bottom: 10px;
+  left: 132px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 20px;
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.color-btn:hover {
+  color: var(--color-text);
+  transform: scale(1.05);
+}
+
+.color-btn.has-color {
+  color: var(--color-primary);
+}
+
+.color-btn i {
+  font-size: 16px;
+}
+
+.color-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+}
+
+.color-picker-wrapper {
+  position: absolute;
+  bottom: 52px;
+  left: 132px;
+  z-index: 101;
 }
 
 .search-bar {

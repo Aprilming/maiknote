@@ -11,6 +11,7 @@ export interface Note {
   isPinned: boolean // Whether the note is pinned
   isLocked: boolean // Whether the note is locked (cannot edit or delete)
   directoryId?: string // null/undefined = root directory
+  backgroundColor?: string // Optional background color for the note
 }
 
 /**
@@ -30,6 +31,7 @@ export interface NoteMetadataItem {
   isPinned: boolean
   isLocked: boolean
   directoryId?: string
+  backgroundColor?: string
 }
 
 /**

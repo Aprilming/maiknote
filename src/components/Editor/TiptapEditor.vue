@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch, onMounted, onUnmounted, ref, computed } from 'vue'
+import { watch, watchEffect, onMounted, onUnmounted, ref, computed } from 'vue'
 import { useEditor, EditorContent, BubbleMenu } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from 'tiptap-markdown'
@@ -75,6 +75,7 @@ const props = defineProps<{
   fontFamily: string
   isLocked: boolean
   blockMode: boolean
+  noteBgColor?: string
 }>()
 
 const emit = defineEmits<{
@@ -796,6 +797,19 @@ onMounted(async () => {
   if (editor.value) {
     ;(window as any).__tiptapEditorView = editor.value.view
   }
+
+  // 直接监听背景色变化并设置DOM样式
+  watchEffect(() => {
+    const color = props.noteBgColor
+    const wrapper = document.querySelector('.tiptap-wrapper') as HTMLElement | null
+    if (wrapper) {
+      if (color) {
+        wrapper.style.setProperty('--note-bg', color)
+      } else {
+        wrapper.style.removeProperty('--note-bg')
+      }
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -832,7 +846,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked, 'block-mode-disabled': !blockMode }" @click="handleWrapperClick">
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked, 'block-mode-disabled': !blockMode }" :style="noteBgColor ? { '--note-bg': noteBgColor } : undefined" @click="handleWrapperClick">
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">
@@ -843,7 +857,7 @@ defineExpose({
         </button>
       </div>
     </div>
-    <EditorContent :editor="editor" />
+    <EditorContent :editor="editor" class="tiptap" />
     <BubbleMenu
       v-if="editor"
       :editor="editor"
@@ -1148,10 +1162,7 @@ defineExpose({
   opacity: 1 !important;
 }
 
-/* 编辑器左侧留白（给块按钮 + 拖拽手柄腾空间） */
-.tiptap-wrapper {
-  padding: 40px 48px 40px 72px; /* 左侧从 48px 改为 72px */
-}
+/* 编辑器左侧留白已在 .tiptap > .ProseMirror 中设置 */
 
 :deep(.tiptap pre) {
   background: var(--color-code-bg, #f5f5f5);
@@ -1306,10 +1317,6 @@ defineExpose({
 }
 
 /* 块模式禁用时减少左侧内边距 */
-.tiptap-wrapper.block-mode-disabled {
-  padding: 40px 48px 40px 24px;
-}
-
 .tiptap-wrapper.block-mode-disabled .tiptap > .ProseMirror {
   padding: 40px 48px 40px 24px;
 }
@@ -1342,7 +1349,7 @@ defineExpose({
   height: auto;
   min-height: 100%;
   padding: 40px 48px 40px 72px;
-  background: var(--color-surface) !important;
+  background: var(--note-bg, transparent) !important;
   color: var(--color-text);
   border-radius: 8px;
 }

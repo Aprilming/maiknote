@@ -161,6 +161,7 @@ export const useNoteStore = defineStore('note', () => {
           isPinned: item.isPinned,
           isLocked: item.isLocked,
           directoryId: item.directoryId,
+          backgroundColor: item.backgroundColor,
         })
       }
 
@@ -201,6 +202,7 @@ export const useNoteStore = defineStore('note', () => {
         isPinned: note.isPinned,
         isLocked: note.isLocked,
         directoryId: note.directoryId,
+        backgroundColor: note.backgroundColor,
       })),
     }
 
