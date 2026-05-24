@@ -943,7 +943,7 @@ defineExpose({
 .tiptap-wrapper {
   height: 100%;
   overflow-y: auto;
-  background: transparent;
+  background: var(--note-bg, transparent);
 }
 
 /* AI 加载指示器 */
@@ -1095,6 +1095,11 @@ defineExpose({
 
 .context-menu-item--disabled:hover {
   background: transparent;
+}
+
+/* ProseMirror 块级元素建立定位上下文，供块操作按钮绝对定位 */
+:deep(.ProseMirror > *) {
+  position: relative;
 }
 
 /* 块左侧触发按钮 */
@@ -1316,11 +1321,6 @@ defineExpose({
   opacity: 0.8;
 }
 
-/* 块模式禁用时减少左侧内边距 */
-.tiptap-wrapper.block-mode-disabled .tiptap > .ProseMirror {
-  padding: 40px 48px 40px 24px;
-}
-
 /* 分隔线样式 */
 .tiptap hr {
   display: block;
@@ -1348,8 +1348,7 @@ defineExpose({
 .tiptap > .ProseMirror {
   height: auto;
   min-height: 100%;
-  padding: 40px 48px 40px 72px;
-  background: var(--note-bg, transparent) !important;
+  padding: 40px 48px;
   color: var(--color-text);
   border-radius: 8px;
 }

@@ -358,7 +358,7 @@ function handleToggleSourceMode() {
       <TiptapEditor
         v-else
         ref="editorRef"
-        :key="currentNote?.id"
+        :key="`${currentNote?.id}-${settingStore.settings.blockMode}`"
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"
@@ -521,7 +521,7 @@ function handleToggleSourceMode() {
   flex: 1;
   width: 100%;
   height: 100%;
-  padding: 40px 48px 40px 72px;
+  padding: 40px 48px;
   overflow: auto;
   background: var(--note-bg, transparent) !important;
   color: var(--color-text);
