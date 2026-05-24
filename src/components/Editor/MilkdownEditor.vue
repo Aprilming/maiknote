@@ -295,6 +295,7 @@ function handleToggleSourceMode() {
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"
         :is-locked="isLocked"
+        :block-mode="settingStore.settings.blockMode"
         @update="handleEditorUpdate"
       />
 

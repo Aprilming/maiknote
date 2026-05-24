@@ -443,6 +443,21 @@ function getPromptPreview(prompt: string): string {
             <span class="toggle-slider"></span>
           </button>
         </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-name">块模式</span>
+            <span class="setting-value">{{ settingStore.settings.blockMode ? '开启' : '关闭' }}</span>
+          </div>
+          <div class="setting-desc">使用 Notion 风格的块编辑器，关闭后为简单 Markdown 编辑模式</div>
+          <button
+            class="toggle-btn"
+            :class="{ active: settingStore.settings.blockMode }"
+            @click="settingStore.updateSettings('blockMode', !settingStore.settings.blockMode)"
+          >
+            <span class="toggle-slider"></span>
+          </button>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -718,6 +733,13 @@ function getPromptPreview(prompt: string): string {
   font-size: 13px;
   color: var(--color-text-secondary);
   font-family: monospace;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  line-height: 1.4;
 }
 
 .alpha-slider {

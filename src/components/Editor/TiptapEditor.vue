@@ -74,6 +74,7 @@ const props = defineProps<{
   fontSize: number
   fontFamily: string
   isLocked: boolean
+  blockMode: boolean
 }>()
 
 const emit = defineEmits<{
@@ -491,22 +492,23 @@ const editor = useEditor({
       inline: true,
       allowBase64: false, // 禁用 base64，改为保存到文件
     }),
-    createSlashCommand(),
-    // ---- 新增扩展 ----
-    GlobalDragHandle.configure({
-      dragHandleWidth: 20,
-      scrollTreshold: 100,
-      handleClick: (_view: EditorView, _pos: number, _node: any, _nodePos: number, _direct: boolean) => {
-        // 原有的 handleClick 逻辑
-        return false
-      },
-    }),
+    ...(props.blockMode ? [
+      createSlashCommand(),
+      GlobalDragHandle.configure({
+        dragHandleWidth: 20,
+        scrollTreshold: 100,
+        handleClick: (_view: EditorView, _pos: number, _node: any, _nodePos: number, _direct: boolean) => {
+          // 原有的 handleClick 逻辑
+          return false
+        },
+      }),
+      BlockMenuExtension,
+    ] : []),
     TextStyle,
     Color,
     Highlight.configure({ multicolor: true }),
     Underline,
     FontFamily,
-    BlockMenuExtension,
     CodeBlockCopyExtension,
     CodeBlockLanguageExtension,
     InlineSearchExtension,
@@ -830,7 +832,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" @click="handleWrapperClick">
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked, 'block-mode-disabled': !blockMode }" @click="handleWrapperClick">
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">
@@ -919,7 +921,7 @@ defineExpose({
       </div>
     </Teleport>
     <!-- 块左侧菜单弹窗 -->
-    <BlockMenuPopover :editor="editor" />
+    <BlockMenuPopover v-if="blockMode" :editor="editor" />
   </div>
 </template>
 
@@ -1303,6 +1305,26 @@ defineExpose({
   opacity: 0.8;
 }
 
+/* 块模式禁用时减少左侧内边距 */
+.tiptap-wrapper.block-mode-disabled {
+  padding: 40px 48px 40px 24px;
+}
+
+.tiptap-wrapper.block-mode-disabled .tiptap > .ProseMirror {
+  padding: 40px 48px 40px 24px;
+}
+
+/* 分隔线样式 */
+.tiptap hr {
+  display: block;
+  border: none;
+  border-top: 1px solid var(--color-text-secondary);
+  height: 0;
+  margin: 24px 0;
+  padding: 0;
+  opacity: 0.35;
+}
+
 /* 锁定状态下隐藏块操作按钮和悬浮条 */
 .tiptap-wrapper.is-locked .block-menu-trigger,
 .tiptap-wrapper.is-locked .drag-handle,
@@ -1373,13 +1395,6 @@ defineExpose({
 .tiptap a {
   color: var(--color-primary);
   text-decoration: underline;
-}
-
-/* 分隔线样式 */
-.tiptap hr {
-  border: none;
-  border-top: 1px solid var(--color-border);
-  margin: 24px 0;
 }
 
 /* Placeholder 样式 */
