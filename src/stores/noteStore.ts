@@ -14,6 +14,7 @@ export const useNoteStore = defineStore('note', () => {
   const navigationHint = ref<{ message: string; visible: boolean }>({ message: '', visible: false })
   const isLoading = ref(false)
   const loadError = ref<Error | null>(null)
+  const filterDirectoryId = ref<string | null>(null) // null = root 目录
 
   // 监听 currentNoteId 变化，保存到 localStorage
   watch(currentNoteId, (newId) => {
@@ -31,6 +32,19 @@ export const useNoteStore = defineStore('note', () => {
     notes.value.findIndex(n => n.id === currentNoteId.value)
   )
 
+  /** 按 filterDirectoryId 过滤后的笔记列表 */
+  const activeNoteList = computed(() => {
+    if (filterDirectoryId.value === null) {
+      return notes.value.filter(n => !n.directoryId)
+    }
+    return notes.value.filter(n => n.directoryId === filterDirectoryId.value)
+  })
+
+  /** 当前笔记在 activeNoteList 中的索引 */
+  const activeIndex = computed(() =>
+    activeNoteList.value.findIndex(n => n.id === currentNoteId.value)
+  )
+
   const filteredNotes = computed(() => {
     if (!searchQuery.value) return notes.value
     const query = searchQuery.value.toLowerCase()
@@ -41,11 +55,11 @@ export const useNoteStore = defineStore('note', () => {
   })
 
   const pinnedNotes = computed(() =>
-    notes.value.filter(n => n.isPinned)
+    activeNoteList.value.filter(n => n.isPinned)
   )
 
   const unpinnedNotes = computed(() =>
-    notes.value.filter(n => !n.isPinned)
+    activeNoteList.value.filter(n => !n.isPinned)
   )
 
   // Helper: Check if note is empty
@@ -97,7 +111,7 @@ export const useNoteStore = defineStore('note', () => {
 
       for (const note of notesToSave) {
         try {
-          await fs.writeNote(note.id, note.content)
+          await fs.writeNote(note.id, note.content, note.directoryId)
         } catch (e) {
           console.error('Failed to save note to iCloud:', e)
         }
@@ -134,8 +148,8 @@ export const useNoteStore = defineStore('note', () => {
       const loadedNotes: Note[] = []
 
       for (const item of metadata.notes) {
-        // Read content from file
-        const content = await fs.readNote(item.id)
+        // Read content from file (from directory if applicable)
+        const content = await fs.readNote(item.id, item.directoryId)
 
         loadedNotes.push({
           id: item.id,
@@ -146,17 +160,19 @@ export const useNoteStore = defineStore('note', () => {
           tags: item.tags,
           isPinned: item.isPinned,
           isLocked: item.isLocked,
+          directoryId: item.directoryId,
         })
       }
 
       notes.value = loadedNotes
 
-      // 恢复上次打开的笔记
+      // 恢复上次打开的笔记（确保在过滤后的列表中）
       const lastOpenedId = localStorage.getItem('lastOpenedNoteId')
-      if (lastOpenedId && notes.value.some(n => n.id === lastOpenedId)) {
+      const active = activeNoteList.value
+      if (lastOpenedId && active.some(n => n.id === lastOpenedId)) {
         currentNoteId.value = lastOpenedId
-      } else if (notes.value.length > 0) {
-        currentNoteId.value = notes.value[0].id
+      } else if (active.length > 0) {
+        currentNoteId.value = active[0].id
       } else {
         createNoteAtHead()
       }
@@ -184,6 +200,7 @@ export const useNoteStore = defineStore('note', () => {
         tags: note.tags,
         isPinned: note.isPinned,
         isLocked: note.isLocked,
+        directoryId: note.directoryId,
       })),
     }
 
@@ -195,8 +212,8 @@ export const useNoteStore = defineStore('note', () => {
    */
   async function saveNoteToCloud(note: Note): Promise<void> {
     try {
-      // Save content to file
-      await fs.writeNote(note.id, note.content)
+      // Save content to file (in directory if assigned)
+      await fs.writeNote(note.id, note.content, note.directoryId)
 
       // Update metadata
       await saveMetadataToCloud()
@@ -211,7 +228,8 @@ export const useNoteStore = defineStore('note', () => {
    */
   async function deleteNoteFromCloud(id: string): Promise<void> {
     try {
-      await fs.deleteNote(id)
+      const note = notes.value.find(n => n.id === id)
+      await fs.deleteNote(id, note?.directoryId)
       await saveMetadataToCloud()
     } catch (e) {
       console.error('Failed to delete note from iCloud:', e)
@@ -231,6 +249,29 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = id
   }
 
+  /**
+   * 设置目录过滤，切换后自动选中该目录下第一篇笔记
+   */
+  function setFilterDirectory(id: string | null) {
+    filterDirectoryId.value = id
+    // 确保当前笔记在过滤后的列表中
+    const active = activeNoteList.value
+    const hasCurrent = active.some(n => n.id === currentNoteId.value)
+    if (!hasCurrent) {
+      if (active.length > 0) {
+        currentNoteId.value = active[0].id
+      } else {
+        // 目录为空时创建一篇新笔记
+        createNoteAtHead()
+      }
+    }
+  }
+
+  /** 当前目录过滤下的 directoryId，新建笔记时使用 */
+  function currentDirectoryId(): string | undefined {
+    return filterDirectoryId.value ?? undefined
+  }
+
   async function createNoteAtHead(): Promise<Note> {
     const now = Date.now()
     const newNote: Note = {
@@ -241,6 +282,7 @@ export const useNoteStore = defineStore('note', () => {
       updatedAt: now,
       isPinned: false,
       isLocked: false,
+      directoryId: currentDirectoryId(),
     }
     notes.value.unshift(newNote)
     currentNoteId.value = newNote.id
@@ -261,6 +303,7 @@ export const useNoteStore = defineStore('note', () => {
       updatedAt: now,
       isPinned: false,
       isLocked: false,
+      directoryId: currentDirectoryId(),
     }
     notes.value.push(newNote)
     currentNoteId.value = newNote.id
@@ -281,6 +324,7 @@ export const useNoteStore = defineStore('note', () => {
       updatedAt: now,
       isPinned: false,
       isLocked: false,
+      directoryId: currentDirectoryId(),
     }
 
     // Find current note index directly to ensure accuracy
@@ -311,6 +355,7 @@ export const useNoteStore = defineStore('note', () => {
       updatedAt: now,
       isPinned: false,
       isLocked: false,
+      directoryId: currentDirectoryId(),
     }
 
     // Insert after current note
@@ -396,51 +441,56 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   function selectPrev() {
-    const index = currentIndex.value
-    if (index > 0) {
-      currentNoteId.value = notes.value[index - 1].id
+    const active = activeNoteList.value
+    const idx = active.findIndex(n => n.id === currentNoteId.value)
+    if (idx > 0) {
+      currentNoteId.value = active[idx - 1].id
     }
   }
 
   function selectNext() {
-    const index = currentIndex.value
-    if (index < notes.value.length - 1) {
-      currentNoteId.value = notes.value[index + 1].id
+    const active = activeNoteList.value
+    const idx = active.findIndex(n => n.id === currentNoteId.value)
+    if (idx < active.length - 1) {
+      currentNoteId.value = active[idx + 1].id
     }
   }
 
   // Navigate to previous note
   async function navigatePrevOrCreate() {
-    const index = currentIndex.value
+    const active = activeNoteList.value
+    const activeIdx = active.findIndex(n => n.id === currentNoteId.value)
     const isEmpty = currentNote.value && isNoteEmpty(currentNote.value)
 
     // At first position - show hint, don't navigate
-    if (index === 0) {
+    if (activeIdx === 0) {
       showHint('已经是第一篇笔记')
       return
     }
 
     // Current note is empty - delete it and navigate to previous
     if (isEmpty) {
-      const idToDelete = notes.value[index].id
-      notes.value.splice(index, 1)
-      currentNoteId.value = notes.value[index - 1].id
+      const idToDelete = currentNoteId.value!
+      const realIndex = notes.value.findIndex(n => n.id === idToDelete)
+      notes.value.splice(realIndex, 1)
+      currentNoteId.value = active[activeIdx - 1].id
 
       // Delete from iCloud
       await deleteNoteFromCloud(idToDelete)
     } else {
       // Navigate to previous note
-      currentNoteId.value = notes.value[index - 1].id
+      currentNoteId.value = active[activeIdx - 1].id
     }
   }
 
   // Navigate to next note
   async function navigateNextOrCreate() {
-    const index = currentIndex.value
+    const active = activeNoteList.value
+    const activeIdx = active.findIndex(n => n.id === currentNoteId.value)
     const isEmpty = currentNote.value && isNoteEmpty(currentNote.value)
 
     // At last position
-    if (index >= notes.value.length - 1) {
+    if (activeIdx >= active.length - 1) {
       if (isEmpty) {
         // Last note is empty - show hint
         showHint('已经是最后一篇笔记')
@@ -454,15 +504,16 @@ export const useNoteStore = defineStore('note', () => {
     // Not at last position
     if (isEmpty) {
       // Current note is empty - delete it and navigate to next
-      const idToDelete = notes.value[index].id
-      notes.value.splice(index, 1)
-      currentNoteId.value = notes.value[index].id
+      const idToDelete = currentNoteId.value!
+      const realIndex = notes.value.findIndex(n => n.id === idToDelete)
+      notes.value.splice(realIndex, 1)
+      currentNoteId.value = active[activeIdx + 1].id
 
       // Delete from iCloud
       await deleteNoteFromCloud(idToDelete)
     } else {
       // Navigate to next note
-      currentNoteId.value = notes.value[index + 1].id
+      currentNoteId.value = active[activeIdx + 1].id
     }
   }
 
@@ -496,6 +547,32 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * Get notes filtered by directory
+   */
+  function getNotesByDirectory(directoryId: string | null): Note[] {
+    if (directoryId === null) {
+      return notes.value.filter(n => !n.directoryId)
+    }
+    return notes.value.filter(n => n.directoryId === directoryId)
+  }
+
+  /**
+   * Move a note to a directory (also moves the file on filesystem)
+   */
+  async function moveNoteToDirectory(noteId: string, directoryId: string | null): Promise<void> {
+    const note = notes.value.find(n => n.id === noteId)
+    if (note) {
+      const fromDir = note.directoryId ?? null
+      const toDir = directoryId
+      note.directoryId = directoryId || undefined
+      note.updatedAt = Date.now()
+      // Move the actual file on the filesystem
+      await fs.moveNoteFile(noteId, fromDir, toDir)
+      scheduleSave()
+    }
+  }
+
+  /**
    * Initialize the store by loading notes from iCloud
    */
   async function initialize(): Promise<void> {
@@ -520,15 +597,19 @@ export const useNoteStore = defineStore('note', () => {
     navigationHint,
     isLoading,
     loadError,
+    filterDirectoryId,
     // Getters
     currentNote,
     currentIndex,
+    activeNoteList,
+    activeIndex,
     filteredNotes,
     pinnedNotes,
     unpinnedNotes,
     // Actions
     setNotes,
     selectNote,
+    setFilterDirectory,
     createNote: createNoteAfterCurrent,
     createNoteAtHead,
     createNoteAtTail,
@@ -539,6 +620,8 @@ export const useNoteStore = defineStore('note', () => {
     togglePin,
     toggleLock,
     reorderNotes,
+    getNotesByDirectory,
+    moveNoteToDirectory,
     selectPrev,
     selectNext,
     navigatePrevOrCreate,

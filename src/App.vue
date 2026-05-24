@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { useNoteStore } from '@/stores/noteStore'
+import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
@@ -16,6 +17,7 @@ import SearchPage from '@/components/Search/SearchPage.vue'
 
 // Initialize stores and composables
 const noteStore = useNoteStore()
+const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
 useShortcuts(openSettings)
 useGlobalShortcut()
@@ -99,6 +101,9 @@ onMounted(async () => {
 
   // Load notes from iCloud (will create initial note if none exists)
   await noteStore.initialize()
+
+  // 加载目录结构
+  await directoryStore.loadDirectories()
 
   // 同步窗口置顶状态并监听焦点变化
   if (settingStore.settings.alwaysOnTop) {

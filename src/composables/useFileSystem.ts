@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { NoteMetadata } from '@/types/note'
+import type { NoteMetadata, DirectoryData } from '@/types/note'
 
 
 // 直接使用 invoke，在非 Tauri 环境下调用时会自然抛出异常（由各函数的 try/catch 捕获）
@@ -55,12 +55,14 @@ export function useFileSystem() {
   }
 
   /**
-   * Read a single note file
+   * Read a single note file (optionally from a directory folder)
    */
-  async function readNote(id: string): Promise<string> {
+  async function readNote(id: string, dir?: string): Promise<string> {
     try {
       const path = await getICloudPath()
-      return await safeInvoke<string>('read_note', { basePath: path, id })
+      const args: Record<string, unknown> = { basePath: path, id }
+      if (dir) args.dir = dir
+      return await safeInvoke<string>('read_note', args)
     } catch (e) {
       console.error(`Failed to read note ${id}:`, e)
       return ''
@@ -68,26 +70,81 @@ export function useFileSystem() {
   }
 
   /**
-   * Write a single note file
+   * Write a single note file (optionally to a directory folder)
    */
-  async function writeNote(id: string, content: string): Promise<void> {
+  async function writeNote(id: string, content: string, dir?: string): Promise<void> {
     try {
       const path = await getICloudPath()
-      await safeInvoke('write_note', { basePath: path, id, content })
+      const args: Record<string, unknown> = { basePath: path, id, content }
+      if (dir) args.dir = dir
+      await safeInvoke('write_note', args)
     } catch (e) {
       console.error(`Failed to write note ${id}:`, e)
     }
   }
 
   /**
-   * Delete a note file
+   * Delete a note file (optionally from a directory folder)
    */
-  async function deleteNote(id: string): Promise<void> {
+  async function deleteNote(id: string, dir?: string): Promise<void> {
     try {
       const path = await getICloudPath()
-      await safeInvoke('delete_note', { basePath: path, id })
+      const args: Record<string, unknown> = { basePath: path, id }
+      if (dir) args.dir = dir
+      await safeInvoke('delete_note', args)
     } catch (e) {
       console.error(`Failed to delete note ${id}:`, e)
+    }
+  }
+
+  /**
+   * Create a directory folder on the filesystem
+   */
+  async function createDirectoryFolder(dirId: string): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke('create_directory_folder', { basePath: path, dirId })
+    } catch (e) {
+      console.error(`Failed to create directory folder ${dirId}:`, e)
+    }
+  }
+
+  /**
+   * Rename a directory folder on the filesystem
+   */
+  async function renameDirectoryFolder(oldDirId: string, newDirId: string): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke('rename_directory_folder', { basePath: path, oldDirId, newDirId })
+    } catch (e) {
+      console.error(`Failed to rename directory folder:`, e)
+    }
+  }
+
+  /**
+   * Delete a directory folder on the filesystem (moves .md files to root)
+   */
+  async function deleteDirectoryFolder(dirId: string): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      await safeInvoke('delete_directory_folder', { basePath: path, dirId })
+    } catch (e) {
+      console.error(`Failed to delete directory folder ${dirId}:`, e)
+    }
+  }
+
+  /**
+   * Move a note file between directories on the filesystem
+   */
+  async function moveNoteFile(id: string, fromDir: string | null, toDir: string | null): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      const args: Record<string, unknown> = { basePath: path, id }
+      if (fromDir !== null) args.fromDir = fromDir
+      if (toDir !== null) args.toDir = toDir
+      await safeInvoke('move_note_file', args)
+    } catch (e) {
+      console.error(`Failed to move note file ${id}:`, e)
     }
   }
 
@@ -148,6 +205,36 @@ export function useFileSystem() {
     }
   }
 
+  /**
+   * Read directories.json file
+   */
+  async function readDirectories(): Promise<DirectoryData> {
+    try {
+      const path = await getICloudPath()
+      const content = await safeInvoke<string>('read_directories', { basePath: path })
+      return JSON.parse(content)
+    } catch (e) {
+      console.error('Failed to read directories, creating new:', e)
+      return {
+        version: 1,
+        directories: [],
+      }
+    }
+  }
+
+  /**
+   * Write directories.json file
+   */
+  async function writeDirectories(data: DirectoryData): Promise<void> {
+    try {
+      const path = await getICloudPath()
+      const content = JSON.stringify(data, null, 2)
+      await safeInvoke('write_directories', { basePath: path, content })
+    } catch (e) {
+      console.error('Failed to write directories:', e)
+    }
+  }
+
   return {
     getICloudPath,
     readMetadata,
@@ -159,5 +246,11 @@ export function useFileSystem() {
     setNoteReadwrite,
     ensureImagesFolder,
     saveImage,
+    readDirectories,
+    writeDirectories,
+    createDirectoryFolder,
+    renameDirectoryFolder,
+    deleteDirectoryFolder,
+    moveNoteFile,
   }
 }

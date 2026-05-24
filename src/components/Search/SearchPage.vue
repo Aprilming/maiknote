@@ -1,199 +1,206 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useNoteStore } from '@/stores/noteStore'
+import { useDirectoryStore } from '@/stores/directoryStore'
+import DirectoryTree from './DirectoryTree.vue'
 
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
 const noteStore = useNoteStore()
+const directoryStore = useDirectoryStore()
 const searchInput = ref<HTMLInputElement | null>(null)
 const localQuery = ref('')
 
 // 拖拽状态
-const draggedIndex = ref<number | null>(null)
-const dragOverIndex = ref<number | null>(null)
 const isDragging = ref(false)
-const pendingSelectNote = ref<string | null>(null)
-const dragStartY = ref(0)
 const draggedNoteId = ref<string | null>(null)
+const dragOverNoteIndex = ref<number | null>(null)
+const dragOverDirId = ref<string | null | undefined>(undefined)
+const dragStartPos = ref({ x: 0, y: 0 })
+
+// 是否通过关键词搜索
+const isSearching = computed(() => localQuery.value.trim().length > 0)
 
 // 筛选后的搜索结果
 const searchResults = computed(() => {
   let results = noteStore.notes
-
-  // 按关键词搜索
+  if (!isSearching.value) {
+    results = noteStore.getNotesByDirectory(directoryStore.currentDirectoryId)
+  }
   if (localQuery.value) {
-    const query = localQuery.value.toLowerCase()
+    const q = localQuery.value.toLowerCase()
     results = results.filter(n =>
-      n.title.toLowerCase().includes(query) ||
-      n.content.toLowerCase().includes(query)
+      n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)
     )
   }
-
-  return results.slice(0, 20) // 限制显示数量
+  return results.slice(0, 50)
 })
 
-// 拖拽开始
-function handleMouseDown(e: MouseEvent, noteId: string, index: number) {
-  e.preventDefault()
-  console.log('[DEBUG drag] handleMouseDown, noteId:', noteId, 'index:', index)
-  dragStartY.value = e.clientY
-  draggedIndex.value = index
+// 当前目录名称
+const currentDirName = computed(() => {
+  if (directoryStore.currentDirectoryId === null) return '主目录'
+  return directoryStore.getDirectory(directoryStore.currentDirectoryId)?.name ?? '主目录'
+})
+
+// ---- Pointer event handlers (document-level) ----
+
+function onNotePointerDown(e: PointerEvent, noteId: string) {
   draggedNoteId.value = noteId
-  isDragging.value = false // 还没开始拖拽，需要移动一定距离才触发
+  dragStartPos.value = { x: e.clientX, y: e.clientY }
+  isDragging.value = false
+  dragOverNoteIndex.value = null
+  dragOverDirId.value = undefined
 }
 
-// 拖拽移动
-function handleMouseMove(e: MouseEvent) {
-  if (draggedIndex.value === null || !draggedNoteId.value) return
+function onDocPointerMove(e: PointerEvent) {
+  if (!draggedNoteId.value) return
 
-  const deltaY = Math.abs(e.clientY - dragStartY.value)
-
-  // 如果移动距离超过 5px，才算开始拖拽
-  if (deltaY > 5 && !isDragging.value) {
-    console.log('[DEBUG drag] drag started')
+  // 检测是否超过拖拽阈值 (8px)
+  if (!isDragging.value) {
+    const dx = Math.abs(e.clientX - dragStartPos.value.x)
+    const dy = Math.abs(e.clientY - dragStartPos.value.y)
+    if (dx <= 8 && dy <= 8) return
     isDragging.value = true
   }
 
-  if (isDragging.value) {
-    e.preventDefault()
+  e.preventDefault()
 
-    // 计算当前鼠标在哪个列表项上
-    const resultsEl = document.querySelector('.search-results')
-    if (!resultsEl) return
+  // 检测鼠标下方元素
+  const els = document.elementsFromPoint(e.clientX, e.clientY)
 
-    const items = resultsEl.querySelectorAll('.result-item')
-    let targetIndex = -1
+  // 检测目录
+  let foundDir = false
+  for (const el of els) {
+    const dirEl = (el as HTMLElement).closest('[data-dir-id]') as HTMLElement | null
+    if (dirEl) {
+      const raw = dirEl.getAttribute('data-dir-id')
+      dragOverDirId.value = raw === 'root' ? null : raw
+      dragOverNoteIndex.value = null
+      foundDir = true
+      break
+    }
+  }
+  if (!foundDir) dragOverDirId.value = undefined
 
-    for (let i = 0; i < items.length; i++) {
-      const rect = items[i].getBoundingClientRect()
-      const midY = rect.top + rect.height / 2
-
-      if (e.clientY < midY) {
-        targetIndex = i
+  // 检测笔记排序目标（仅当不在目录上时）
+  if (!foundDir) {
+    for (const el of els) {
+      const noteEl = (el as HTMLElement).closest('[data-note-index]') as HTMLElement | null
+      if (noteEl) {
+        const idx = parseInt(noteEl.getAttribute('data-note-index')!, 10)
+        if (!isNaN(idx) && draggedNoteId.value) {
+          const curIdx = searchResults.value.findIndex(n => n.id === draggedNoteId.value)
+          dragOverNoteIndex.value = idx !== curIdx ? idx : null
+        }
         break
       }
-      targetIndex = i
     }
+  }
 
-    if (targetIndex !== -1 && targetIndex !== dragOverIndex.value) {
-      console.log('[DEBUG drag] dragOverIndex:', targetIndex)
-      dragOverIndex.value = targetIndex
-    }
+  // 没找到任何目标则清除
+  if (!foundDir && !els.some(el => !!(el as HTMLElement).closest('[data-note-index]'))) {
+    dragOverNoteIndex.value = null
   }
 }
 
-// 拖拽结束
-function handleMouseUp() {
-  console.log('[DEBUG drag] handleMouseUp, isDragging:', isDragging.value, 'draggedNoteId:', draggedNoteId.value)
+function onDocPointerUp() {
+  if (!draggedNoteId.value) return
 
-  if (isDragging.value && draggedIndex.value !== null && dragOverIndex.value !== null) {
-    console.log('[DEBUG drag] drop at targetIndex:', dragOverIndex.value)
-
-    // 执行重排序
-    const draggedNote = searchResults.value[draggedIndex.value]
-    const targetNote = searchResults.value[dragOverIndex.value]
-
-    if (draggedNote && targetNote) {
-      const noteIds = [...noteStore.notes.map(n => n.id)]
-      const draggedOriginalIndex = noteStore.notes.findIndex(n => n.id === draggedNote.id)
-      const targetOriginalIndex = noteStore.notes.findIndex(n => n.id === targetNote.id)
-
-      console.log('[DEBUG drag] original indices - dragged:', draggedOriginalIndex, 'target:', targetOriginalIndex)
-
-      const [removedId] = noteIds.splice(draggedOriginalIndex, 1)
-      noteIds.splice(targetOriginalIndex, 0, removedId)
-
-      console.log('[DEBUG drag] final noteIds:', noteIds)
-      noteStore.reorderNotes(noteIds)
-    }
-  } else if (draggedNoteId.value && !isDragging.value) {
-    // 非拖拽点击，选择笔记
-    console.log('[DEBUG drag] click select note:', draggedNoteId.value)
-    selectNote(draggedNoteId.value)
-  }
-
-  // 重置状态
-  draggedIndex.value = null
-  dragOverIndex.value = null
-  draggedNoteId.value = null
-  isDragging.value = false
-  pendingSelectNote.value = null
-}
-
-// 格式化日期
-function formatDate(timestamp: number): string {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const oneDay = 24 * 60 * 60 * 1000
-
-  if (diff < oneDay) {
-    return '今天'
-  } else if (diff < 2 * oneDay) {
-    return '昨天'
-  } else if (diff < 7 * oneDay) {
-    return `${Math.floor(diff / oneDay)}天前`
-  } else {
-    const month = date.getMonth() + 1
-    const day = date.getDate()
-    return `${month}月${day}日`
-  }
-}
-
-// 获取内容预览
-function getPreview(content: string): string {
-  const plainText = content.replace(/[#*`_~\[\]]/g, '').trim()
-  return plainText.substring(0, 80) + (plainText.length > 80 ? '...' : '')
-}
-
-// 关键词高亮
-function highlightKeyword(text: string, keyword: string): string {
-  if (!keyword) return text
-  const regex = new RegExp(`(${keyword})`, 'gi')
-  return text.replace(regex, '<mark>$1</mark>')
-}
-
-// 选择笔记
-function selectNote(noteId: string) {
-  // 如果正在拖拽，延迟选择
   if (isDragging.value) {
-    pendingSelectNote.value = noteId
-    return
+    // 拖入目录
+    if (dragOverDirId.value !== undefined) {
+      const nid = draggedNoteId.value
+      const did = dragOverDirId.value
+      resetDrag()
+      noteStore.moveNoteToDirectory(nid, did)
+      return
+    }
+
+    // 列表内排序
+    if (dragOverNoteIndex.value !== null) {
+      const src = noteStore.notes.findIndex(n => n.id === draggedNoteId.value)
+      const tgt = searchResults.value[dragOverNoteIndex.value]
+      if (tgt && src !== -1) {
+        const dst = noteStore.notes.findIndex(n => n.id === tgt.id)
+        if (dst !== -1 && src !== dst) {
+          const ids = noteStore.notes.map(n => n.id)
+          const [moved] = ids.splice(src, 1)
+          ids.splice(dst, 0, moved)
+          noteStore.reorderNotes(ids)
+        }
+      }
+    }
+  } else {
+    // 点击选择：同步目录过滤，使主编辑器只显示该目录下的笔记
+    const clickedNote = noteStore.notes.find(n => n.id === draggedNoteId.value)
+    noteStore.setFilterDirectory(clickedNote?.directoryId ?? null)
+    localQuery.value = ''
+    noteStore.selectNote(draggedNoteId.value)
+    emit('close')
   }
 
-  localQuery.value = ''
-  noteStore.selectNote(noteId)
-  emit('close')
+  resetDrag()
 }
 
-// 关闭页面
+function resetDrag() {
+  isDragging.value = false
+  draggedNoteId.value = null
+  dragOverNoteIndex.value = null
+  dragOverDirId.value = undefined
+}
+
+// ---- 格式化/工具函数 ----
+function formatDate(ts: number): string {
+  const d = new Date(ts)
+  const diff = Date.now() - ts
+  const day = 86400000
+  if (diff < day) return '今天'
+  if (diff < 2 * day) return '昨天'
+  if (diff < 7 * day) return `${Math.floor(diff / day)}天前`
+  return `${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+function getPreview(s: string): string {
+  return s.replace(/[#*`_~\[\]]/g, '').trim().substring(0, 80)
+}
+
+function highlightKeyword(text: string, kw: string): string {
+  if (!kw) return text
+  return text.replace(
+    new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+    '<mark>$1</mark>'
+  )
+}
+
 function handleCancel() {
-  localQuery.value = '' // 清空搜索关键词
+  localQuery.value = ''
   emit('close')
-}
-
-// 处理键盘事件
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    handleCancel()
-  }
 }
 
 onMounted(() => {
   searchInput.value?.focus()
   document.addEventListener('keydown', handleKeydown)
+  document.addEventListener('pointermove', onDocPointerMove)
+  document.addEventListener('pointerup', onDocPointerUp)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('pointermove', onDocPointerMove)
+  document.removeEventListener('pointerup', onDocPointerUp)
+  resetDrag()
 })
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') handleCancel()
+}
 </script>
 
 <template>
   <div class="search-page">
-    <!-- 搜索栏 -->
+    <!-- 顶部搜索栏 -->
     <div class="search-header">
       <div class="search-input-wrapper">
         <i class="i-mdi-magnify search-icon"></i>
@@ -201,7 +208,7 @@ onUnmounted(() => {
           ref="searchInput"
           v-model="localQuery"
           type="text"
-          placeholder="搜索笔记..."
+          :placeholder="`在「${currentDirName}」中搜索...`"
           class="search-input"
         />
         <button v-if="localQuery" class="clear-btn" @click="localQuery = ''">
@@ -211,31 +218,48 @@ onUnmounted(() => {
       <button class="cancel-btn" @click="handleCancel">取消</button>
     </div>
 
-
-    <!-- 搜索结果 -->
-    <div
-      class="search-results"
-      @mousemove="handleMouseMove"
-      @mouseup="handleMouseUp"
-    >
-      <div v-if="searchResults.length === 0" class="no-results">
-        <template v-if="localQuery">未找到匹配的笔记</template>
-        <template v-else>输入关键词开始搜索</template>
+    <!-- 底部左右分栏 -->
+    <div class="search-body">
+      <!-- 左侧目录树 -->
+      <div class="search-sidebar">
+        <DirectoryTree :highlight-dir-id="isDragging ? dragOverDirId : undefined" />
       </div>
 
-      <div
-        v-for="(note, index) in searchResults"
-        :key="note.id"
-        class="result-item"
-        :class="{ 'is-dragging': isDragging && draggedIndex === index, 'is-drag-over': isDragging && dragOverIndex === index }"
-        @mousedown="handleMouseDown($event, note.id, index)"
-      >
-        <div class="result-header">
-          <div class="result-title" v-html="highlightKeyword(note.title, localQuery)"></div>
-          <i v-if="note.isLocked" class="i-mdi-lock result-locked-icon"></i>
-          <div class="result-date">{{ formatDate(note.updatedAt) }}</div>
+      <!-- 右侧笔记列表 -->
+      <div class="search-main">
+        <div class="dir-title">
+          <i class="i-mdi-folder-outline"></i>
+          <span>{{ currentDirName }}</span>
+          <span class="dir-title-count">{{ searchResults.length }} 篇笔记</span>
         </div>
-        <div class="result-preview" v-html="highlightKeyword(getPreview(note.content), localQuery)"></div>
+
+        <div class="search-results">
+          <div v-if="searchResults.length === 0" class="no-results">
+            <template v-if="localQuery">未找到匹配的笔记</template>
+            <template v-else-if="directoryStore.currentDirectoryId === null">还没有笔记，开始写第一篇吧</template>
+            <template v-else>这个目录还没有笔记，拖拽笔记到这里</template>
+          </div>
+
+          <div
+            v-for="(note, index) in searchResults"
+            :key="note.id"
+            :data-note-id="note.id"
+            :data-note-index="index"
+            class="result-item"
+            :class="{
+              'is-dragging': draggedNoteId === note.id,
+              'is-drag-over': isDragging && dragOverNoteIndex === index && dragOverDirId === undefined
+            }"
+            @pointerdown="onNotePointerDown($event, note.id)"
+          >
+            <div class="result-header">
+              <div class="result-title" v-html="highlightKeyword(note.title, localQuery)"></div>
+              <i v-if="note.isLocked" class="i-mdi-lock result-locked-icon"></i>
+              <div class="result-date">{{ formatDate(note.updatedAt) }}</div>
+            </div>
+            <div class="result-preview" v-html="highlightKeyword(getPreview(note.content), localQuery)"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -252,8 +276,31 @@ onUnmounted(() => {
 .search-header {
   display: flex;
   align-items: center;
-  padding: 16px;
+  padding: 16px 16px 12px;
   gap: 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.search-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.search-sidebar {
+  width: 40%;
+  min-width: 180px;
+  max-width: 320px;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+}
+
+.search-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .search-input-wrapper {
@@ -310,33 +357,27 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.filter-tabs {
+.dir-title {
   display: flex;
-  padding: 0 16px 12px;
+  align-items: center;
   gap: 8px;
+  padding: 4px 16px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
   border-bottom: 1px solid var(--color-border);
 }
 
-.tab {
-  padding: 6px 14px;
-  font-size: 13px;
+.dir-title i {
+  font-size: 16px;
   color: var(--color-text-secondary);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  cursor: pointer;
-  transition: all 0.15s;
 }
 
-.tab.active {
-  color: white;
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-}
-
-.tab:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.dir-title-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  margin-left: 4px;
 }
 
 .search-results {
@@ -349,6 +390,7 @@ onUnmounted(() => {
   padding: 40px 20px;
   text-align: center;
   color: var(--color-text-secondary);
+  font-size: 14px;
 }
 
 .result-item {
@@ -358,6 +400,7 @@ onUnmounted(() => {
   transition: background 0.15s;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
 }
 
 .result-item.is-dragging {

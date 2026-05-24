@@ -305,6 +305,25 @@ async fn write_metadata(base_path: String, content: String) -> Result<(), String
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
+/// Read directories.json file
+#[tauri::command]
+async fn read_directories(base_path: String) -> Result<String, String> {
+    let path = PathBuf::from(base_path).join("directories.json");
+
+    if !path.exists() {
+        return Ok(r#"{"version":1,"directories":[]}"#.to_string());
+    }
+
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+/// Write directories.json file
+#[tauri::command]
+async fn write_directories(base_path: String, content: String) -> Result<(), String> {
+    let path = PathBuf::from(base_path).join("directories.json");
+    fs::write(path, content).map_err(|e| e.to_string())
+}
+
 /// Read assistants.json file
 #[tauri::command]
 async fn read_assistants(base_path: String) -> Result<String, String> {
@@ -324,10 +343,23 @@ async fn write_assistants(base_path: String, content: String) -> Result<(), Stri
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
+/// Build note file path, optionally inside a directory
+fn note_path(base_path: &str, id: &str, dir: Option<&str>) -> PathBuf {
+    let mut path = PathBuf::from(base_path);
+    if let Some(d) = dir {
+        path = path.join(d);
+    }
+    path.join(format!("note_{}.md", id))
+}
+
 /// Read a single note file
 #[tauri::command]
-async fn read_note(base_path: String, id: String) -> Result<String, String> {
-    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+async fn read_note(base_path: String, id: String, dir: Option<String>) -> Result<String, String> {
+    let path = if let Some(ref d) = dir {
+        note_path(&base_path, &id, Some(d))
+    } else {
+        note_path(&base_path, &id, None)
+    };
 
     if !path.exists() {
         return Ok(String::new());
@@ -336,20 +368,97 @@ async fn read_note(base_path: String, id: String) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
-/// Write a single note file
+/// Write a single note file (optionally inside a directory)
 #[tauri::command]
-async fn write_note(base_path: String, id: String, content: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+async fn write_note(base_path: String, id: String, content: String, dir: Option<String>) -> Result<(), String> {
+    let path = if let Some(ref d) = dir {
+        // Ensure the directory exists
+        let dir_path = PathBuf::from(&base_path).join(d);
+        fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
+        note_path(&base_path, &id, Some(d))
+    } else {
+        note_path(&base_path, &id, None)
+    };
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
-/// Delete a note file
+/// Delete a note file (optionally from a directory)
 #[tauri::command]
-async fn delete_note(base_path: String, id: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+async fn delete_note(base_path: String, id: String, dir: Option<String>) -> Result<(), String> {
+    let path = if let Some(ref d) = dir {
+        note_path(&base_path, &id, Some(d))
+    } else {
+        note_path(&base_path, &id, None)
+    };
 
     if path.exists() {
         fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Create a directory folder for note organization
+#[tauri::command]
+async fn create_directory_folder(base_path: String, dir_id: String) -> Result<(), String> {
+    let path = PathBuf::from(base_path).join(&dir_id);
+    fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+/// Rename a directory folder
+#[tauri::command]
+async fn rename_directory_folder(base_path: String, old_dir_id: String, new_dir_id: String) -> Result<(), String> {
+    let root = PathBuf::from(&base_path);
+    let old_path = root.join(&old_dir_id);
+    let new_path = root.join(&new_dir_id);
+    if old_path.exists() {
+        fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Delete a directory folder and move its note files to root
+#[tauri::command]
+async fn delete_directory_folder(base_path: String, dir_id: String) -> Result<(), String> {
+    let root = PathBuf::from(&base_path);
+    let dir_path = root.join(&dir_id);
+    if !dir_path.exists() {
+        return Ok(());
+    }
+
+    // Move all .md files from the directory to root
+    if let Ok(entries) = fs::read_dir(&dir_path) {
+        for entry in entries.flatten() {
+            let file_path = entry.path();
+            if file_path.extension().map(|e| e == "md").unwrap_or(false) {
+                let file_name = file_path.file_name().unwrap().to_os_string();
+                let dest = root.join(&file_name);
+                let _ = fs::rename(&file_path, &dest);
+            }
+        }
+    }
+
+    // Remove the directory (should be empty now)
+    fs::remove_dir_all(&dir_path).map_err(|e| e.to_string())
+}
+
+/// Move a note file between directories (dir can be None for root)
+#[tauri::command]
+async fn move_note_file(base_path: String, id: String, from_dir: Option<String>, to_dir: Option<String>) -> Result<(), String> {
+    let src = note_path(&base_path, &id, from_dir.as_deref());
+    let dest = if let Some(ref d) = to_dir {
+        let dir_path = PathBuf::from(&base_path).join(d);
+        fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
+        note_path(&base_path, &id, Some(d))
+    } else {
+        note_path(&base_path, &id, None)
+    };
+
+    if src.exists() {
+        fs::rename(&src, &dest).map_err(|e| e.to_string())?;
+    } else if src != dest {
+        // Source doesn't exist, write empty at destination
+        fs::write(&dest, "").map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -580,11 +689,17 @@ pub fn run() {
             get_icloud_path,
             read_metadata,
             write_metadata,
+            read_directories,
+            write_directories,
             read_assistants,
             write_assistants,
             read_note,
             write_note,
             delete_note,
+            create_directory_folder,
+            rename_directory_folder,
+            delete_directory_folder,
+            move_note_file,
             set_note_readonly,
             set_note_readwrite,
             ensure_images_folder,

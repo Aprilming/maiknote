@@ -10,6 +10,7 @@ export interface Note {
   tags?: string[] // Optional tags
   isPinned: boolean // Whether the note is pinned
   isLocked: boolean // Whether the note is locked (cannot edit or delete)
+  directoryId?: string // null/undefined = root directory
 }
 
 /**
@@ -28,4 +29,21 @@ export interface NoteMetadataItem {
   tags?: string[]
   isPinned: boolean
   isLocked: boolean
+  directoryId?: string
+}
+
+/**
+ * Directory structure for organizing notes
+ */
+export interface Directory {
+  id: string
+  name: string
+  parentId: string | null // null = root level
+  createdAt: number
+  updatedAt: number
+}
+
+export interface DirectoryData {
+  version: number
+  directories: Directory[]
 }

@@ -1,14 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import TiptapEditor from './TiptapEditor.vue'
+import DirectoryTree from '@/components/Search/DirectoryTree.vue'
 import { useNoteStore } from '@/stores/noteStore'
+import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useAutoSave } from '@/composables/useAutoSave'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useSourceMode } from '@/composables/useSourceMode'
 
 const noteStore = useNoteStore()
+const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
+
+// 当前目录名称（始终显示）
+const currentDirName = computed(() => {
+  const id = noteStore.filterDirectoryId
+  if (id === null) return '主目录'
+  return directoryStore.getDirectory(id)?.name ?? '主目录'
+})
 const { writeNote } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
 
@@ -226,6 +236,19 @@ function handleSourceInput(e: Event) {
   }
 }
 
+// 目录选择器弹出状态
+const dirPickerVisible = ref(false)
+
+function toggleDirPicker() {
+  dirPickerVisible.value = !dirPickerVisible.value
+}
+
+function handleDirSelect(id: string | null) {
+  noteStore.setFilterDirectory(id)
+  dirPickerVisible.value = false
+}
+
+
 // 自定义切换源码模式函数，确保内容同步
 function handleToggleSourceMode() {
   // 如果当前是源码模式，切换到普通模式前确保内容同步
@@ -287,16 +310,30 @@ function handleToggleSourceMode() {
       </button>
 
       <!-- navigation hints -->
-      <div v-if="noteStore.currentIndex > 0" class="nav-hint left-hint" @click.stop="noteStore.selectPrev()">
+      <div v-if="noteStore.activeIndex > 0" class="nav-hint left-hint" @click.stop="noteStore.selectPrev()">
         <i class="i-mdi-chevron-left"></i>
       </div>
-      <div v-if="noteStore.currentIndex < noteStore.notes.length - 1" class="nav-hint right-hint" @click.stop="noteStore.selectNext()">
+      <div v-if="noteStore.activeIndex < noteStore.activeNoteList.length - 1" class="nav-hint right-hint" @click.stop="noteStore.selectNext()">
         <i class="i-mdi-chevron-right"></i>
       </div>
 
       <!-- note indicator -->
       <div class="note-indicator" @click.stop>
-        {{ noteStore.currentIndex + 1 }} / {{ noteStore.notes.length }}
+        {{ noteStore.activeIndex + 1 }} / {{ noteStore.activeNoteList.length }}
+      </div>
+
+      <!-- 目录指示器 -->
+      <div class="dir-indicator" @click.stop="toggleDirPicker">
+        <i class="i-mdi-folder-outline"></i>
+        <span>{{ currentDirName }}</span>
+        <i class="i-mdi-chevron-down" :class="{ rotated: dirPickerVisible }"></i>
+      </div>
+
+      <!-- 目录选择器弹出 -->
+      <div v-if="dirPickerVisible" class="dir-picker-overlay" @click="dirPickerVisible = false">
+        <div class="dir-picker-popup" @click.stop>
+          <DirectoryTree :on-select="handleDirSelect" />
+        </div>
       </div>
 
       <!-- lock button -->
@@ -475,6 +512,69 @@ function handleToggleSourceMode() {
   -webkit-backdrop-filter: blur(10px);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.dir-indicator {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background-color: var(--color-surface);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s;
+}
+
+.dir-indicator:hover {
+  background-color: var(--color-border);
+}
+
+.dir-indicator i.i-mdi-chevron-down {
+  font-size: 14px;
+  transition: transform 0.2s;
+}
+
+.dir-indicator i.i-mdi-chevron-down.rotated {
+  transform: rotate(180deg);
+}
+
+.dir-indicator i {
+  font-size: 14px;
+}
+
+.dir-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+}
+
+.dir-picker-popup {
+  position: absolute;
+  bottom: 48px;
+  width: 280px;
+  height: 50vh;
+  max-height: 50vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
 }
 
 .lock-button {
@@ -723,7 +823,7 @@ function handleToggleSourceMode() {
 
 .navigation-hint {
   position: absolute;
-  bottom: 10px;
+  top: 60px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -758,11 +858,11 @@ function handleToggleSourceMode() {
 
 .hint-fade-enter-from {
   opacity: 0;
-  transform: translateX(-50%) translateY(10px);
+  transform: translateX(-50%) translateY(-10px);
 }
 
 .hint-fade-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(10px);
+  transform: translateX(-50%) translateY(-10px);
 }
 </style>
