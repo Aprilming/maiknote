@@ -86,6 +86,12 @@ const wordCount = computed(() => {
   return count
 })
 
+// blockMode 变化时递增版本号，用于驱动 :key 重建编辑器
+const blockModeVersion = ref(0)
+watch(() => settingStore.settings.blockMode, () => {
+  blockModeVersion.value++
+})
+
 // get current note
 const currentNote = computed(() => noteStore.currentNote)
 
@@ -339,9 +345,7 @@ function handleToggleSourceMode() {
       </div>
     </Transition>
 
-    <div
-      class="editor-wrapper"
-    >
+    <div class="editor-wrapper">
       <!-- 源码模式编辑 -->
       <textarea
         v-if="isSourceMode"
@@ -358,7 +362,7 @@ function handleToggleSourceMode() {
       <TiptapEditor
         v-else
         ref="editorRef"
-        :key="`${currentNote?.id}-${settingStore.settings.blockMode}`"
+        :key="`${currentNote?.id}-${blockModeVersion}`"
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"
@@ -670,14 +674,14 @@ function handleToggleSourceMode() {
 
 .lock-button {
   position: absolute;
-  bottom: 10px;
+  bottom: 5px;
   right: 90px;
   z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: 20px;
   background-color: var(--color-surface);
@@ -706,14 +710,14 @@ function handleToggleSourceMode() {
 
 .source-mode-button {
   position: absolute;
-  bottom: 10px;
+  bottom: 5px;
   right: 130px;
   z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: 20px;
   background-color: var(--color-surface);
@@ -762,7 +766,7 @@ function handleToggleSourceMode() {
 .search-toggle-btn {
   position: absolute;
   bottom: 10px;
-  left: 94px;
+  left: 80px;
   z-index: 11;
   display: flex;
   align-items: center;
@@ -789,57 +793,6 @@ function handleToggleSourceMode() {
 
 .search-toggle-btn i {
   font-size: 16px;
-}
-
-.color-btn {
-  position: absolute;
-  bottom: 10px;
-  left: 132px;
-  z-index: 11;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 20px;
-  background-color: var(--color-surface);
-  color: var(--color-text-secondary);
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: all 0.15s;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.color-btn:hover {
-  color: var(--color-text);
-  transform: scale(1.05);
-}
-
-.color-btn.has-color {
-  color: var(--color-primary);
-}
-
-.color-btn i {
-  font-size: 16px;
-}
-
-.color-picker-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  justify-content: center;
-}
-
-.color-picker-wrapper {
-  position: absolute;
-  bottom: 52px;
-  left: 132px;
-  z-index: 101;
 }
 
 .search-bar {

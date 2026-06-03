@@ -1097,11 +1097,6 @@ defineExpose({
   background: transparent;
 }
 
-/* ProseMirror 块级元素建立定位上下文，供块操作按钮绝对定位 */
-:deep(.ProseMirror > *) {
-  position: relative;
-}
-
 /* 块左侧触发按钮 */
 :deep(.block-menu-trigger) {
   position: absolute;

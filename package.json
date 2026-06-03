@@ -1,7 +1,8 @@
 {
   "name": "maiknote",
   "private": true,
-  "version": "0.10.2",
+  "version": "0.10.3",
+  "license": "GPL-2.0-only",
   "type": "module",
   "contributors": [
     "deepseek-ai (https://github.com/deepseek-ai)"
@@ -12,7 +13,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "sync-version": "node scripts/sync-version.js",
-    "pretauri": "npm run sync-version"
+    "pretauri": "npm run sync-version",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -56,6 +58,7 @@
     "@tauri-apps/cli": "^2",
     "@unocss/preset-icons": "^66.6.6",
     "@vitejs/plugin-vue": "^5.2.1",
+    "patch-package": "^8.0.1",
     "typescript": "~5.6.2",
     "unocss": "^66.6.6",
     "vite": "^6.0.3",
