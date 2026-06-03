@@ -795,6 +795,51 @@ function handleToggleSourceMode() {
   font-size: 16px;
 }
 
+.color-btn {
+  position: absolute;
+  bottom: 10px;
+  left: 118px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 20px;
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  -webkit-user-select: none;
+}
+
+.color-btn:hover {
+  color: var(--color-text);
+  transform: scale(1.05);
+}
+
+.color-btn.has-color {
+  color: var(--color-primary);
+}
+
+.color-btn i {
+  font-size: 16px;
+}
+
+.color-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.color-picker-wrapper {
+  position: absolute;
+  bottom: 50px;
+  left: 118px;
+}
+
 .search-bar {
   position: absolute;
   bottom: 10px;

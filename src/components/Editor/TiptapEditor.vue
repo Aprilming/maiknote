@@ -19,6 +19,7 @@ import TextStyle from '@tiptap/extension-text-style'
 import Highlight from '@tiptap/extension-highlight'
 import Underline from '@tiptap/extension-underline'
 import FontFamily from '@tiptap/extension-font-family'
+import Link from '@tiptap/extension-link'
 import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
@@ -31,6 +32,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import type { EditorView } from 'prosemirror-view'
 import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
+import { openUrl } from '@tauri-apps/plugin-opener'
 
 const lowlight = createLowlight(all)
 
@@ -456,6 +458,19 @@ async function callAI(assistantId: string) {
   }
 }
 
+const handleLink = () => {
+  const ed = editor.value
+  if (!ed) return
+  if (ed.isActive('link')) {
+    ed.chain().focus().unsetLink().run()
+  } else {
+    const url = window.prompt('输入链接地址:')
+    if (url) {
+      ed.chain().focus().setLink({ href: url }).run()
+    }
+  }
+}
+
 const editor = useEditor({
   editable: !props.isLocked,
   extensions: [
@@ -493,6 +508,11 @@ const editor = useEditor({
       inline: true,
       allowBase64: false, // 禁用 base64，改为保存到文件
     }),
+    Link.configure({
+      openOnClick: false,
+      linkOnPaste: true,
+      autolink: true,
+    }),
     ...(props.blockMode ? [
       createSlashCommand(),
       GlobalDragHandle.configure({
@@ -523,6 +543,17 @@ const editor = useEditor({
   ],
   content: props.initialContent,
   editorProps: {
+    handleClickOn(_view, _pos, _node, _nodePos, event) {
+      // 点击链接时使用系统浏览器打开
+      const target = event.target as HTMLElement
+      const anchor = target.closest('a')
+      if (anchor?.href) {
+        event.preventDefault()
+        openUrl(anchor.href)
+        return true
+      }
+      return false
+    },
     handleKeyDown(view, event) {
       if ((event.metaKey || event.ctrlKey) && event.key === 'a') {
         event.preventDefault()
@@ -594,7 +625,7 @@ const editor = useEditor({
         return true
       }
     },
-    // 全选 + 复制时粘贴 markdown 源码（含 ``` 等标记），非全选时保持默认纯文本
+    // 全选 + 复制时粘贴 markdown 源码（含 ``` 等标记），非全选时将链接序列化为 [text](url)
     clipboardTextSerializer: (slice) => {
       const ed = editor.value
       if (ed) {
@@ -603,7 +634,21 @@ const editor = useEditor({
           return ed.storage.markdown.getMarkdown() || ''
         }
       }
-      return slice.content.textBetween(0, slice.content.size, '\n\n')
+      // 遍历选中的节点：链接文本输出 [text](url)，其余输出纯文本
+      let result = ''
+      slice.content.descendants((node) => {
+        if (node.isText) {
+          const linkMark = node.marks.find(mark => mark.type.name === 'link')
+          if (linkMark) {
+            result += `[${node.text}](${linkMark.attrs.href || ''})`
+          } else {
+            result += node.text || ''
+          }
+          return false
+        }
+        return true
+      })
+      return result
     },
     handlePaste(view, event) {
       // 处理粘贴事件，特别是图片粘贴
@@ -661,7 +706,18 @@ const editor = useEditor({
         }
       }
 
-      // 非图片内容，让编辑器正常处理
+      // 非图片内容，尝试处理 Markdown 链接语法
+      const text = clipboardData.getData('text/plain')
+      if (text && /\[([^\]]+)\]\(([^)]+)\)/.test(text)) {
+        event.preventDefault()
+        const html = text.replace(
+          /\[([^\]]+)\]\(([^)]+)\)/g,
+          '<a href="$2">$1</a>'
+        )
+        editor.value?.commands.insertContent(html)
+        return true
+      }
+
       return false
     },
     handleDrop(view, event) {
@@ -875,6 +931,14 @@ defineExpose({
         :class="{ 'is-active': editor.isActive('strike') }"><s>S</s></button>
       <button @click="editor.chain().focus().toggleCode().run()"
         :class="{ 'is-active': editor.isActive('code') }">Code</button>
+      <button @click="handleLink"
+        :class="{ 'is-active': editor.isActive('link') }"
+        title="链接">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+        </svg>
+      </button>
 
       <div class="bm-sep" />
 
