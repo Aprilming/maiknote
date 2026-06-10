@@ -2,7 +2,6 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
@@ -62,8 +61,8 @@ onMounted(async () => {
     settingStore.saveSettings()
   }
   try {
-    const enabled = await isEnabled()
-    settingStore.updateSettings('autoLaunch', enabled)
+    const enabled = await invoke('is_autostart_enabled')
+    settingStore.updateSettings('autoLaunch', !!enabled)
   } catch (e) {
     console.error('Failed to check autostart status:', e)
   }
@@ -124,10 +123,10 @@ onUnmounted(() => {
 async function toggleAutoLaunch() {
   try {
     if (settingStore.settings.autoLaunch) {
-      await disable()
+      await invoke('disable_autostart')
       settingStore.updateSettings('autoLaunch', false)
     } else {
-      await enable()
+      await invoke('enable_autostart')
       settingStore.updateSettings('autoLaunch', true)
     }
   } catch (e) {

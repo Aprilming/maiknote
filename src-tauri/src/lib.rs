@@ -1,8 +1,9 @@
+pub mod autostart;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
@@ -618,23 +619,16 @@ async fn set_window_alpha(
     Ok(())
 }
 
-/// 检测是否是开机自启启动
-fn is_autolaunch_start(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--flag1")
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 预先检测是否是开机自启，以便在 setup 中使用
-    let launch_args: Vec<String> = std::env::args().collect();
-    let is_autolaunch = is_autolaunch_start(&launch_args);
+    // 检测是否是开机自启启动
+    let is_autolaunch = autostart::is_autolaunch();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--flag1"])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -706,7 +700,10 @@ pub fn run() {
             save_image,
             register_global_shortcut,
             toggle_window,
-            set_window_alpha
+            set_window_alpha,
+            autostart::enable_autostart,
+            autostart::disable_autostart,
+            autostart::is_autostart_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
