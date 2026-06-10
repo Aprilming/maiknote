@@ -27,7 +27,6 @@
     "@tiptap/extension-bubble-menu": "^2.10.0",
     "@tiptap/extension-code-block-lowlight": "^2.10.0",
     "@tiptap/extension-color": "^2.27.2",
-    "@tiptap/extension-floating-menu": "^2.10.0",
     "@tiptap/extension-font-family": "^2.27.2",
     "@tiptap/extension-highlight": "^2.27.2",
     "@tiptap/extension-image": "^2.27.2",
@@ -50,7 +49,6 @@
     "lowlight": "^3.2.0",
     "pinia": "^3.0.4",
     "prosemirror-state": "^1.4.4",
-    "tiptap-extension-global-drag-handle": "^0.1.18",
     "tiptap-markdown": "^0.8.10",
     "vue": "^3.5.13"
   },

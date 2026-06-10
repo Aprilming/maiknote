@@ -32,7 +32,6 @@ export interface AppSettings {
   fontSize: number
   fontFamily: string
   showGrid: boolean
-  blockMode: boolean
   translucent: boolean
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
@@ -58,7 +57,6 @@ export const useSettingStore = defineStore('setting', () => {
     fontSize: 14,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     showGrid: false,
-    blockMode: true,
     translucent: true,
     windowAlpha: 1.0,
     alwaysOnTop: false,
@@ -160,7 +158,6 @@ export const useSettingStore = defineStore('setting', () => {
       fontSize: 14,
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       showGrid: false,
-      blockMode: true,
       translucent: true,
       windowAlpha: 1.0,
       alwaysOnTop: false,

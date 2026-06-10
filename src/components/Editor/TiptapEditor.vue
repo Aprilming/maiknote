@@ -13,23 +13,19 @@ import { useAssistantsStore } from '@/stores/assistantsStore'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { all, createLowlight } from 'lowlight'
 import { createSlashCommand } from './extensions/SlashCommandExtension'
-import GlobalDragHandle from 'tiptap-extension-global-drag-handle'
 import { Color } from '@tiptap/extension-color'
 import TextStyle from '@tiptap/extension-text-style'
 import Highlight from '@tiptap/extension-highlight'
 import Underline from '@tiptap/extension-underline'
 import FontFamily from '@tiptap/extension-font-family'
 import Link from '@tiptap/extension-link'
-import { BlockMenuExtension } from './extensions/BlockMenuExtension'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
 import { InlineSearchExtension, searchPluginKey } from './extensions/InlineSearchExtension'
-import BlockMenuPopover from '../BlockMenuPopover.vue'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
-import type { EditorView } from 'prosemirror-view'
 import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -76,7 +72,6 @@ const props = defineProps<{
   fontSize: number
   fontFamily: string
   isLocked: boolean
-  blockMode: boolean
   noteBgColor?: string
 }>()
 
@@ -513,19 +508,8 @@ const editor = useEditor({
       linkOnPaste: true,
       autolink: true,
     }),
-    ...(props.blockMode ? [
-      createSlashCommand(),
-      GlobalDragHandle.configure({
-        dragHandleWidth: 20,
-        scrollTreshold: 100,
-        handleClick: (_view: EditorView, _pos: number, _node: any, _nodePos: number, _direct: boolean) => {
-          // 原有的 handleClick 逻辑
-          return false
-        },
-      }),
-      BlockMenuExtension,
-    ] : []),
     TextStyle,
+    createSlashCommand(),
     Color,
     Highlight.configure({ multicolor: true }),
     Underline,
@@ -543,6 +527,15 @@ const editor = useEditor({
   ],
   content: props.initialContent,
   editorProps: {
+    handleDOMEvents: {
+      compositionstart: () => {
+        ;(window as any).__imeComposing = true
+      },
+      compositionend: () => {
+        ;(window as any).__imeComposing = false
+        ;(window as any).__imeEndedAt = performance.now()
+      },
+    },
     handleClickOn(_view, _pos, _node, _nodePos, event) {
       // 点击链接时使用系统浏览器打开
       const target = event.target as HTMLElement
@@ -555,6 +548,15 @@ const editor = useEditor({
       return false
     },
     handleKeyDown(view, event) {
+      // IME 组合中或结束后 100ms 内的 Enter 仅用于确认输入法，不做 ProseMirror 块拆分
+      if (event.key === 'Enter' && (
+        event.isComposing ||
+        (window as any).__imeComposing ||
+        performance.now() - ((window as any).__imeEndedAt || 0) < 100
+      )) {
+        return true
+      }
+
       if ((event.metaKey || event.ctrlKey) && event.key === 'a') {
         event.preventDefault()
         const { state, dispatch } = view
@@ -849,11 +851,6 @@ onMounted(async () => {
     }
   }) as EventListener)
 
-  // 存储 editor view 供 block menu 拖拽使用
-  if (editor.value) {
-    ;(window as any).__tiptapEditorView = editor.value.view
-  }
-
   // 直接监听背景色变化并设置DOM样式
   watchEffect(() => {
     const color = props.noteBgColor
@@ -873,7 +870,6 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', handleMouseDown)
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
-  ;(window as any).__tiptapEditorView = null
 })
 
 defineExpose({
@@ -902,7 +898,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked, 'block-mode-disabled': !blockMode }" :style="noteBgColor ? { '--note-bg': noteBgColor } : undefined" @click="handleWrapperClick">
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" :style="noteBgColor ? { '--note-bg': noteBgColor } : undefined" @click="handleWrapperClick">
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">
@@ -917,24 +913,34 @@ defineExpose({
     <BubbleMenu
       v-if="editor"
       :editor="editor"
-      :tippy-options="{ duration: 100, placement: 'top' }"
+      :tippy-options="{ duration: 100, placement: 'top', maxWidth: 'none' }"
       class="bubble-menu"
     >
-      <!-- 格式 -->
+      <!-- 文本格式 -->
       <button @click="editor.chain().focus().toggleBold().run()"
-        :class="{ 'is-active': editor.isActive('bold') }"><b>B</b></button>
+        :class="{ 'is-active': editor.isActive('bold') }" data-tip="加粗"><b>B</b></button>
       <button @click="editor.chain().focus().toggleItalic().run()"
-        :class="{ 'is-active': editor.isActive('italic') }"><i>I</i></button>
+        :class="{ 'is-active': editor.isActive('italic') }" data-tip="斜体"><i>I</i></button>
       <button @click="editor.chain().focus().toggleUnderline().run()"
-        :class="{ 'is-active': editor.isActive('underline') }"><u>U</u></button>
+        :class="{ 'is-active': editor.isActive('underline') }" data-tip="下划线"><u>U</u></button>
       <button @click="editor.chain().focus().toggleStrike().run()"
-        :class="{ 'is-active': editor.isActive('strike') }"><s>S</s></button>
+        :class="{ 'is-active': editor.isActive('strike') }" data-tip="删除线"><s>S</s></button>
       <button @click="editor.chain().focus().toggleCode().run()"
-        :class="{ 'is-active': editor.isActive('code') }">Code</button>
+        :class="{ 'is-active': editor.isActive('code') }" data-tip="行内代码">&lt;/&gt;</button>
+      <button @click="editor.chain().focus().unsetAllMarks().run()"
+        data-tip="清除格式" class="bm-clear-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 5l14 14M5 19l7-7 7 7M5 5l7 7 7-7"/>
+        </svg>
+      </button>
+
+      <div class="bm-sep" />
+
+      <!-- 链接 -->
       <button @click="handleLink"
         :class="{ 'is-active': editor.isActive('link') }"
-        title="链接">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        data-tip="链接">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
         </svg>
@@ -942,8 +948,8 @@ defineExpose({
 
       <div class="bm-sep" />
 
-      <!-- 字体颜色 inline picker -->
-      <div class="bm-color-picker">
+      <!-- 颜色 -->
+      <div class="bm-color-picker" data-tip="字体颜色">
         <span class="bm-label" style="color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
@@ -951,9 +957,7 @@ defineExpose({
           @input="(e) => editor?.chain().focus().setColor((e.target as HTMLInputElement).value).run()"
         />
       </div>
-
-      <!-- 背景色 inline picker -->
-      <div class="bm-color-picker">
+      <div class="bm-color-picker" data-tip="背景色">
         <span class="bm-label" style="background: #ff0000; padding: 0 3px; border-radius: 2px; color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
@@ -964,13 +968,60 @@ defineExpose({
 
       <div class="bm-sep" />
 
-      <!-- 块类型快速切 -->
-      <button @click="editor.chain().focus().setHeading({ level: 1 }).run()"
-        :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }">H1</button>
-      <button @click="editor.chain().focus().setHeading({ level: 2 }).run()"
-        :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }">H2</button>
+      <!-- 标题 -->
+      <button @click="editor.chain().focus().toggleHeading({ level: 1 }).run()"
+        :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }" data-tip="标题 1">H1</button>
+      <button @click="editor.chain().focus().toggleHeading({ level: 2 }).run()"
+        :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }" data-tip="标题 2">H2</button>
+      <button @click="editor.chain().focus().toggleHeading({ level: 3 }).run()"
+        :class="{ 'is-active': editor.isActive('heading', { level: 3 }) }" data-tip="标题 3">H3</button>
+
+      <div class="bm-sep" />
+
+      <!-- 列表 -->
+      <button @click="editor.chain().focus().toggleBulletList().run()"
+        :class="{ 'is-active': editor.isActive('bulletList') }" data-tip="无序列表">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>
+        </svg>
+      </button>
+      <button @click="editor.chain().focus().toggleOrderedList().run()"
+        :class="{ 'is-active': editor.isActive('orderedList') }" data-tip="有序列表">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>
+        </svg>
+      </button>
+      <button @click="editor.chain().focus().toggleTaskList().run()"
+        :class="{ 'is-active': editor.isActive('taskList') }" data-tip="任务列表">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+      </button>
+
+      <div class="bm-sep" />
+
+      <!-- 块级元素 -->
       <button @click="editor.chain().focus().toggleBlockquote().run()"
-        :class="{ 'is-active': editor.isActive('blockquote') }">"</button>
+        :class="{ 'is-active': editor.isActive('blockquote') }" data-tip="引用">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+          <path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/>
+        </svg>
+      </button>
+      <button @click="editor.chain().focus().toggleCodeBlock().run()"
+        :class="{ 'is-active': editor.isActive('codeBlock') }" data-tip="代码块">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+        </svg>
+      </button>
+      <button @click="editor.chain().focus().setHorizontalRule().run()"
+        data-tip="分割线">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="3" y1="12" x2="21" y2="12"/>
+        </svg>
+      </button>
+      <div class="bm-sep" />
+      <button @click="editor.chain().focus().setParagraph().run()"
+        :class="{ 'is-active': editor.isActive('paragraph') }" data-tip="普通文本"><span style="font-size:10px">¶</span></button>
     </BubbleMenu>
     <!-- 右键菜单 -->
     <Teleport to="body">
@@ -998,8 +1049,6 @@ defineExpose({
         </template>
       </div>
     </Teleport>
-    <!-- 块左侧菜单弹窗 -->
-    <BlockMenuPopover v-if="blockMode" :editor="editor" />
   </div>
 </template>
 
@@ -1066,22 +1115,26 @@ defineExpose({
 
 .bubble-menu {
   display: flex;
-  gap: 4px;
-  padding: 6px;
+  flex-wrap: wrap;
+  gap: 1px;
+  padding: 5px;
   background: var(--color-popup-bg, #2a2a2a);
-  border-radius: 6px;
+  border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  max-width: min(95vw, 600px);
 }
 
 .bubble-menu button {
-  padding: 6px 6px;
+  padding: 3px 4px;
   border: none;
   background: transparent;
   color: var(--color-popup-text, #e0e0e0);
   cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: 3px;
+  font-size: 11px;
   font-weight: bold;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .bubble-menu button:hover {
@@ -1091,6 +1144,36 @@ defineExpose({
 .bubble-menu button.is-active {
   background: var(--color-primary);
   color: white;
+}
+
+.bubble-menu button svg {
+  display: block;
+}
+
+.bm-clear-btn:hover {
+  color: #f87171 !important;
+}
+
+/* 自定义 tooltip (WKWebView 不支持原生 title) */
+.bubble-menu [data-tip] {
+  position: relative;
+}
+
+.bubble-menu [data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 11px;
+  font-weight: normal;
+  white-space: nowrap;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 100;
 }
 
 :deep(ul[data-type="taskList"]) {
@@ -1161,34 +1244,13 @@ defineExpose({
   background: transparent;
 }
 
-/* 块左侧触发按钮 */
-:deep(.block-menu-trigger) {
-  position: absolute;
-  left: -28px;
-  opacity: 0;
-  transition: opacity 0.15s;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  padding: 2px 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  line-height: 1;
-}
-:deep(.ProseMirror:hover .block-menu-trigger),
-:deep(.block-menu-trigger:hover) {
-  opacity: 1;
-  background: var(--color-surface);
-}
-
 /* BubbleMenu 新增元素 */
 .bm-sep {
   width: 1px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.2);
-  margin: 0 2px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 1px;
+  align-self: center;
 }
 .bm-color-picker {
   position: relative;
@@ -1197,11 +1259,11 @@ defineExpose({
   cursor: pointer;
 }
 .bm-label {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: bold;
   color: var(--color-popup-text, #e0e0e0);
-  padding: 4px 6px;
-  border-radius: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
   cursor: pointer;
 }
 .bm-color-input {
@@ -1212,19 +1274,6 @@ defineExpose({
   cursor: pointer;
 }
 .bm-label:hover { background: rgba(255, 255, 255, 0.1); }
-
-/* 拖拽手柄样式覆盖 */
-:deep(.drag-handle) {
-  opacity: 0;
-  transition: opacity 0.15s;
-  cursor: grab;
-}
-:deep(.ProseMirror:hover .drag-handle) {
-  opacity: 0.4;
-}
-:deep(.drag-handle:hover) {
-  opacity: 1 !important;
-}
 
 /* 编辑器左侧留白已在 .tiptap > .ProseMirror 中设置 */
 
@@ -1391,9 +1440,7 @@ defineExpose({
   opacity: 0.35;
 }
 
-/* 锁定状态下隐藏块操作按钮和悬浮条 */
-.tiptap-wrapper.is-locked .block-menu-trigger,
-.tiptap-wrapper.is-locked .drag-handle,
+/* 锁定状态下隐藏悬浮条和代码块按钮 */
 .tiptap-wrapper.is-locked .bubble-menu,
 .tiptap-wrapper.is-locked .code-block-copy-btn,
 .tiptap-wrapper.is-locked .code-block-lang-btn {
@@ -1407,7 +1454,7 @@ defineExpose({
 .tiptap > .ProseMirror {
   height: auto;
   min-height: 100%;
-  padding: 40px 48px;
+  padding: 40px 48px 40px 72px;
   color: var(--color-text);
   border-radius: 8px;
 }

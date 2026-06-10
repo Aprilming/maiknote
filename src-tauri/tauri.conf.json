@@ -20,7 +20,7 @@
         "minHeight": 400,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "fullscreen": false,
         "resizable": true,
         "center": true,

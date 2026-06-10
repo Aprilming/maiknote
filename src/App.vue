@@ -106,9 +106,7 @@ onMounted(async () => {
   await directoryStore.loadDirectories()
 
   // 同步窗口置顶状态并监听焦点变化
-  if (settingStore.settings.alwaysOnTop) {
-    await appWindow.setAlwaysOnTop(true)
-  }
+  await appWindow.setAlwaysOnTop(settingStore.settings.alwaysOnTop)
 
   // 窗口失去焦点时隐藏（置顶时不隐藏，对话框打开时不隐藏）
   unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {

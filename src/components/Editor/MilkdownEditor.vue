@@ -86,12 +86,6 @@ const wordCount = computed(() => {
   return count
 })
 
-// blockMode 变化时递增版本号，用于驱动 :key 重建编辑器
-const blockModeVersion = ref(0)
-watch(() => settingStore.settings.blockMode, () => {
-  blockModeVersion.value++
-})
-
 // get current note
 const currentNote = computed(() => noteStore.currentNote)
 
@@ -362,12 +356,11 @@ function handleToggleSourceMode() {
       <TiptapEditor
         v-else
         ref="editorRef"
-        :key="`${currentNote?.id}-${blockModeVersion}`"
+        :key="currentNote?.id"
         :initial-content="localContent"
         :font-size="settingStore.settings.fontSize"
         :font-family="settingStore.settings.fontFamily"
         :is-locked="isLocked"
-        :block-mode="settingStore.settings.blockMode"
         :note-bg-color="currentNote?.backgroundColor"
         @update="handleEditorUpdate"
       />
