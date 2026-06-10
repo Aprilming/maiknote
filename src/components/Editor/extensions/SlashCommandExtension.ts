@@ -134,6 +134,7 @@ export function createSlashCommand() {
               { title: '无序列表', command: 'bulletList' },
               { title: '有序列表', command: 'orderedList' },
               { title: '待办事项', command: 'todo' },
+              { title: 'emoji[表情]', command: 'emoji' },
               { title: '引用', command: 'blockquote' },
               { title: '代码块', command: 'code' },
             ]
