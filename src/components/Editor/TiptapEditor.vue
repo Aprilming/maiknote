@@ -84,6 +84,8 @@ const contextMenuVisible = ref(false)
 const contextMenuRef = ref<HTMLElement>()
 const contextMenuStyle = ref<{ left: string; top: string }>({ left: '0px', top: '0px' })
 const savedSelectionText = ref('') // 保存右键菜单打开时的选中文本
+// 存储右键点击前的 ProseMirror 选区快照（用于在右键处理完成后恢复）
+let rightClickSnapshot: { from: number; to: number } | null = null
 
 // AI 相关
 const isAILoading = ref(false)
@@ -140,11 +142,18 @@ function handleContextMenu(e: MouseEvent) {
     return
   }
 
-  // 检查是否有选中文本
-  if (editor.value) {
+  // 使用右键点击前的选区快照（handleContextMenu 在 capture 阶段触发时，
+  // macOS WebKit 可能已经在底层原生层面修改了 DOM 选区，故不能信任当前值）
+  if (rightClickSnapshot) {
+    const { from, to } = rightClickSnapshot
+    if (from !== to && editor.value) {
+      savedSelectionText.value = editor.value.state.doc.textBetween(from, to, ' ')
+    } else {
+      savedSelectionText.value = ''
+    }
+  } else if (editor.value) {
     const { from, to } = editor.value.state.selection
     if (from !== to) {
-      // 使用 textBetween 获取纯文本内容
       savedSelectionText.value = editor.value.state.doc.textBetween(from, to, ' ')
     } else {
       savedSelectionText.value = ''
@@ -174,22 +183,28 @@ function handleContextMenu(e: MouseEvent) {
     top: `${top}px`
   }
   contextMenuVisible.value = true
+
+  // 在下一个 macrotask 恢复选区：macOS 原生右键处理会在事件分发前后修改 DOM 选区
+  // setTimeout(0) 确保在所有同步事件 + 微任务（含 MutationObserver）完成后恢复
+  if (rightClickSnapshot) {
+    const saved = rightClickSnapshot
+    setTimeout(() => {
+      if (editor.value) {
+        const cur = editor.value.state.selection
+        if (cur.from !== saved.from || cur.to !== saved.to) {
+          editor.value.chain().setTextSelection(saved).run()
+        }
+      }
+      rightClickSnapshot = null
+    }, 0)
+  }
 }
 
 // 隐藏右键菜单
 function hideContextMenu() {
   contextMenuVisible.value = false
   savedSelectionText.value = ''
-}
-
-// mousedown 时保存选中文本
-function handleMouseDown(e: MouseEvent) {
-  if (e.button === 2 && editor.value) { // 右键
-    const { from, to } = editor.value.state.selection
-    if (from !== to) {
-      savedSelectionText.value = editor.value.state.doc.textBetween(from, to, ' ')
-    }
-  }
+  rightClickSnapshot = null
 }
 
 // 点击编辑器容器时确保光标正确放置
@@ -537,6 +552,8 @@ const editor = useEditor({
       },
     },
     handleClickOn(_view, _pos, _node, _nodePos, event) {
+      // 只处理左键点击
+      if (event.button !== 0) return false
       // 点击链接时使用系统浏览器打开
       const target = event.target as HTMLElement
       const anchor = target.closest('a')
@@ -606,7 +623,7 @@ const editor = useEditor({
     handleClick(view, _pos, event) {
       // 只处理左键点击，右键点击保持选择状态
       if (event.button !== 0) {
-        return false
+        return true
       }
 
       // 尝试将光标设置到点击位置
@@ -832,9 +849,23 @@ onMounted(async () => {
     settingStore.settings.aiModel = assistantsStore.aiModel
     settingStore.saveSettings()
   }
-  document.addEventListener('mousedown', handleMouseDown)
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
+
+  // 编辑器 DOM 上 capture 阶段拦截右键 mousedown，保存 ProseMirror 选区快照
+  // 不调用 preventDefault/stopImmediatePropagation，让事件自然传播
+  // macOS WebKit 会在 JS 事件分发前后通过原生层面修改 DOM 选区，
+  // 故本方法仅记录"右键前"的选区状态，后续由 handleContextMenu 负责恢复
+  if (editor.value) {
+    const saveSelectionOnRightMousedown = (e: MouseEvent) => {
+      if (e.button === 2 && editor.value) {
+        const { from, to } = editor.value.state.selection
+        rightClickSnapshot = { from, to }
+      }
+    }
+    editor.value.view.dom.addEventListener('mousedown', saveSelectionOnRightMousedown, true)
+    ;(editor.value.view.dom as any)._saveSelectionOnRightMousedown = saveSelectionOnRightMousedown
+  }
 
   // 监听代码块语言变更
   document.addEventListener('codeblock-language-change', ((e: CustomEvent) => {
@@ -867,7 +898,14 @@ onMounted(async () => {
 
 onUnmounted(() => {
   editor.value?.destroy()
-  document.removeEventListener('mousedown', handleMouseDown)
+  // 清理编辑器 DOM 级别的右键选区保存
+  if (editor.value && (editor.value.view.dom as any)._saveSelectionOnRightMousedown) {
+    editor.value.view.dom.removeEventListener(
+      'mousedown',
+      (editor.value.view.dom as any)._saveSelectionOnRightMousedown,
+      true
+    )
+  }
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
 })
