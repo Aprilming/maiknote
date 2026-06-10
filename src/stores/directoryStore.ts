@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Directory, DirectoryData } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 
@@ -10,6 +10,28 @@ export const useDirectoryStore = defineStore('directory', () => {
   const directories = ref<Directory[]>([])
   const currentDirectoryId = ref<string | null>(null) // null = root
   const isLoading = ref(false)
+
+  // 监听 currentDirectoryId 变化，保存到 localStorage
+  watch(currentDirectoryId, (newId) => {
+    if (newId !== undefined) {
+      localStorage.setItem('lastSelectedDirectoryId', newId ?? '')
+    }
+  })
+
+  /** 从 localStorage 恢复上次选择的目录 */
+  function restoreLastDirectory(): string | null {
+    const saved = localStorage.getItem('lastSelectedDirectoryId')
+    if (saved && saved !== '') {
+      // 确保该目录仍然存在
+      const dir = directories.value.find(d => d.id === saved)
+      if (dir) {
+        currentDirectoryId.value = saved
+        return saved
+      }
+    }
+    currentDirectoryId.value = null
+    return null
+  }
 
   // Getters
   const rootDirectories = computed(() =>
@@ -123,6 +145,7 @@ export const useDirectoryStore = defineStore('directory', () => {
     getDirectory,
     loadDirectories,
     saveDirectories,
+    restoreLastDirectory,
     createDirectory,
     renameDirectory,
     moveDirectory,

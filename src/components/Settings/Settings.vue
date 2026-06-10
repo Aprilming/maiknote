@@ -443,6 +443,20 @@ function getPromptPreview(prompt: string): string {
           </button>
         </div>
 
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-name">记忆上次文件夹</span>
+            <span class="setting-desc">启动时恢复上次选择的文件夹</span>
+          </div>
+          <button
+            class="toggle-btn"
+            :class="{ active: settingStore.settings.rememberLastDirectory }"
+            @click="settingStore.updateSettings('rememberLastDirectory', !settingStore.settings.rememberLastDirectory)"
+          >
+            <span class="toggle-slider"></span>
+          </button>
+        </div>
+
       </section>
 
       <section class="settings-section">

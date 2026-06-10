@@ -105,6 +105,14 @@ onMounted(async () => {
   // 加载目录结构
   await directoryStore.loadDirectories()
 
+  // 如果启用了"记忆上次文件夹"，恢复上次选择的目录
+  if (settingStore.settings.rememberLastDirectory) {
+    const lastDirId = directoryStore.restoreLastDirectory()
+    if (lastDirId !== null) {
+      noteStore.setFilterDirectory(lastDirId)
+    }
+  }
+
   // 同步窗口置顶状态并监听焦点变化
   await appWindow.setAlwaysOnTop(settingStore.settings.alwaysOnTop)
 

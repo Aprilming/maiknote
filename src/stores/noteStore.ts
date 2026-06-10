@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import type { Note, NoteMetadata } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
+import { useDirectoryStore } from '@/stores/directoryStore'
 
 export const useNoteStore = defineStore('note', () => {
   // File system
@@ -256,6 +257,9 @@ export const useNoteStore = defineStore('note', () => {
    */
   function setFilterDirectory(id: string | null) {
     filterDirectoryId.value = id
+    // 同步更新目录选中状态，触发 localStorage 持久化
+    const directoryStore = useDirectoryStore()
+    directoryStore.selectDirectory(id)
     // 确保当前笔记在过滤后的列表中
     const active = activeNoteList.value
     const hasCurrent = active.some(n => n.id === currentNoteId.value)

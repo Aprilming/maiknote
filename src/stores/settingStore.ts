@@ -36,6 +36,7 @@ export interface AppSettings {
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
   autoLaunch: boolean // 开机自启动
+  rememberLastDirectory: boolean // 启动时恢复上次选择的目录
   globalHotkey: string
   autoSaveInterval: number // milliseconds
   autoDeleteDays: number // 0 = disabled
@@ -61,6 +62,7 @@ export const useSettingStore = defineStore('setting', () => {
     windowAlpha: 1.0,
     alwaysOnTop: false,
     autoLaunch: false,
+    rememberLastDirectory: false,
     globalHotkey: 'Option+Cmd+A',
     autoSaveInterval: 500,
     autoDeleteDays: 0,
@@ -162,6 +164,7 @@ export const useSettingStore = defineStore('setting', () => {
       windowAlpha: 1.0,
       alwaysOnTop: false,
       autoLaunch: false,
+      rememberLastDirectory: false,
       globalHotkey: 'Option+Cmd+A',
       autoSaveInterval: 500,
       autoDeleteDays: 0,
