@@ -175,11 +175,6 @@ function selectEmoji(emoji: EmojiItem) {
   }
 }
 
-// emoji 行数计算（用于键盘导航）
-const emojiRows = computed(() => {
-  return Math.ceil(pagedEmojis.value.length / emojiColumns)
-})
-
 function emojiIndexToRowCol(index: number): { row: number; col: number } {
   return {
     row: Math.floor(index / emojiColumns),
@@ -370,7 +365,7 @@ updateFilteredItems('')
               <div class="emoji-category-label">{{ cat.label }}</div>
               <div class="emoji-grid">
                 <button
-                  v-for="(emoji, i) in cat.items"
+                  v-for="emoji in cat.items"
                   :key="emoji.emoji"
                   class="emoji-item"
                   :class="{ 'is-selected': false }"
