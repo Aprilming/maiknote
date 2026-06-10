@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
 
 // 安全获取 Tauri 窗口
@@ -296,7 +297,7 @@ async function handleTemplateClick(template: Assistant) {
     return
   }
   // 添加到用户助手列表
-  await assistantsStore.addAssistant(template.name, template.prompt)
+  await assistantsStore.addAssistant(template.name, template.prompt, template.searchEnabled)
   showToast('添加成功')
 }
 
@@ -318,14 +319,26 @@ async function handleDeleteAssistant(assistant: Assistant) {
 }
 
 // 保存助手
-async function handleSaveAssistant(data: { name: string; prompt: string }) {
+async function handleSaveAssistant(data: { name: string; prompt: string; searchEnabled: boolean }) {
   if (editingAssistant.value) {
     // 编辑模式
     await assistantsStore.updateAssistant(editingAssistant.value.id, data)
   } else {
     // 新建模式
-    await assistantsStore.addAssistant(data.name, data.prompt)
+    await assistantsStore.addAssistant(data.name, data.prompt, data.searchEnabled)
   }
+}
+
+// 切换助手搜索开关
+async function handleToggleSearch(assistant: Assistant) {
+  await assistantsStore.updateAssistant(assistant.id, {
+    searchEnabled: !assistant.searchEnabled,
+  })
+}
+
+// 获取百度 AppBuilder API Key
+function openBaiduKeyPage() {
+  openUrl('https://www.mcpworld.com/zh/detail/cKWidcA4kbFuEMzK9HrbP6')
 }
 
 // 提示词预览（截取前50字符）
@@ -503,6 +516,24 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="setting-name">百度搜索 API Key</span>
+            <span class="setting-desc">启用联网搜索能力 (AppBuilder)</span>
+          </div>
+          <input
+            type="password"
+            :value="settingStore.settings.baiduSearchKey"
+            @change="settingStore.updateSettings('baiduSearchKey', ($event.target as HTMLInputElement).value)"
+            class="text-input"
+            placeholder="请填写 AppBuilder API Key"
+          />
+          <button class="link-btn" @click="openBaiduKeyPage">
+            <i class="i-mdi-open-in-new"></i>
+            查看MCP以及获取 AppBuilder API Key
+          </button>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="setting-name">模板助手</span>
           </div>
           <div class="template-assistants">
@@ -535,6 +566,14 @@ function getPromptPreview(prompt: string): string {
                 <div class="assistant-preview">{{ getPromptPreview(assistant.prompt) }}</div>
               </div>
               <div class="assistant-actions">
+                <button
+                  class="action-btn search-btn"
+                  :class="{ active: assistant.searchEnabled }"
+                  @click="handleToggleSearch(assistant)"
+                  :title="assistant.searchEnabled ? '联网搜索已开启' : '联网搜索已关闭'"
+                >
+                  <i class="i-mdi-web"></i>
+                </button>
                 <button class="action-btn edit-btn" @click="handleEditAssistant(assistant)">
                   <i class="i-mdi-pencil"></i>
                 </button>
@@ -1085,6 +1124,26 @@ function getPromptPreview(prompt: string): string {
   opacity: 0.5;
 }
 
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.link-btn:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -1275,6 +1334,19 @@ function getPromptPreview(prompt: string): string {
 .delete-btn:hover {
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
+}
+
+.search-btn {
+  color: var(--color-text-secondary);
+}
+
+.search-btn:hover {
+  background: var(--color-border);
+  color: var(--color-primary);
+}
+
+.search-btn.active {
+  color: var(--color-primary);
 }
 
 .add-assistant-btn {

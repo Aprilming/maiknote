@@ -10,6 +10,7 @@ import { TaskItem } from '@tiptap/extension-task-item'
 import Image from '@tiptap/extension-image'
 import { useSettingStore } from '@/stores/settingStore'
 import { useAssistantsStore } from '@/stores/assistantsStore'
+import { callBaiduSearch } from '@/composables/useBaiduSearch'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { all, createLowlight } from 'lowlight'
 import { createSlashCommand } from './extensions/SlashCommandExtension'
@@ -322,6 +323,8 @@ function handleAI(assistantId: string) {
   }
 
   hideContextMenu()
+  const assistant = assistantsStore.getAssistantById(assistantId)
+  console.log('[BaiduSearch] 选中助手:', assistant?.name, 'searchEnabled:', assistant?.searchEnabled, 'baiduSearchKey exists:', !!settingStore.settings.baiduSearchKey)
   if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
     showToast('请先在设置中配置 AI')
     return
@@ -352,6 +355,27 @@ async function callAI(assistantId: string) {
   }
   const prompt = String(assistant.prompt || '')
 
+  // 百度搜索增强：如果助手启用了搜索且有 API Key，先搜索获取实时信息
+  let searchContext = ''
+  console.log('[BaiduSearch] 检查搜索条件:', { searchEnabled: assistant.searchEnabled, hasKey: !!settingStore.settings.baiduSearchKey, keyLen: settingStore.settings.baiduSearchKey?.length })
+  if (assistant.searchEnabled && settingStore.settings.baiduSearchKey) {
+    showToast('正在搜索...')
+    try {
+      const searchQuery = pendingSelectionText || text.slice(0, 200)
+      console.log('[BaiduSearch] 开始搜索, query:', searchQuery)
+      const searchResult = await callBaiduSearch(searchQuery, settingStore.settings.baiduSearchKey, {
+        resource_type_filter: [{ type: 'web', top_k: 5 }],
+      })
+      console.log('[BaiduSearch] 搜索结果长度:', searchResult.length)
+      searchContext = `\n\n以下是与用户问题相关的互联网搜索结果（仅供事实参考，请基于搜索结果和你的知识综合回答）：\n${searchResult}\n\n请基于以上搜索结果和你的知识，完成用户请求。`
+    } catch (e) {
+      console.error('[BaiduSearch] 搜索失败:', e)
+      showToast(`搜索失败: ${e instanceof Error ? e.message : '未知错误'}，将继续处理`)
+    }
+  }
+
+  console.log('[BaiduSearch] 最终 searchContext 长度:', searchContext.length, '将注入 LLM')
+
   aiAbortController = new AbortController()
   const signal = aiAbortController.signal
 
@@ -366,7 +390,7 @@ async function callAI(assistantId: string) {
         model: settingStore.settings.aiModel,
         messages: [
           { role: 'system', content: '你是一个笔记助手, 协助用户完成文字处理，严格遵守用户的规则！' },
-          { role: 'user', content: `${prompt}\n\n${text}` }
+          { role: 'user', content: `${prompt}\n\n${text}${searchContext}` }
         ],
         temperature: 0.7,
         stream: true  // 启用流式响应
@@ -1078,6 +1102,7 @@ defineExpose({
             @click="handleAI(assistant.id)"
           >
             <span>{{ assistant.name }}</span>
+            <i v-if="assistant.searchEnabled" class="i-mdi-web context-menu-search-icon"></i>
           </div>
         </template>
         <template v-else-if="hasAIConfig">
@@ -1280,6 +1305,16 @@ defineExpose({
 
 .context-menu-item--disabled:hover {
   background: transparent;
+}
+
+.context-menu-item {
+  justify-content: space-between;
+}
+
+.context-menu-search-icon {
+  font-size: 14px;
+  color: var(--color-primary);
+  opacity: 0.7;
 }
 
 /* BubbleMenu 新增元素 */

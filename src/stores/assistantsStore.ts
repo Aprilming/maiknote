@@ -8,6 +8,7 @@ export interface Assistant {
   id: string
   name: string
   prompt: string
+  searchEnabled: boolean
   createdAt: number // timestamp in milliseconds
 }
 
@@ -33,6 +34,7 @@ export const defaultAssistants: Assistant[] = [
         '禁止输出"注：""备注：""注意："等注释性内容\n' +
         '禁止输出"已优化""优化笔记""以下是"等无关话语',
     createdAt: 0,
+    searchEnabled: true,
   },
   {
     id: 'template-2',
@@ -49,6 +51,7 @@ export const defaultAssistants: Assistant[] = [
         '若无法提取到任务，则对笔记进行格式优化后输出\n' +
         '不要输出任何引导语（如"以下是……"）',
     createdAt: 0,
+    searchEnabled: true,
   },
   {
     id: 'template-3',
@@ -68,6 +71,7 @@ export const defaultAssistants: Assistant[] = [
         '若用户的提示词过于简单，主动补全合理的默认规则\n' +
         '若存在矛盾规则，以最后出现的为准并合并',
     createdAt: 0,
+    searchEnabled: true,
   },
 ]
 
@@ -106,7 +110,10 @@ export const useAssistantsStore = defineStore('assistants', () => {
 
       if (content) {
         const parsed = JSON.parse(content)
-        assistants.value = parsed.assistants || []
+        assistants.value = (parsed.assistants || []).map((a: Record<string, unknown>) => ({
+          ...a,
+          searchEnabled: a.searchEnabled === true,
+        })) as Assistant[]
 
         // Load AI config from iCloud
         if (parsed.aiConfig) {
@@ -146,11 +153,12 @@ export const useAssistantsStore = defineStore('assistants', () => {
   /**
    * Add a new assistant
    */
-  async function addAssistant(name: string, prompt: string): Promise<Assistant> {
+  async function addAssistant(name: string, prompt: string, searchEnabled = false): Promise<Assistant> {
     const newAssistant: Assistant = {
       id: generateId(),
       name,
       prompt,
+      searchEnabled,
       createdAt: Date.now(),
     }
 
@@ -162,7 +170,7 @@ export const useAssistantsStore = defineStore('assistants', () => {
   /**
    * Update an existing assistant
    */
-  async function updateAssistant(id: string, updates: Partial<Pick<Assistant, 'name' | 'prompt'>>): Promise<boolean> {
+  async function updateAssistant(id: string, updates: Partial<Pick<Assistant, 'name' | 'prompt' | 'searchEnabled'>>): Promise<boolean> {
     const index = assistants.value.findIndex(a => a.id === id)
     if (index === -1) {
       return false

@@ -9,12 +9,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'save', data: { name: string; prompt: string }): void
+  (e: 'save', data: { name: string; prompt: string; searchEnabled: boolean }): void
 }>()
 
 // 表单数据
 const name = ref('')
 const prompt = ref('')
+const searchEnabled = ref(false)
 
 // 是否为编辑模式
 const isEditMode = computed(() => !!props.assistant)
@@ -29,9 +30,11 @@ watch(
     if (!isVisible) {
       name.value = ''
       prompt.value = ''
+      searchEnabled.value = false
     } else if (assistant) {
       name.value = assistant.name
       prompt.value = assistant.prompt
+      searchEnabled.value = assistant.searchEnabled ?? false
     }
   },
   { immediate: true }
@@ -50,6 +53,7 @@ function handleSave() {
   emit('save', {
     name: name.value.trim(),
     prompt: prompt.value.trim(),
+    searchEnabled: searchEnabled.value,
   })
   closeDialog()
 }
@@ -93,6 +97,20 @@ function handleOverlayClick(e: MouseEvent) {
                 placeholder="请输入提示词内容"
                 rows="6"
               ></textarea>
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">联网搜索</label>
+              <div class="toggle-with-hint">
+                <button
+                  class="toggle-btn"
+                  :class="{ active: searchEnabled }"
+                  @click="searchEnabled = !searchEnabled"
+                >
+                  <span class="toggle-slider"></span>
+                </button>
+                <span class="toggle-hint">启用后，AI 将先搜索互联网获取实时信息，再处理内容</span>
+              </div>
             </div>
           </div>
 
@@ -305,5 +323,50 @@ function handleOverlayClick(e: MouseEvent) {
 .dialog-leave-to .dialog-container {
   transform: scale(0.95);
   opacity: 0;
+}
+
+.toggle-with-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.toggle-btn {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 12px;
+  background: var(--color-border);
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.toggle-btn.active {
+  background: var(--color-primary);
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-btn.active .toggle-slider {
+  transform: translateX(20px);
 }
 </style>

@@ -49,6 +49,8 @@ export interface AppSettings {
   aiOptimizePrompt: string
   aiTodoPrompt: string
   aiPromptPrompt: string
+  // 百度搜索设置
+  baiduSearchKey: string
 }
 
 export const useSettingStore = defineStore('setting', () => {
@@ -114,7 +116,8 @@ export const useSettingStore = defineStore('setting', () => {
         '不输出"以下是优化后的提示词"等引导语\n' +
         '特殊情况\n' +
         '若用户的提示词过于简单，主动补全合理的默认规则\n' +
-        '若存在矛盾规则，以最后出现的为准并合并'
+        '若存在矛盾规则，以最后出现的为准并合并',
+    baiduSearchKey: '',
   })
 
   // Actions
@@ -216,7 +219,8 @@ export const useSettingStore = defineStore('setting', () => {
           '不输出"以下是优化后的提示词"等引导语\n' +
           '特殊情况\n' +
           '若用户的提示词过于简单，主动补全合理的默认规则\n' +
-          '若存在矛盾规则，以最后出现的为准并合并'
+          '若存在矛盾规则，以最后出现的为准并合并',
+      baiduSearchKey: '',
     }
     saveSettings()
     // 重置 iCloud 中的 AI 配置
