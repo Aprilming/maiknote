@@ -47,7 +47,9 @@ function showToast(message: string, duration = 2000) {
   setTimeout(() => toast.remove(), duration)
 }
 
-const { currentVersion, latestVersion, isLoading: checkLoading, updateAvailable, checkError, checkForUpdates, openReleasePage, tagsUrl } = useVersionCheck()
+const { currentVersion, latestVersion, downloadState, downloadProgress, updateAvailable, checkError, checkForUpdates, downloadAndInstall } = useVersionCheck()
+const checkLoading = computed(() => downloadState.value === 'checking')
+const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
 
 const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
@@ -673,12 +675,16 @@ function getPromptPreview(prompt: string): string {
 
         <div v-if="updateAvailable" class="setting-item update-available">
           <div class="update-info">
-            <i class="i-mdi-update"></i>
-            <span>{{ $t('settings.updateAvailable', { version: latestVersion }) }}</span>
+            <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
+            <i v-else class="i-mdi-update"></i>
+            <span v-if="downloadState === 'downloading'">{{ $t('settings.downloading', { progress: downloadProgress }) }}</span>
+            <span v-else>{{ $t('settings.updateAvailable', { version: latestVersion }) }}</span>
           </div>
-          <button class="download-btn" @click="openReleasePage">
-            <span>{{ $t('settings.download') }}</span>
-            <i class="i-mdi-open-in-new"></i>
+          <button class="download-btn" :disabled="downloadState === 'downloading'" @click="downloadAndInstall">
+            <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
+            <i v-else class="i-mdi-download"></i>
+            <span v-if="downloadState === 'downloading'">{{ downloadProgress }}%</span>
+            <span v-else>{{ $t('settings.installUpdate') }}</span>
           </button>
         </div>
 

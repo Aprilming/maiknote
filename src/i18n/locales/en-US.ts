@@ -1,7 +1,8 @@
 export default {
   'app.loading': 'Loading...',
   'app.updateFound': 'New version v{version} found',
-  'app.download': 'Download',
+  'app.download': 'Update',
+  'app.downloading': 'Downloading {progress}%',
 
   'settings.title': 'Settings',
   'settings.general': 'General',
@@ -34,7 +35,9 @@ export default {
   'settings.currentVersion': 'Current Version',
   'settings.checkUpdate': 'Check for Updates',
   'settings.updateAvailable': 'New version v{version} available',
-  'settings.download': 'Download',
+  'settings.download': 'Update',
+  'settings.installUpdate': 'Install Update',
+  'settings.downloading': 'Downloading {progress}%',
   'settings.upToDate': 'Up to date (v{version})',
   'settings.versionTags': 'Version Tags',
 
@@ -216,6 +219,8 @@ export default {
 
   'version.parseError': 'Unable to parse version info',
   'version.networkError': 'Network error, please check your connection',
+  'version.noUpdate': 'No updates available',
+  'version.downloadError': 'Download failed, please try again',
 
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',

@@ -1,6 +1,6 @@
 import { ref } from 'vue'
-import { openUrl } from '@tauri-apps/plugin-opener'
-import { fetch } from '@tauri-apps/plugin-http'
+import { check } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import i18n from '../i18n'
 import packageJson from '../../package.json'
 
@@ -8,80 +8,92 @@ const currentVersion = packageJson.version
 
 // 最新版本信息
 const latestVersion = ref<string | null>(null)
-const isLoading = ref(false)
 const updateAvailable = ref(false)
 const checkError = ref<string | null>(null)
-const releaseUrl = 'https://github.com/Aprilming/maiknote/releases'
-const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
 
-// 比较版本号
-function compareVersions(current: string, latest: string): boolean {
-  const currentParts = current.replace(/^v/, '').split('.').map(Number)
-  const latestParts = latest.replace(/^v/, '').split('.').map(Number)
+// 下载安装状态
+type DownloadState = 'idle' | 'checking' | 'downloading' | 'installing' | 'done' | 'error'
+const downloadState = ref<DownloadState>('idle')
+const downloadProgress = ref(0)
 
-  for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
-    const a = currentParts[i] || 0
-    const b = latestParts[i] || 0
-    if (b > a) return true
-    if (a > b) return false
-  }
-  return false
-}
-
-// 获取最新版本
+// 检查更新
 async function checkForUpdates(): Promise<boolean> {
-  isLoading.value = true
-  updateAvailable.value = false
+  downloadState.value = 'checking'
   checkError.value = null
+  updateAvailable.value = false
 
   try {
-    // 请求 releases/latest，跟随重定向获取最终 URL
-    const response = await fetch('https://github.com/Aprilming/maiknote/releases/latest', {
-      method: 'GET',
-      redirect: 'follow'
-    })
-
-    // 获取重定向后的最终 URL
-    const finalUrl = response.url
-
-    // 从 URL 中提取版本号，格式: https://github.com/Aprilming/maiknote/releases/tag/v0.2.0
-    const match = finalUrl.match(/\/releases\/tag\/(v?[\d.]+)/)
-
-    if (match) {
-      latestVersion.value = match[1]
-
-      if (compareVersions(currentVersion, match[1])) {
-        updateAvailable.value = true
-      }
-    } else {
-      checkError.value = i18n.global.t('version.parseError')
+    const update = await check()
+    if (update) {
+      latestVersion.value = update.version
+      updateAvailable.value = true
+      downloadState.value = 'idle'
+      return true
     }
-
-    return updateAvailable.value
-  } catch (error) {
-    console.error('Failed to check for updates:', error)
-    checkError.value = i18n.global.t('version.networkError')
+    downloadState.value = 'idle'
     return false
-  } finally {
-    isLoading.value = false
+  } catch (error) {
+    console.error('Update check failed:', error)
+    checkError.value = i18n.global.t('version.networkError')
+    downloadState.value = 'error'
+    return false
   }
 }
 
-// 打开 release 页面
-async function openReleasePage() {
-  await openUrl(releaseUrl)
+// 下载并安装更新
+async function downloadAndInstall(): Promise<void> {
+  let contentLength = 0
+  let downloaded = 0
+
+  try {
+    const update = await check()
+    if (!update) {
+      checkError.value = i18n.global.t('version.noUpdate')
+      downloadState.value = 'error'
+      return
+    }
+
+    downloadState.value = 'downloading'
+    downloadProgress.value = 0
+
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case 'Started':
+          contentLength = event.data.contentLength ?? 0
+          downloaded = 0
+          break
+        case 'Progress':
+          downloaded += event.data.chunkLength
+          if (contentLength > 0) {
+            downloadProgress.value = Math.round(
+              (downloaded / contentLength) * 100
+            )
+          }
+          break
+        case 'Finished':
+          downloadState.value = 'installing'
+          break
+      }
+    })
+
+    downloadState.value = 'done'
+    await relaunch()
+  } catch (error) {
+    console.error('Update download/install failed:', error)
+    checkError.value = i18n.global.t('version.downloadError')
+    downloadState.value = 'error'
+  }
 }
 
 export function useVersionCheck() {
   return {
     currentVersion,
     latestVersion,
-    isLoading,
     updateAvailable,
     checkError,
-    releaseUrl,
-    tagsUrl,
+    downloadState,
+    downloadProgress,
     checkForUpdates,
-    openReleasePage
+    downloadAndInstall,
   }
 }

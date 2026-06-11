@@ -31,7 +31,7 @@ watch(() => settingStore.settings.language, (newLang) => {
   locale.value = newLang
 }, { immediate: true })
 
-const { latestVersion, updateAvailable, checkForUpdates, openReleasePage } = useVersionCheck()
+const { latestVersion, updateAvailable, checkForUpdates, downloadAndInstall, downloadState, downloadProgress } = useVersionCheck()
 
 // 当前页面：'editor' | 'settings' | 'search'
 const currentView = ref<'editor' | 'settings' | 'search'>('editor')
@@ -215,11 +215,18 @@ onUnmounted(() => {
       <!-- 更新提示 -->
       <div v-if="showUpdateToast" class="update-toast">
         <div class="update-toast-content">
-          <i class="i-mdi-update"></i>
-          <span>{{ $t('app.updateFound', { version: latestVersion }) }}</span>
+          <i v-if="downloadState === 'downloading'" class="i-mdi-loading animate-spin"></i>
+          <i v-else class="i-mdi-update"></i>
+          <span v-if="downloadState === 'downloading'">{{ $t('app.downloading', { progress: downloadProgress }) }}</span>
+          <span v-else>{{ $t('app.updateFound', { version: latestVersion }) }}</span>
         </div>
-        <button class="update-toast-btn" @click="openReleasePage">
-          {{ $t('app.download') }}
+        <button
+          class="update-toast-btn"
+          :disabled="downloadState === 'downloading'"
+          @click="downloadAndInstall"
+        >
+          <span v-if="downloadState === 'downloading'">{{ downloadProgress }}%</span>
+          <span v-else>{{ $t('app.download') }}</span>
         </button>
       </div>
     </div>

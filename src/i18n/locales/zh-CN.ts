@@ -1,7 +1,8 @@
 export default {
   'app.loading': '加载中...',
   'app.updateFound': '发现新版本 v{version}',
-  'app.download': '前往下载',
+  'app.download': '下载更新',
+  'app.downloading': '下载中 {progress}%',
 
   'settings.title': '设置',
   'settings.general': '通用设置',
@@ -34,7 +35,9 @@ export default {
   'settings.currentVersion': '当前版本',
   'settings.checkUpdate': '检查更新',
   'settings.updateAvailable': '发现新版本 v{version}',
-  'settings.download': '前往下载',
+  'settings.download': '下载更新',
+  'settings.installUpdate': '安装更新',
+  'settings.downloading': '下载中 {progress}%',
   'settings.upToDate': '已是最新版本 (v{version})',
   'settings.versionTags': '版本标签',
 
@@ -217,6 +220,8 @@ export default {
 
   'version.parseError': '无法解析版本信息',
   'version.networkError': '网络错误，请检查网络连接',
+  'version.noUpdate': '未检测到更新',
+  'version.downloadError': '下载失败，请稍后重试',
 
   'common.cancel': '取消',
   'common.delete': '删除',

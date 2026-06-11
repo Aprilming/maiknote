@@ -48,6 +48,8 @@ jobs:
             runner: macos-latest
             artifact: MaikNote-x86_64
     runs-on: ${{ matrix.runner }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,7 +64,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
   # 合并双架构产物，创建 GitHub Release
   create-release:
@@ -74,15 +79,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-      - run: |
-          mkdir -p release-assets
-          cp MaikNote-aarch64/*.dmg release-assets/
-          cp MaikNote-x86_64/*.dmg release-assets/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets update-artifacts
+          cp MaikNote-aarch64/*.dmg              release-assets/   || true
+          cp MaikNote-x86_64/*.dmg               release-assets/   || true
+          cp MaikNote-aarch64/*.app.tar.gz       update-artifacts/ || true
+          cp MaikNote-x86_64/*.app.tar.gz        update-artifacts/ || true
+          cp MaikNote-aarch64/*.app.tar.gz.sig   update-artifacts/ || true
+          cp MaikNote-x86_64/*.app.tar.gz.sig    update-artifacts/ || true
+      - name: Generate latest.json
+        run: node scripts/generate-latest-json.js "${{ github.ref_name }}"
       - name: Create Release
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            release-assets/*.dmg
+            release-assets/*.dmg \
+            update-artifacts/*.app.tar.gz \
+            update-artifacts/*.app.tar.gz.sig \
+            latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
