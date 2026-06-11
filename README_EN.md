@@ -27,28 +27,34 @@ MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 - **What You See Is What You Get** — Live Markdown rendering, no preview toggle needed
 - **Less Is More** — Minimal UI that stays out of the way of your thoughts
 
-## Demo
-
-![Demo](resources/xw_20260324182911.gif)
-
-## AI Demo
-
-![AIDemo](resources/xw_20260325150145.gif)
-
 ## Screenshots
 
-| Main | Search | Settings |
-|:---:|:---:|:---:|
-| ![Main](resources/img1.png) | ![Search](resources/img2.png) | ![Settings](resources/img3.png) |
+![Main](resources/demo1.png)
+![demo1-dark.png](resources/demo1-dark.png)
 
-**Right-click AI Features**
+|             Folder              |             Search             |             Theme              |
+|:-------------------------------:|:------------------------------:|:------------------------------:|
+| ![demo6.png](resources/demo6.png) | ![Search](resources/demo3.png) | ![Theme](resources/demo4.png) |
 
-![AI](resources/img.png)
+
+|             Background              |             AI Settings             |            Shortcuts             |
+|:----------------------------------:|:----------------------------------:|:-------------------------------:|
+| ![demo2.png](resources/demo2.png) | ![demo5.png](resources/demo5.png) | ![Shortcuts](resources/demo7.png) |
+
+
+## AI Demo
+> Selected text: only the selection is sent to AI
+>
+> No selection: the entire current note is sent to AI
+
+![xw_20260611145459.gif](resources/xw_20260611145459.gif)
+
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |:---|:---|
+| `Shift+Opt+Cmd+A` | Center window (global, works when hidden) |
 | `Cmd+Opt+A` | Toggle main window |
 | `Cmd+N` | New note |
 | `Cmd+F` | Search notes |
@@ -58,7 +64,7 @@ MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 | `Cmd+,` | Open settings |
 | `Esc` | Clear search |
 
-> You can also swipe left/right on the trackpad or scroll horizontally with a mouse to switch notes.
+> Trackpad swipe left/right or mouse horizontal scroll also switches notes.
 
 ## Features
 
@@ -75,12 +81,8 @@ MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 - ✅ iCloud directory storage
 - ✅ Import / Export
 - ✅ Dark / Light theme toggle
-- ✅ Block drag and drop reordering
-- ✅ Block operation menu (convert type, font style, colors, move up/down, duplicate, delete)
-
-**Planned**
-
-- ⏳ Code block style aligned with Typora
+- ✅ Custom note background color
+- ✅ Folder / Directory tree
 
 ## Data Storage
 
@@ -102,6 +104,7 @@ Notes are stored in your iCloud directory for seamless multi-device sync:
 | State | Pinia 2.x |
 | Styling | UnoCSS |
 | Storage | Local `.md` files (iCloud directory) |
+| AI | DeepSeek API |
 
 ## Development
 
