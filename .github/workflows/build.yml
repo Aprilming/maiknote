@@ -87,22 +87,26 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets update-artifacts
-          cp MaikNote-aarch64/*.dmg              release-assets/   || true
-          cp MaikNote-x86_64/*.dmg               release-assets/   || true
-          cp MaikNote-aarch64/*.app.tar.gz       update-artifacts/ || true
-          cp MaikNote-x86_64/*.app.tar.gz        update-artifacts/ || true
-          cp MaikNote-aarch64/*.app.tar.gz.sig   update-artifacts/ || true
-          cp MaikNote-x86_64/*.app.tar.gz.sig    update-artifacts/ || true
+          find MaikNote-aarch64 -name '*.dmg'           -exec cp {} release-assets/   \;
+          find MaikNote-x86_64  -name '*.dmg'           -exec cp {} release-assets/   \;
+          find MaikNote-aarch64 -name '*.app.tar.gz'     -exec cp {} update-artifacts/ \;
+          find MaikNote-x86_64  -name '*.app.tar.gz'     -exec cp {} update-artifacts/ \;
+          find MaikNote-aarch64 -name '*.app.tar.gz.sig' -exec cp {} update-artifacts/ \;
+          find MaikNote-x86_64  -name '*.app.tar.gz.sig' -exec cp {} update-artifacts/ \;
+          ls -la release-assets/
+          ls -la update-artifacts/
       - name: Generate latest.json
         run: node scripts/generate-latest-json.js "${{ github.ref_name }}"
       - name: Create Release
         run: |
+          shopt -s nullglob
+          ASSETS=()
+          for f in release-assets/*.dmg update-artifacts/*.app.tar.gz update-artifacts/*.app.tar.gz.sig latest.json; do
+            [[ -f "$f" ]] && ASSETS+=("$f")
+          done
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            release-assets/*.dmg \
-            update-artifacts/*.app.tar.gz \
-            update-artifacts/*.app.tar.gz.sig \
-            latest.json
+            "${ASSETS[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
