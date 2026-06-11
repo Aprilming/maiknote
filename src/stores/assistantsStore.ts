@@ -89,6 +89,7 @@ export const useAssistantsStore = defineStore('assistants', () => {
   const aiKey = ref(defaultAiConfig.key)
   const aiModel = ref(defaultAiConfig.model)
   const aiConfigExists = ref(false)
+  const baiduSearchKey = ref('')
 
   // File system operations
   const { getICloudPath } = useFileSystem()
@@ -122,6 +123,11 @@ export const useAssistantsStore = defineStore('assistants', () => {
           aiModel.value = parsed.aiConfig.model || defaultAiConfig.model
           aiConfigExists.value = true
         }
+
+        // Load Baidu search key from iCloud
+        if (parsed.baiduSearchKey) {
+          baiduSearchKey.value = parsed.baiduSearchKey
+        }
       }
 
       isLoaded.value = true
@@ -143,6 +149,7 @@ export const useAssistantsStore = defineStore('assistants', () => {
         version: 1,
         assistants: assistants.value,
         aiConfig: { url: aiUrl.value, key: aiKey.value, model: aiModel.value },
+        baiduSearchKey: baiduSearchKey.value,
       }, null, 2)
       await invoke('write_assistants', { basePath: path, content })
     } catch (e) {
@@ -236,6 +243,11 @@ export const useAssistantsStore = defineStore('assistants', () => {
     await saveAssistants()
   }
 
+  async function updateBaiduSearchKey(key: string): Promise<void> {
+    baiduSearchKey.value = key
+    await saveAssistants()
+  }
+
   return {
     assistants,
     isLoaded,
@@ -243,6 +255,7 @@ export const useAssistantsStore = defineStore('assistants', () => {
     aiUrl,
     aiKey,
     aiModel,
+    baiduSearchKey,
     loadAssistants,
     saveAssistants,
     addAssistant,
@@ -252,5 +265,6 @@ export const useAssistantsStore = defineStore('assistants', () => {
     hasPrompt,
     hasUserPrompt,
     updateAiConfig,
+    updateBaiduSearchKey,
   }
 })

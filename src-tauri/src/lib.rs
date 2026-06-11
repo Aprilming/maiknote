@@ -3,6 +3,7 @@ pub mod autostart;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
@@ -11,11 +12,25 @@ use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectStat
 #[cfg(target_os = "macos")]
 extern "C" {
     fn CGShieldingWindowLevel() -> i32;
+    fn CGDisplayRegisterReconfigurationCallback(
+        callback: Option<
+            unsafe extern "C" fn(u32, u32, *mut std::ffi::c_void),
+        >,
+        user_info: *mut std::ffi::c_void,
+    ) -> i32;
 }
+
+#[cfg(target_os = "macos")]
+static DISPLAY_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+#[allow(non_upper_case_globals)]
+const kCGDisplayBeginConfiguration: u32 = 1 << 0;
 
 /// 全局快捷键状态
 struct GlobalShortcutState {
     current_shortcut: Mutex<Option<Shortcut>>,
+    center_shortcut: Mutex<Option<Shortcut>>,
 }
 
 /// 用户设置的窗口透明度（失焦时需要补偿）
@@ -151,6 +166,150 @@ async fn register_global_shortcut(
     }
 
     println!("Global shortcut registered: {}", shortcut_str);
+    Ok(())
+}
+
+/// 注册全局居中快捷键
+#[tauri::command]
+async fn register_center_shortcut(
+    app: AppHandle,
+    shortcut_state: State<'_, GlobalShortcutState>,
+    shortcut_str: String,
+) -> Result<(), String> {
+    if shortcut_str.is_empty() {
+        // 取消注册
+        let mut current = shortcut_state.center_shortcut.lock().unwrap();
+        if let Some(old) = current.take() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = shortcut_str.split('+').collect();
+    let mut modifiers = Modifiers::empty();
+    let mut key_code: Option<Code> = None;
+
+    for part in &parts {
+        match *part {
+            "Ctrl" | "Control" => modifiers |= Modifiers::CONTROL,
+            "Option" | "Alt" => modifiers |= Modifiers::ALT,
+            "Shift" => modifiers |= Modifiers::SHIFT,
+            "Cmd" | "Meta" | "CommandOrControl" => modifiers |= Modifiers::META,
+            _ => {
+                let p = *part;
+                key_code = match p {
+                    "A" => Some(Code::KeyA),
+                    "B" => Some(Code::KeyB),
+                    "C" => Some(Code::KeyC),
+                    "D" => Some(Code::KeyD),
+                    "E" => Some(Code::KeyE),
+                    "F" => Some(Code::KeyF),
+                    "G" => Some(Code::KeyG),
+                    "H" => Some(Code::KeyH),
+                    "I" => Some(Code::KeyI),
+                    "J" => Some(Code::KeyJ),
+                    "K" => Some(Code::KeyK),
+                    "L" => Some(Code::KeyL),
+                    "M" => Some(Code::KeyM),
+                    "N" => Some(Code::KeyN),
+                    "O" => Some(Code::KeyO),
+                    "P" => Some(Code::KeyP),
+                    "Q" => Some(Code::KeyQ),
+                    "R" => Some(Code::KeyR),
+                    "S" => Some(Code::KeyS),
+                    "T" => Some(Code::KeyT),
+                    "U" => Some(Code::KeyU),
+                    "V" => Some(Code::KeyV),
+                    "W" => Some(Code::KeyW),
+                    "X" => Some(Code::KeyX),
+                    "Y" => Some(Code::KeyY),
+                    "Z" => Some(Code::KeyZ),
+                    "0" => Some(Code::Digit0),
+                    "1" => Some(Code::Digit1),
+                    "2" => Some(Code::Digit2),
+                    "3" => Some(Code::Digit3),
+                    "4" => Some(Code::Digit4),
+                    "5" => Some(Code::Digit5),
+                    "6" => Some(Code::Digit6),
+                    "7" => Some(Code::Digit7),
+                    "8" => Some(Code::Digit8),
+                    "9" => Some(Code::Digit9),
+                    "Space" => Some(Code::Space),
+                    "Enter" | "Return" => Some(Code::Enter),
+                    "Tab" => Some(Code::Tab),
+                    "Escape" | "Esc" => Some(Code::Escape),
+                    "MetaLeft" | "MetaRight" | "Meta" => Some(Code::MetaLeft),
+                    "ControlLeft" | "ControlRight" | "Ctrl" => Some(Code::ControlLeft),
+                    "AltLeft" | "AltRight" | "Alt" | "Option" => Some(Code::AltLeft),
+                    "ShiftLeft" | "ShiftRight" | "Shift" => Some(Code::ShiftLeft),
+                    _ => None,
+                };
+            }
+        }
+    }
+
+    let key_code = key_code.ok_or("Invalid key code")?;
+    let shortcut = Shortcut::new(Some(modifiers), key_code);
+
+    // 取消之前的居中快捷键
+    {
+        let mut current = shortcut_state.center_shortcut.lock().unwrap();
+        if let Some(old) = current.take() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+    }
+
+    // 注册新居中快捷键
+    let app_handle = app.clone();
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                let app_clone = app_handle.clone();
+                let _ = app_handle.run_on_main_thread(move || {
+                    if let Some(window) = app_clone.get_webview_window("main") {
+                        #[cfg(target_os = "macos")]
+                        {
+                            use objc2::msg_send;
+                            use objc2::runtime::AnyObject;
+                            use cocoa::base::id;
+
+                            let ns_window = window.ns_window().unwrap() as id;
+                            let ns_window_ptr = ns_window as *mut AnyObject;
+                            let is_on_space: bool = unsafe { msg_send![ns_window_ptr, isOnActiveSpace] };
+                            let is_visible: bool = unsafe { msg_send![ns_window_ptr, isVisible] };
+                            if is_on_space && is_visible {
+                                let _ = window.center();
+                                return;
+                            }
+                            show_window_current_space_impl(&app_clone);
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = window.center();
+                    }
+                });
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut current = shortcut_state.center_shortcut.lock().unwrap();
+        *current = Some(shortcut);
+    }
+
+    println!("Center shortcut registered: {}", shortcut_str);
+    Ok(())
+}
+
+/// 居中窗口
+#[tauri::command]
+async fn center_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.center().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -619,6 +778,74 @@ async fn set_window_alpha(
     Ok(())
 }
 
+/// 检查窗口是否在可见显示区域内，若不在则居中到主屏幕
+#[cfg(target_os = "macos")]
+fn ensure_window_visible(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let Ok(pos) = window.outer_position() else { return };
+    let Ok(size) = window.outer_size() else { return };
+    let Ok(monitors) = window.available_monitors() else { return };
+    if monitors.is_empty() {
+        return;
+    }
+
+    // 检查窗口是否与任一显示器的可见区域相交
+    let window_right = (pos.x as i64) + (size.width as i64);
+    let window_bottom = (pos.y as i64) + (size.height as i64);
+
+    let is_on_screen = monitors.iter().any(|m| {
+        let mpos = m.position();
+        let msize = m.size();
+        let m_right = (mpos.x as i64) + (msize.width as i64);
+        let m_bottom = (mpos.y as i64) + (msize.height as i64);
+        (window_right > mpos.x as i64)
+            && ((pos.x as i64) < m_right)
+            && (window_bottom > mpos.y as i64)
+            && ((pos.y as i64) < m_bottom)
+    });
+
+    if !is_on_screen {
+        // 窗口不在任何可见显示器内，居中到第一个显示器
+        if let Some(primary) = monitors.first() {
+            let mpos = primary.position();
+            let msize = primary.size();
+            let x = mpos.x + (msize.width as i32 - size.width as i32) / 2;
+            let y = mpos.y + (msize.height as i32 - size.height as i32) / 2;
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition {
+                    x: x.max(mpos.x),
+                    y: y.max(mpos.y),
+                },
+            ));
+        }
+    }
+}
+
+/// 显示器配置变化回调（拔插显示器、分辨率变化等）
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn display_reconfiguration_callback(
+    _display: u32,
+    flags: u32,
+    _user_info: *mut std::ffi::c_void,
+) {
+    // 跳过配置开始阶段，只在配置完成后处理
+    if (flags & kCGDisplayBeginConfiguration) != 0 {
+        return;
+    }
+
+    if let Some(handle) = DISPLAY_APP_HANDLE.get() {
+        let handle_for_spawn = handle.clone();
+        std::thread::spawn(move || {
+            // 等待显示器配置稳定
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let handle_for_main = handle_for_spawn.clone();
+            let _ = handle_for_spawn.run_on_main_thread(move || {
+                ensure_window_visible(&handle_for_main);
+            });
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 检测是否是开机自启启动
@@ -634,6 +861,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(GlobalShortcutState {
             current_shortcut: Mutex::new(None),
+            center_shortcut: Mutex::new(None),
         })
         .manage(WindowAlphaState {
             alpha: Mutex::new(1.0),
@@ -677,6 +905,20 @@ pub fn run() {
                 }
             }
 
+            // 注册显示器变化回调，拔插显示器/分辨率变化时自适应窗口位置
+            #[cfg(target_os = "macos")]
+            {
+                DISPLAY_APP_HANDLE.set(app.handle().clone()).ok();
+                unsafe {
+                    CGDisplayRegisterReconfigurationCallback(
+                        Some(display_reconfiguration_callback),
+                        std::ptr::null_mut(),
+                    );
+                }
+                // 启动时也检查一次（window-state 可能恢复了一个屏幕外的位置）
+                ensure_window_visible(app.handle());
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -699,6 +941,8 @@ pub fn run() {
             ensure_images_folder,
             save_image,
             register_global_shortcut,
+            register_center_shortcut,
+            center_window,
             toggle_window,
             set_window_alpha,
             autostart::enable_autostart,

@@ -59,6 +59,7 @@ onMounted(async () => {
     settingStore.settings.aiUrl = assistantsStore.aiUrl
     settingStore.settings.aiKey = assistantsStore.aiKey
     settingStore.settings.aiModel = assistantsStore.aiModel
+    settingStore.settings.baiduSearchKey = assistantsStore.baiduSearchKey
     settingStore.saveSettings()
   }
   try {
@@ -76,25 +77,27 @@ function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
   const modifiers = parts.slice(0, -1)
 
   const ctrlMatch = modifiers.some(m => m.toLowerCase() === 'ctrl') ? e.ctrlKey : !e.ctrlKey
-  const altMatch = modifiers.some(m => m.toLowerCase() === 'alt') ? e.altKey : !e.altKey
+  const altMatch = modifiers.some(m => /^alt|option$/.test(m.toLowerCase())) ? e.altKey : !e.altKey
   const shiftMatch = modifiers.some(m => m.toLowerCase() === 'shift') ? e.shiftKey : !e.shiftKey
   const cmdMatch = modifiers.some(m => m.toLowerCase() === 'cmd') ? e.metaKey : !e.metaKey
 
   let keyMatch = false
-  if (key === 'arrowleft') {
-    keyMatch = e.key === 'ArrowLeft'
-  } else if (key === 'arrowright') {
-    keyMatch = e.key === 'ArrowRight'
+  if (/^[a-z]$/.test(key)) {
+    keyMatch = e.code === `Key${key.toUpperCase()}`
+  } else if (/^\d$/.test(key)) {
+    keyMatch = e.key === key
   } else if (key === 'backspace') {
     keyMatch = e.key === 'Backspace'
-  } else if (key === 'n' || key === 'f' || key === 'p' || key === 'l') {
-    keyMatch = e.key.toLowerCase() === key
-  } else if (key === '[') {
-    keyMatch = e.key === '['
-  } else if (key === ']') {
-    keyMatch = e.key === ']'
-  } else if (key === '/') {
-    keyMatch = e.key === '/'
+  } else if (key === '[' || key === ']' || key === '/') {
+    keyMatch = e.key === key
+  } else if (key === 'space') {
+    keyMatch = e.key === ' '
+  } else if (key === 'enter') {
+    keyMatch = e.key === 'Enter'
+  } else if (key === 'tab') {
+    keyMatch = e.key === 'Tab'
+  } else if (key === 'esc') {
+    keyMatch = e.key === 'Escape'
   }
 
   return ctrlMatch && altMatch && shiftMatch && cmdMatch && keyMatch
@@ -156,6 +159,7 @@ const shortcutLabels: Record<keyof ShortcutSettings, string> = {
   pin: '置顶窗口',
   lock: '锁定/解锁笔记',
   toggleSource: '切换源码模式',
+  centerWindow: '居中窗口',
 }
 
 // 快捷键说明
@@ -168,6 +172,7 @@ const shortcutDescs: Record<keyof ShortcutSettings, string> = {
   pin: '应用内快捷键，切换窗口置顶状态',
   lock: '应用内快捷键，锁定/解锁当前笔记',
   toggleSource: '应用内快捷键，切换 Markdown/源码模式',
+  centerWindow: '应用内快捷键，将窗口居中到当前显示器',
 }
 
 // 开始录制快捷键

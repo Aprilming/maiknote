@@ -13,6 +13,7 @@ export interface ShortcutSettings {
   pin: string          // 置顶窗口
   lock: string         // 锁定/解锁笔记
   toggleSource: string // 切换源码模式
+  centerWindow: string // 居中窗口
 }
 
 export type CodeTheme =
@@ -78,6 +79,7 @@ export const useSettingStore = defineStore('setting', () => {
       pin: 'Cmd+P',
       lock: 'Cmd+L',
       toggleSource: 'Cmd+/',
+      centerWindow: 'Shift+Option+Cmd+A',
     },
     aiUrl: 'https://api.deepseek.com/chat/completions',
     aiKey: '',
@@ -135,6 +137,12 @@ export const useSettingStore = defineStore('setting', () => {
         settings.value.aiModel,
       )
     }
+
+    // Sync Baidu search key to iCloud via assistantsStore
+    if (key === 'baiduSearchKey') {
+      const assistantsStore = useAssistantsStore()
+      assistantsStore.updateBaiduSearchKey(settings.value.baiduSearchKey)
+    }
   }
 
   function loadSettings() {
@@ -142,7 +150,11 @@ export const useSettingStore = defineStore('setting', () => {
       const saved = localStorage.getItem('maiknote-settings')
       if (saved) {
         const parsed = JSON.parse(saved)
-        settings.value = { ...settings.value, ...parsed }
+        settings.value = {
+          ...settings.value,
+          ...parsed,
+          shortcuts: { ...settings.value.shortcuts, ...(parsed.shortcuts || {}) },
+        }
       }
     } catch (e) {
       console.error('Failed to load settings:', e)
@@ -181,6 +193,7 @@ export const useSettingStore = defineStore('setting', () => {
         pin: 'Cmd+P',
         lock: 'Cmd+L',
         toggleSource: 'Cmd+/',
+        centerWindow: 'Shift+Option+Cmd+A',
       },
       aiUrl: 'https://api.deepseek.com/chat/completions',
       aiKey: '',
@@ -223,13 +236,14 @@ export const useSettingStore = defineStore('setting', () => {
       baiduSearchKey: '',
     }
     saveSettings()
-    // 重置 iCloud 中的 AI 配置
+    // 重置 iCloud 中的 AI 配置和百度搜索密钥
     const assistantsStore = useAssistantsStore()
     assistantsStore.updateAiConfig(
       settings.value.aiUrl,
       settings.value.aiKey,
       settings.value.aiModel,
     )
+    assistantsStore.updateBaiduSearchKey(settings.value.baiduSearchKey)
   }
 
   // Initialize

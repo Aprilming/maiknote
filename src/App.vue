@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWindow, availableMonitors } from '@tauri-apps/api/window'
+import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { invoke } from '@tauri-apps/api/core'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
@@ -87,6 +88,30 @@ function updateSurfaceColor() {
   }
 }
 
+// 检查窗口是否在可见显示器内，若不在则居中到主显示器
+async function ensureWindowVisible() {
+  try {
+    const appWindow = getCurrentWindow()
+    const pos = await appWindow.innerPosition()
+    const size = await appWindow.outerSize()
+    const monitors = await availableMonitors()
+    if (monitors.length === 0) return
+    const isOnScreen = monitors.some(m => (
+      pos.x + size.width > m.position.x &&
+      pos.x < m.position.x + m.size.width &&
+      pos.y + size.height > m.position.y &&
+      pos.y < m.position.y + m.size.height
+    ))
+    if (!isOnScreen) {
+      const m = monitors[0]
+      const x = Math.round(m.position.x + (m.size.width - size.width) / 2)
+      const y = Math.round(m.position.y + (m.size.height - size.height) / 2)
+      await appWindow.setPosition(new PhysicalPosition(x, y))
+    }
+  } catch {
+    // 静默处理，不作为核心功能阻塞
+  }
+}
 onMounted(async () => {
   // 获取 Tauri 窗口实例
   const appWindow = getCurrentWindow()
@@ -121,6 +146,10 @@ onMounted(async () => {
     if (!focused && !settingStore.settings.alwaysOnTop && !isNativeDialogCurrentlyOpen()) {
       appWindow.hide()
     }
+    if (focused) {
+      // 窗口获得焦点时检查是否在可见显示器内
+      ensureWindowVisible()
+    }
   })
   // 监听键盘快捷键 Cmd+F 打开搜索页面，Cmd+W 关闭窗口
   window.addEventListener('keydown', (event) => {
@@ -145,6 +174,8 @@ onMounted(async () => {
   isAppReady.value = true
   // 冷启动时自动检查更新
   await checkForUpdates()
+  // 冷启动时强制居中（tauri_plugin_window_state 会恢复上次位置，需覆盖）
+  await appWindow.center()
 })
 
 onUnmounted(() => {

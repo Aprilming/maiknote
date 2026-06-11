@@ -14,26 +14,30 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
 
   // 检查修饰键
   const ctrlMatch = modifiers.some(m => m.toLowerCase() === 'ctrl') ? event.ctrlKey : !event.ctrlKey
-  const altMatch = modifiers.some(m => m.toLowerCase() === 'alt') ? event.altKey : !event.altKey
+  const altMatch = modifiers.some(m => /^alt|option$/.test(m.toLowerCase())) ? event.altKey : !event.altKey
   const shiftMatch = modifiers.some(m => m.toLowerCase() === 'shift') ? event.shiftKey : !event.shiftKey
   const cmdMatch = modifiers.some(m => m.toLowerCase() === 'cmd') ? event.metaKey : !event.metaKey
 
   // 检查按键
   let keyMatch = false
-  if (key === 'arrowleft') {
-    keyMatch = event.key === 'ArrowLeft'
-  } else if (key === 'arrowright') {
-    keyMatch = event.key === 'ArrowRight'
+  if (/^[a-z]$/.test(key)) {
+    // 字母键：使用 event.code（物理按键位置，不受 IME/修饰键影响）
+    keyMatch = event.code === `Key${key.toUpperCase()}`
+  } else if (/^\d$/.test(key)) {
+    // 数字键
+    keyMatch = event.key === key
   } else if (key === 'backspace') {
     keyMatch = event.key === 'Backspace'
-  } else if (key === 'n' || key === 'f' || key === 'p' || key === 'l') {
-    keyMatch = event.key.toLowerCase() === key
-  } else if (key === '[') {
-    keyMatch = event.key === '['
-  } else if (key === ']') {
-    keyMatch = event.key === ']'
-  } else if (key === '/') {
-    keyMatch = event.key === '/'
+  } else if (key === '[' || key === ']' || key === '/') {
+    keyMatch = event.key === key
+  } else if (key === 'space') {
+    keyMatch = event.key === ' '
+  } else if (key === 'enter') {
+    keyMatch = event.key === 'Enter'
+  } else if (key === 'tab') {
+    keyMatch = event.key === 'Tab'
+  } else if (key === 'esc') {
+    keyMatch = event.key === 'Escape'
   }
 
   return ctrlMatch && altMatch && shiftMatch && cmdMatch && keyMatch
@@ -129,6 +133,18 @@ export function useShortcuts(onOpenSettings?: () => void) {
         }
       } catch (error) {
         console.error('Failed to toggle window visibility:', error)
+      }
+      return
+    }
+
+    // 居中窗口
+    if (shortcuts.centerWindow && matchesShortcut(e, shortcuts.centerWindow)) {
+      e.preventDefault()
+      try {
+        const appWindow = getCurrentWindow()
+        await appWindow.center()
+      } catch (error) {
+        console.error('Failed to center window:', error)
       }
       return
     }
