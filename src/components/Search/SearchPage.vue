@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
+import { useI18n } from 'vue-i18n'
 import DirectoryTree from './DirectoryTree.vue'
 
 const emit = defineEmits<{
@@ -10,6 +11,7 @@ const emit = defineEmits<{
 
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
+const { t, locale } = useI18n()
 const searchInput = ref<HTMLInputElement | null>(null)
 const localQuery = ref('')
 
@@ -40,8 +42,8 @@ const searchResults = computed(() => {
 
 // 当前目录名称
 const currentDirName = computed(() => {
-  if (directoryStore.currentDirectoryId === null) return '主目录'
-  return directoryStore.getDirectory(directoryStore.currentDirectoryId)?.name ?? '主目录'
+  if (directoryStore.currentDirectoryId === null) return t('dirTree.rootDir')
+  return directoryStore.getDirectory(directoryStore.currentDirectoryId)?.name ?? t('dirTree.rootDir')
 })
 
 // ---- Pointer event handlers (document-level) ----
@@ -156,10 +158,10 @@ function formatDate(ts: number): string {
   const d = new Date(ts)
   const diff = Date.now() - ts
   const day = 86400000
-  if (diff < day) return '今天'
-  if (diff < 2 * day) return '昨天'
-  if (diff < 7 * day) return `${Math.floor(diff / day)}天前`
-  return `${d.getMonth() + 1}月${d.getDate()}日`
+  if (diff < day) return t('search.today')
+  if (diff < 2 * day) return t('search.yesterday')
+  if (diff < 7 * day) return t('search.daysAgo', { n: Math.floor(diff / day) })
+  return d.toLocaleDateString(locale.value === 'en-US' ? 'en-US' : 'zh-CN', { month: 'short', day: 'numeric' })
 }
 
 function getPreview(s: string): string {
@@ -208,14 +210,14 @@ function handleKeydown(e: KeyboardEvent) {
           ref="searchInput"
           v-model="localQuery"
           type="text"
-          :placeholder="`在「${currentDirName}」中搜索...`"
+          :placeholder="$t('search.searchIn', { name: currentDirName })"
           class="search-input"
         />
         <button v-if="localQuery" class="clear-btn" @click="localQuery = ''">
           <i class="i-mdi-close"></i>
         </button>
       </div>
-      <button class="cancel-btn" @click="handleCancel">取消</button>
+      <button class="cancel-btn" @click="handleCancel">{{ $t('search.cancel') }}</button>
     </div>
 
     <!-- 底部左右分栏 -->
@@ -230,14 +232,14 @@ function handleKeydown(e: KeyboardEvent) {
         <div class="dir-title">
           <i class="i-mdi-folder-outline"></i>
           <span>{{ currentDirName }}</span>
-          <span class="dir-title-count">{{ searchResults.length }} 篇笔记</span>
+          <span class="dir-title-count">{{ $t('search.noteCount', { count: searchResults.length }) }}</span>
         </div>
 
         <div class="search-results">
           <div v-if="searchResults.length === 0" class="no-results">
-            <template v-if="localQuery">未找到匹配的笔记</template>
-            <template v-else-if="directoryStore.currentDirectoryId === null">还没有笔记，开始写第一篇吧</template>
-            <template v-else>这个目录还没有笔记，拖拽笔记到这里</template>
+            <template v-if="localQuery">{{ $t('search.noMatch') }}</template>
+            <template v-else-if="directoryStore.currentDirectoryId === null">{{ $t('search.emptyNotes') }}</template>
+            <template v-else>{{ $t('search.emptyDir') }}</template>
           </div>
 
           <div

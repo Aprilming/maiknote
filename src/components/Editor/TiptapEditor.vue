@@ -30,12 +30,14 @@ import TableHeader from '@tiptap/extension-table-header'
 import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { useI18n } from 'vue-i18n'
 
 const lowlight = createLowlight(all)
 
 const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
 const fileSystem = useFileSystem()
+const { t } = useI18n()
 
 // 动态加载代码高亮主题 CSS
 let currentHighlightCss: HTMLLinkElement | null = null
@@ -131,7 +133,7 @@ function stopAI() {
     aiAbortController = null
     isAILoading.value = false
     document.body.style.cursor = ''
-    showToast('已停止')
+    showToast(t('toast.stopped'))
   }
 }
 
@@ -216,7 +218,8 @@ function handleWrapperClick(e: MouseEvent) {
 
   // 如果点击的是编辑器内部元素，让编辑器自己处理
   const target = e.target as HTMLElement
-  if (target.closest('.ProseMirror')) {
+  const inProseMirror = target.closest('.ProseMirror')
+  if (inProseMirror) {
     return
   }
   if (target.closest('.bubble-menu') || target.closest('.ai-loading-indicator')) {
@@ -326,7 +329,7 @@ function handleAI(assistantId: string) {
   const assistant = assistantsStore.getAssistantById(assistantId)
   console.log('[BaiduSearch] 选中助手:', assistant?.name, 'searchEnabled:', assistant?.searchEnabled, 'baiduSearchKey exists:', !!settingStore.settings.baiduSearchKey)
   if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
-    showToast('请先在设置中配置 AI')
+    showToast(t('toast.configureAI'))
     return
   }
   callAI(assistantId)
@@ -348,7 +351,7 @@ async function callAI(assistantId: string) {
   // 根据ID获取助手配置
   const assistant = assistantsStore.getAssistantById(assistantId)
   if (!assistant) {
-    showToast('未找到对应的 AI 助手')
+    showToast(t('toast.noAssistant'))
     isAILoading.value = false
     document.body.style.cursor = ''
     return
@@ -359,7 +362,7 @@ async function callAI(assistantId: string) {
   let searchContext = ''
   console.log('[BaiduSearch] 检查搜索条件:', { searchEnabled: assistant.searchEnabled, hasKey: !!settingStore.settings.baiduSearchKey, keyLen: settingStore.settings.baiduSearchKey?.length })
   if (assistant.searchEnabled && settingStore.settings.baiduSearchKey) {
-    showToast('正在搜索...')
+    showToast(t('toast.searching'))
     try {
       const searchQuery = pendingSelectionText || text.slice(0, 200)
       console.log('[BaiduSearch] 开始搜索, query:', searchQuery)
@@ -370,7 +373,7 @@ async function callAI(assistantId: string) {
       searchContext = `\n\n以下是与用户问题相关的互联网搜索结果（仅供事实参考，请基于搜索结果和你的知识综合回答）：\n${searchResult}\n\n请基于以上搜索结果和你的知识，完成用户请求。`
     } catch (e) {
       console.error('[BaiduSearch] 搜索失败:', e)
-      showToast(`搜索失败: ${e instanceof Error ? e.message : '未知错误'}，将继续处理`)
+      showToast(t('toast.searchFailed', { error: e instanceof Error ? e.message : 'Unknown error' }))
     }
   }
 
@@ -473,14 +476,14 @@ async function callAI(assistantId: string) {
       const finalContent = contentBeforeSelection + fullContent + contentAfterSelection
       emit('update', finalContent)
     }
-    showToast('已完成')
+    showToast(t('toast.completed'))
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       // 请求被取消，不显示错误
       return
     }
     console.error('AI调用失败:', error)
-    showToast(`AI调用失败: ${error instanceof Error ? error.message : '未知错误'}`)
+    showToast(t('toast.aiFailed', { error: error instanceof Error ? error.message : 'Unknown error' }))
   } finally {
     isAILoading.value = false
     document.body.style.cursor = ''
@@ -498,7 +501,7 @@ const handleLink = () => {
   if (ed.isActive('link')) {
     ed.chain().focus().unsetLink().run()
   } else {
-    const url = window.prompt('输入链接地址:')
+    const url = window.prompt(t('editor.linkPrompt'))
     if (url) {
       ed.chain().focus().setLink({ href: url }).run()
     }
@@ -589,6 +592,55 @@ const editor = useEditor({
       return false
     },
     handleKeyDown(view, event) {
+      // 代码块/引用块内，上下键在无法自然退出时插入空段落
+      const { $from, $to } = view.state.selection
+
+      // 查找光标所在的最内层"隔离块"（codeBlock 直接含文本; blockquote 包裹子块）
+      const escapableDepth = (() => {
+        for (let d = $from.depth; d > 0; d--) {
+          const name = $from.node(d).type.name
+          if (name === 'codeBlock' || name === 'blockquote') return d
+        }
+        return -1
+      })()
+      const blockName = escapableDepth >= 0 ? $from.node(escapableDepth).type.name : ''
+
+      if (event.key === 'ArrowUp' && blockName && $from.parentOffset === 0) {
+        // 往上找到该隔离块的起始，若为文档首则在前面插入段落
+        let isFirst = true
+        for (let d = escapableDepth - 1; d >= 0; d--) {
+          if ($from.start(d) > 0) { isFirst = false; break }
+        }
+        if (isFirst) {
+          event.preventDefault()
+          const para = view.state.schema.nodes.paragraph.create()
+          const tr = view.state.tr.insert(0, para)
+          tr.setSelection(TextSelection.create(tr.doc, 1))
+          view.dispatch(tr)
+          view.focus()
+          return true
+        }
+      }
+
+      if (event.key === 'ArrowDown' && blockName) {
+        const end = $to.parent.content.size
+        if ($to.parentOffset >= end) {
+          // 往下找到该隔离块结尾，若为文档末则在后面插入段落
+          let isLast = true
+          const afterPos = $to.after(escapableDepth)
+          if (afterPos < view.state.doc.content.size) { isLast = false }
+          if (isLast) {
+            event.preventDefault()
+            const para = view.state.schema.nodes.paragraph.create()
+            const tr = view.state.tr.insert(afterPos, para)
+            tr.setSelection(TextSelection.create(tr.doc, afterPos + 1))
+            view.dispatch(tr)
+            view.focus()
+            return true
+          }
+        }
+      }
+
       // IME 组合中或结束后 100ms 内的 Enter 仅用于确认输入法，不做 ProseMirror 块拆分
       if (event.key === 'Enter' && (
         event.isComposing ||
@@ -650,23 +702,22 @@ const editor = useEditor({
         return true
       }
 
-      // 尝试将光标设置到点击位置
       const coords = { left: event.clientX, top: event.clientY }
       const domPos = view.posAtCoords(coords)
 
       if (domPos && domPos.pos >= 0) {
-        // 能找到有效位置，设置光标到该位置
         const $pos = view.state.doc.resolve(domPos.pos)
-        const selection = TextSelection.near($pos, -1)
+        // domPos.inside >= 0 表示点击落在一个非文本节点（如空代码块）内部，
+        // 此时 TextSelection.near 无法在空块内找到有效文本位置，必须用 TextSelection.create 精确定位
+        const selection = domPos.inside >= 0
+          ? TextSelection.create(view.state.doc, domPos.pos)
+          : TextSelection.near($pos, 1)
         view.dispatch(view.state.tr.setSelection(selection))
-        return true
-      } else {
-        // 找不到有效位置，将光标设置到文档末尾
-        const docEnd = view.state.doc.content.size
-        const selection = TextSelection.near(view.state.doc.resolve(docEnd), 1)
-        view.dispatch(view.state.tr.setSelection(selection))
+        view.focus()
         return true
       }
+
+      return false
     },
     // 全选 + 复制时粘贴 markdown 源码（含 ``` 等标记），非全选时将链接序列化为 [text](url)
     clipboardTextSerializer: (slice) => {
@@ -741,7 +792,7 @@ const editor = useEditor({
               view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
             } catch (err) {
               console.error('Failed to save image:', err)
-              showToast('图片保存失败')
+              showToast(t('toast.imageSaveFailed'))
             }
           }
           reader.readAsDataURL(file)
@@ -817,7 +868,7 @@ const editor = useEditor({
             view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
           } catch (err) {
             console.error('Failed to save image:', err)
-            showToast('图片保存失败')
+            showToast(t('toast.imageSaveFailed'))
           }
         }
         reader.readAsDataURL(file)
@@ -964,10 +1015,10 @@ defineExpose({
     <!-- AI 加载指示器 -->
     <div v-if="isAILoading" class="ai-loading-indicator">
       <div class="ai-loading-content">
-        <span class="ai-loading-text">AI 思考中...</span>
+        <span class="ai-loading-text">{{ $t('editor.aiThinking') }}</span>
         <button class="ai-stop-btn" @click="stopAI">
           <i class="i-mdi-stop"></i>
-          停止
+          {{ $t('editor.stop') }}
         </button>
       </div>
     </div>
@@ -980,17 +1031,17 @@ defineExpose({
     >
       <!-- 文本格式 -->
       <button @click="editor.chain().focus().toggleBold().run()"
-        :class="{ 'is-active': editor.isActive('bold') }" data-tip="加粗"><b>B</b></button>
+        :class="{ 'is-active': editor.isActive('bold') }" :data-tip="$t('editor.bold')"><b>B</b></button>
       <button @click="editor.chain().focus().toggleItalic().run()"
-        :class="{ 'is-active': editor.isActive('italic') }" data-tip="斜体"><i>I</i></button>
+        :class="{ 'is-active': editor.isActive('italic') }" :data-tip="$t('editor.italic')"><i>I</i></button>
       <button @click="editor.chain().focus().toggleUnderline().run()"
-        :class="{ 'is-active': editor.isActive('underline') }" data-tip="下划线"><u>U</u></button>
+        :class="{ 'is-active': editor.isActive('underline') }" :data-tip="$t('editor.underline')"><u>U</u></button>
       <button @click="editor.chain().focus().toggleStrike().run()"
-        :class="{ 'is-active': editor.isActive('strike') }" data-tip="删除线"><s>S</s></button>
+        :class="{ 'is-active': editor.isActive('strike') }" :data-tip="$t('editor.strikethrough')"><s>S</s></button>
       <button @click="editor.chain().focus().toggleCode().run()"
-        :class="{ 'is-active': editor.isActive('code') }" data-tip="行内代码">&lt;/&gt;</button>
+        :class="{ 'is-active': editor.isActive('code') }" :data-tip="$t('editor.inlineCode')">&lt;/&gt;</button>
       <button @click="editor.chain().focus().unsetAllMarks().run()"
-        data-tip="清除格式" class="bm-clear-btn">
+        :data-tip="$t('editor.clearFormat')" class="bm-clear-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M5 5l14 14M5 19l7-7 7 7M5 5l7 7 7-7"/>
         </svg>
@@ -1001,7 +1052,7 @@ defineExpose({
       <!-- 链接 -->
       <button @click="handleLink"
         :class="{ 'is-active': editor.isActive('link') }"
-        data-tip="链接">
+        :data-tip="$t('editor.link')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1011,7 +1062,7 @@ defineExpose({
       <div class="bm-sep" />
 
       <!-- 颜色 -->
-      <div class="bm-color-picker" data-tip="字体颜色">
+      <div class="bm-color-picker" :data-tip="$t('editor.textColor')">
         <span class="bm-label" style="color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
@@ -1019,7 +1070,7 @@ defineExpose({
           @input="(e) => editor?.chain().focus().setColor((e.target as HTMLInputElement).value).run()"
         />
       </div>
-      <div class="bm-color-picker" data-tip="背景色">
+      <div class="bm-color-picker" :data-tip="$t('editor.bgColor')">
         <span class="bm-label" style="background: #ff0000; padding: 0 3px; border-radius: 2px; color: var(--color-popup-text, #e0e0e0);">A</span>
         <input
           type="color"
@@ -1032,29 +1083,29 @@ defineExpose({
 
       <!-- 标题 -->
       <button @click="editor.chain().focus().toggleHeading({ level: 1 }).run()"
-        :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }" data-tip="标题 1">H1</button>
+        :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }" :data-tip="$t('editor.heading1')">H1</button>
       <button @click="editor.chain().focus().toggleHeading({ level: 2 }).run()"
-        :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }" data-tip="标题 2">H2</button>
+        :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }" :data-tip="$t('editor.heading2')">H2</button>
       <button @click="editor.chain().focus().toggleHeading({ level: 3 }).run()"
-        :class="{ 'is-active': editor.isActive('heading', { level: 3 }) }" data-tip="标题 3">H3</button>
+        :class="{ 'is-active': editor.isActive('heading', { level: 3 }) }" :data-tip="$t('editor.heading3')">H3</button>
 
       <div class="bm-sep" />
 
       <!-- 列表 -->
       <button @click="editor.chain().focus().toggleBulletList().run()"
-        :class="{ 'is-active': editor.isActive('bulletList') }" data-tip="无序列表">
+        :class="{ 'is-active': editor.isActive('bulletList') }" :data-tip="$t('editor.bulletList')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>
         </svg>
       </button>
       <button @click="editor.chain().focus().toggleOrderedList().run()"
-        :class="{ 'is-active': editor.isActive('orderedList') }" data-tip="有序列表">
+        :class="{ 'is-active': editor.isActive('orderedList') }" :data-tip="$t('editor.orderedList')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>
         </svg>
       </button>
       <button @click="editor.chain().focus().toggleTaskList().run()"
-        :class="{ 'is-active': editor.isActive('taskList') }" data-tip="任务列表">
+        :class="{ 'is-active': editor.isActive('taskList') }" :data-tip="$t('editor.taskList')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
         </svg>
@@ -1064,26 +1115,26 @@ defineExpose({
 
       <!-- 块级元素 -->
       <button @click="editor.chain().focus().toggleBlockquote().run()"
-        :class="{ 'is-active': editor.isActive('blockquote') }" data-tip="引用">
+        :class="{ 'is-active': editor.isActive('blockquote') }" :data-tip="$t('editor.blockquote')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none">
           <path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/>
         </svg>
       </button>
       <button @click="editor.chain().focus().toggleCodeBlock().run()"
-        :class="{ 'is-active': editor.isActive('codeBlock') }" data-tip="代码块">
+        :class="{ 'is-active': editor.isActive('codeBlock') }" :data-tip="$t('editor.codeBlock')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
       </button>
       <button @click="editor.chain().focus().setHorizontalRule().run()"
-        data-tip="分割线">
+        :data-tip="$t('editor.horizontalRule')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <line x1="3" y1="12" x2="21" y2="12"/>
         </svg>
       </button>
       <div class="bm-sep" />
       <button @click="editor.chain().focus().setParagraph().run()"
-        :class="{ 'is-active': editor.isActive('paragraph') }" data-tip="普通文本"><span style="font-size:10px">¶</span></button>
+        :class="{ 'is-active': editor.isActive('paragraph') }" :data-tip="$t('editor.paragraph')"><span style="font-size:10px">¶</span></button>
     </BubbleMenu>
     <!-- 右键菜单 -->
     <Teleport to="body">
@@ -1107,7 +1158,7 @@ defineExpose({
         </template>
         <template v-else-if="hasAIConfig">
           <div class="context-menu-item context-menu-item--disabled">
-            <span>暂无助手</span>
+            <span>{{ $t('editor.noAssistant') }}</span>
           </div>
         </template>
       </div>

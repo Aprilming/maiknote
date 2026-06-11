@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useNoteStore } from '@/stores/noteStore'
+import { useI18n } from 'vue-i18n'
 
 const noteStore = useNoteStore()
+const { t } = useI18n()
 
 async function createNewNote() {
   await noteStore.createNote()
@@ -15,10 +17,10 @@ function formatTimestamp(timestamp: number): string {
   const diffHours = Math.floor(diffMs / 3600000)
   const diffDays = Math.floor(diffMs / 86400000)
 
-  if (diffMins < 1) return 'Just now'
-  if (diffMins < 60) return `${diffMins}m ago`
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays < 7) return `${diffDays}d ago`
+  if (diffMins < 1) return t('notelist.justNow')
+  if (diffMins < 60) return t('notelist.minutesAgo', { n: diffMins })
+  if (diffHours < 24) return t('notelist.hoursAgo', { n: diffHours })
+  if (diffDays < 7) return t('notelist.daysAgo', { n: diffDays })
 
   return date.toLocaleDateString()
 }
@@ -35,7 +37,7 @@ function extractPreview(content: string): string {
   <div class="note-list">
     <!-- Pinned Notes Section -->
     <div v-if="noteStore.pinnedNotes.length > 0" class="note-section">
-      <div class="section-title">Pinned</div>
+      <div class="section-title">{{ $t('notelist.pinned') }}</div>
       <div
         v-for="note in noteStore.pinnedNotes"
         :key="note.id"
@@ -44,7 +46,7 @@ function extractPreview(content: string): string {
         @click="noteStore.selectNote(note.id)"
       >
         <div class="note-content">
-          <div class="note-title">{{ note.title || 'Untitled' }}</div>
+          <div class="note-title">{{ note.title || $t('notelist.untitled') }}</div>
           <div class="note-preview">{{ extractPreview(note.content) }}</div>
         </div>
         <div class="note-meta">
@@ -55,7 +57,7 @@ function extractPreview(content: string): string {
 
     <!-- Unpinned Notes Section -->
     <div v-if="noteStore.unpinnedNotes.length > 0" class="note-section">
-      <div v-if="noteStore.pinnedNotes.length > 0" class="section-title">Notes</div>
+      <div v-if="noteStore.pinnedNotes.length > 0" class="section-title">{{ $t('notelist.notes') }}</div>
       <div
         v-for="note in noteStore.unpinnedNotes"
         :key="note.id"
@@ -64,7 +66,7 @@ function extractPreview(content: string): string {
         @click="noteStore.selectNote(note.id)"
       >
         <div class="note-content">
-          <div class="note-title">{{ note.title || 'Untitled' }}</div>
+          <div class="note-title">{{ note.title || $t('notelist.untitled') }}</div>
           <div class="note-preview">{{ extractPreview(note.content) }}</div>
         </div>
         <div class="note-meta">
@@ -76,9 +78,9 @@ function extractPreview(content: string): string {
     <!-- Empty State -->
     <div v-if="noteStore.filteredNotes.length === 0" class="empty-state">
       <i class="i-mdi-file-document-outline empty-icon"></i>
-      <p class="empty-text">No notes found</p>
+      <p class="empty-text">{{ $t('notelist.empty') }}</p>
       <button class="empty-action" @click="createNewNote">
-        Create your first note
+        {{ $t('notelist.createFirst') }}
       </button>
     </div>
   </div>

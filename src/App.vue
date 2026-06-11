@@ -10,6 +10,7 @@ import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
 import { useVersionCheck } from '@/composables/useVersionCheck'
+import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
 import TitleBar from '@/components/TitleBar/TitleBar.vue'
 import Editor from '@/components/Editor/MilkdownEditor.vue'
@@ -23,6 +24,13 @@ const settingStore = useSettingStore()
 useShortcuts(openSettings)
 useGlobalShortcut()
 useTheme() // 初始化主题系统
+const { locale } = useI18n()
+
+// 同步语言设置到 vue-i18n
+watch(() => settingStore.settings.language, (newLang) => {
+  locale.value = newLang
+}, { immediate: true })
+
 const { latestVersion, updateAvailable, checkForUpdates, openReleasePage } = useVersionCheck()
 
 // 当前页面：'editor' | 'settings' | 'search'
@@ -195,7 +203,7 @@ onUnmounted(() => {
     <div v-if="!isAppReady" class="app-loading">
       <div class="app-loading-content">
         <i class="i-mdi-loading animate-spin"></i>
-        <span>加载中...</span>
+        <span>{{ $t('app.loading') }}</span>
       </div>
     </div>
     <div v-else class="app-content" :style="contentStyle">
@@ -208,10 +216,10 @@ onUnmounted(() => {
       <div v-if="showUpdateToast" class="update-toast">
         <div class="update-toast-content">
           <i class="i-mdi-update"></i>
-          <span>发现新版本 v{{ latestVersion }}</span>
+          <span>{{ $t('app.updateFound', { version: latestVersion }) }}</span>
         </div>
         <button class="update-toast-btn" @click="openReleasePage">
-          前往下载
+          {{ $t('app.download') }}
         </button>
       </div>
     </div>

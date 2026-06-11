@@ -2,6 +2,7 @@
 import { ref, computed, provide, reactive } from 'vue'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useNoteStore } from '@/stores/noteStore'
+import { useI18n } from 'vue-i18n'
 import type { Directory } from '@/types/note'
 import DirectoryTreeNode from './DirectoryTreeNode.vue'
 
@@ -12,6 +13,7 @@ const props = defineProps<{
 
 const directoryStore = useDirectoryStore()
 const noteStore = useNoteStore()
+const { t } = useI18n()
 
 // 新建目录状态
 const creatingIn = ref<string | null | undefined>(undefined)
@@ -102,8 +104,8 @@ async function handleDelete(id: string, e: MouseEvent) {
   if (!dir) return
   const count = getNoteCount(id)
   const msg = count > 0
-    ? `删除目录"${dir.name}"？目录下 ${count} 篇笔记将移回根目录。`
-    : `删除目录"${dir.name}"？`
+    ? t('dirTree.deleteConfirmWithNotes', { name: dir.name, count })
+    : t('dirTree.deleteConfirm', { name: dir.name })
   if (confirm(msg)) {
     const notesInDir = noteStore.getNotesByDirectory(id)
     for (const note of notesInDir) {
@@ -148,8 +150,8 @@ provide('directoryTreeState', reactive({
 <template>
   <div class="directory-tree">
     <div class="tree-header">
-      <span class="tree-title">目录</span>
-      <i class="i-mdi-folder-plus-outline add-dir-btn" title="新建目录" @click="startCreate(null)"></i>
+      <span class="tree-title">{{ $t('dirTree.title') }}</span>
+      <i class="i-mdi-folder-plus-outline add-dir-btn" :title="$t('dirTree.newDir')" @click="startCreate(null)"></i>
     </div>
 
     <div class="tree-content">
@@ -162,7 +164,7 @@ provide('directoryTreeState', reactive({
       >
         <span class="dir-toggle placeholder"></span>
         <i class="i-mdi-folder-outline dir-icon"></i>
-        <span class="dir-name root-label">主目录</span>
+        <span class="dir-name root-label">{{ $t('dirTree.rootDir') }}</span>
         <span class="dir-count">{{ rootNoteCount || '' }}</span>
       </div>
 
@@ -171,7 +173,7 @@ provide('directoryTreeState', reactive({
         <input
           class="dir-create-input"
           v-model="newDirName"
-          placeholder="新建目录..."
+          :placeholder="$t('dirTree.newDirPlaceholder')"
           @keydown.enter="confirmCreate"
           @keydown.escape="cancelCreate"
           @blur="confirmCreate"
@@ -191,7 +193,7 @@ provide('directoryTreeState', reactive({
 
     <!-- 空状态 -->
     <div v-if="directoryStore.rootDirectories.length === 0 && creatingIn === undefined" class="tree-empty">
-      点击 + 创建目录
+      {{ $t('dirTree.empty') }}
     </div>
   </div>
 </template>

@@ -78,7 +78,7 @@ export const defaultAssistants: Assistant[] = [
 export const defaultAiConfig: AiConfig = {
   url: 'https://api.deepseek.com/chat/completions',
   key: '',
-  model: 'deepseek-chat',
+  model: 'deepseek-v4-flash',
 }
 
 export const useAssistantsStore = defineStore('assistants', () => {

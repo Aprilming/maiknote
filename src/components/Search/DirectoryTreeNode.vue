@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { inject, computed } from 'vue'
 import { useDirectoryStore } from '@/stores/directoryStore'
+import { useI18n } from 'vue-i18n'
 import type { Directory } from '@/types/note'
 
 interface TreeState {
@@ -32,6 +33,7 @@ const props = defineProps<{
 
 const treeState = inject<TreeState>('directoryTreeState')!
 const directoryStore = useDirectoryStore()
+useI18n()
 
 const children = computed(() => directoryStore.getChildren(props.directory.id))
 </script>
@@ -79,9 +81,9 @@ const children = computed(() => directoryStore.getChildren(props.directory.id))
       <span class="dir-count">{{ treeState.getNoteCount(directory.id) || '' }}</span>
 
       <span class="dir-actions">
-        <i class="i-mdi-plus" title="新建子目录" @click.stop="treeState.startCreate(directory.id)"></i>
-        <i class="i-mdi-pencil" title="重命名" @click.stop="treeState.startRename(directory)"></i>
-        <i class="i-mdi-delete" title="删除" @click.stop="(e: MouseEvent) => treeState.handleDelete(directory.id, e)"></i>
+        <i class="i-mdi-plus" :title="$t('dirTree.newSubdir')" @click.stop="treeState.startCreate(directory.id)"></i>
+        <i class="i-mdi-pencil" :title="$t('dirTree.rename')" @click.stop="treeState.startRename(directory)"></i>
+        <i class="i-mdi-delete" :title="$t('common.delete')" @click.stop="(e: MouseEvent) => treeState.handleDelete(directory.id, e)"></i>
       </span>
     </div>
 
@@ -90,7 +92,7 @@ const children = computed(() => directoryStore.getChildren(props.directory.id))
       <input
         class="dir-create-input"
         v-model="treeState.newDirName"
-        placeholder="子目录名称..."
+        :placeholder="$t('dirTree.subdirPlaceholder')"
         @keydown.enter="treeState.confirmCreate"
         @keydown.escape="treeState.cancelCreate"
         @blur="treeState.confirmCreate"

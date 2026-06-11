@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Editor } from '@tiptap/vue-3'
 import { emojiCategories, filterEmojis, type EmojiItem } from './emojiData'
 
@@ -17,6 +18,7 @@ const selectedIndex = ref(0)
 const listRef = ref<HTMLElement>()
 const emojiSearchRef = ref<HTMLInputElement>()
 const emojiQuery = ref('')
+const { t } = useI18n()
 
 // 滚动到选中项
 function scrollToSelected() {
@@ -41,42 +43,46 @@ function scrollToSelected() {
 // 分组的命令列表
 const COMMAND_GROUPS = [
   {
-    label: '基础块',
+    labelKey: 'slash.basicBlocks',
     items: [
-      { title: 'H1[标题1]', command: 'heading1', icon: 'H1' },
-      { title: 'H2[标题2]', command: 'heading2', icon: 'H2' },
-      { title: 'H3[标题3]', command: 'heading3', icon: 'H3' },
+      { titleKey: 'slash.heading1', command: 'heading1', icon: 'H1' },
+      { titleKey: 'slash.heading2', command: 'heading2', icon: 'H2' },
+      { titleKey: 'slash.heading3', command: 'heading3', icon: 'H3' },
     ]
   },
   {
-    label: '列表',
+    labelKey: 'slash.lists',
     items: [
-      { title: 'disorder[无序]', command: 'bulletList', icon: '•' },
-      { title: 'ordered[有序]', command: 'orderedList', icon: '1.' },
-      { title: 'todo[任务]', command: 'todo', icon: '☑' },
+      { titleKey: 'slash.bulletList', command: 'bulletList', icon: '•' },
+      { titleKey: 'slash.orderedList', command: 'orderedList', icon: '1.' },
+      { titleKey: 'slash.todo', command: 'todo', icon: '☑' },
     ]
   },
   {
-    label: '插入',
+    labelKey: 'slash.insert',
     items: [
-      { title: 'emoji[表情]', command: 'emoji', icon: '😊' },
-      { title: 'quote[引用]', command: 'blockquote', icon: '"' },
-      { title: 'code[代码]', command: 'code', icon: '<>' },
-      { title: 'table[表格]', command: 'table', icon: '⊞' },
+      { titleKey: 'slash.emoji', command: 'emoji', icon: '😊' },
+      { titleKey: 'slash.quote', command: 'blockquote', icon: '"' },
+      { titleKey: 'slash.code', command: 'code', icon: '<>' },
+      { titleKey: 'slash.table', command: 'table', icon: '⊞' },
     ]
   }
 ]
 
 // 过滤后的命令项
-const filteredItems = ref<Array<{ title: string; command: string; icon: string }>>([])
+const filteredItems = ref<Array<{ titleKey: string; title: string; command: string; icon: string }>>([])
 
 function updateFilteredItems(query: string) {
   if (!query) {
-    filteredItems.value = COMMAND_GROUPS.flatMap(g => g.items)
+    filteredItems.value = COMMAND_GROUPS.flatMap(g => g.items).map(item => ({
+      ...item,
+      title: t(item.titleKey),
+    }))
   } else {
     filteredItems.value = COMMAND_GROUPS
       .flatMap(g => g.items)
-      .filter(item => item.title.toLowerCase().includes(query.toLowerCase()))
+      .filter(item => t(item.titleKey).toLowerCase().includes(query.toLowerCase()))
+      .map(item => ({ ...item, title: t(item.titleKey) }))
   }
   selectedIndex.value = 0
 }
@@ -319,7 +325,7 @@ updateFilteredItems('')
     <!-- 命令列表模式 -->
     <div v-if="mode === 'commands'" ref="listRef" class="slash-command-list">
       <template v-if="filteredItems.length === 0">
-        <div class="slash-empty">无匹配命令</div>
+        <div class="slash-empty">{{ $t('slash.noMatch') }}</div>
       </template>
       <template v-else>
         <button
@@ -343,16 +349,16 @@ updateFilteredItems('')
           ref="emojiSearchRef"
           v-model="emojiQuery"
           class="emoji-search"
-          placeholder="搜索 emoji..."
+          :placeholder="$t('slash.searchEmoji')"
           @keydown="onEmojiSearchKeydown"
         />
-        <button class="emoji-back-btn" title="返回命令列表" @click="mode = 'commands'; updateFilteredItems('')">
+        <button class="emoji-back-btn" :title="$t('slash.backToCommands')" @click="mode = 'commands'; updateFilteredItems('')">
           <i class="i-mdi-arrow-left"></i>
         </button>
       </div>
       <div ref="listRef" class="emoji-grid-wrap">
         <template v-if="filteredEmojis.length === 0">
-          <div class="slash-empty">无匹配 emoji</div>
+          <div class="slash-empty">{{ $t('slash.noEmoji') }}</div>
         </template>
         <template v-else>
           <!-- 搜索结果分类显示（仅无搜索词时显示分类） -->
@@ -393,7 +399,7 @@ updateFilteredItems('')
               </button>
             </div>
             <div v-if="hasMoreEmojis" class="emoji-more">
-              继续输入搜索...
+              {{ $t('slash.continueTyping') }}
             </div>
           </template>
         </template>

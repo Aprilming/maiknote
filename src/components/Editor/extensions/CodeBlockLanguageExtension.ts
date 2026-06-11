@@ -75,7 +75,9 @@ export const CodeBlockLanguageExtension = Extension.create({
             const decorations: Decoration[] = []
 
             state.doc.forEach((node, offset) => {
-              if (node.type.name === 'codeBlock') {
+              // 空代码块（nodeSize===2，仅包含开闭标记）不放置 widget，
+              // 否则 contenteditable=false 会阻断文本插入
+              if (node.type.name === 'codeBlock' && node.nodeSize > 2) {
                 // 获取当前语言
                 const currentLanguage = node.attrs.language || 'plaintext'
 

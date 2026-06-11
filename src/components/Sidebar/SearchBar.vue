@@ -11,7 +11,7 @@ const noteStore = useNoteStore()
       <input
         v-model="noteStore.searchQuery"
         type="text"
-        placeholder="Search notes... (Cmd+F)"
+        :placeholder="$t('sidebar.searchPlaceholder')"
         class="search-input"
         data-search-input
       />
@@ -19,7 +19,7 @@ const noteStore = useNoteStore()
         v-if="noteStore.searchQuery"
         class="clear-btn"
         @click="noteStore.searchQuery = ''"
-        title="Clear"
+        :title="$t('sidebar.clear')"
       >
         <i class="i-mdi-close"></i>
       </button>

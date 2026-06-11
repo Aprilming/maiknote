@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
@@ -7,6 +7,7 @@ import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
+import { useI18n } from 'vue-i18n'
 
 // 安全获取 Tauri 窗口
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
@@ -50,6 +51,12 @@ const { currentVersion, latestVersion, isLoading: checkLoading, updateAvailable,
 
 const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
+const { t, locale } = useI18n()
+
+// 同步语言设置到 i18n locale
+watch(() => settingStore.settings.language, (newLang) => {
+  locale.value = newLang
+}, { immediate: true })
 
 // 初始化助手数据
 onMounted(async () => {
@@ -150,30 +157,30 @@ async function onAlphaChange(e: Event) {
 }
 
 // 快捷键显示名称映射
-const shortcutLabels: Record<keyof ShortcutSettings, string> = {
-  showMain: '显示主页面',
-  prevNote: '上一页',
-  nextNote: '下一页',
-  newNote: '新增页面',
-  deleteNote: '删除页面',
-  pin: '置顶窗口',
-  lock: '锁定/解锁笔记',
-  toggleSource: '切换源码模式',
-  centerWindow: '居中窗口',
-}
+const shortcutLabels = computed((): Record<keyof ShortcutSettings, string> => ({
+  showMain: t('shortcut.showMain'),
+  prevNote: t('shortcut.prevNote'),
+  nextNote: t('shortcut.nextNote'),
+  newNote: t('shortcut.newNote'),
+  deleteNote: t('shortcut.deleteNote'),
+  pin: t('shortcut.pin'),
+  lock: t('shortcut.lock'),
+  toggleSource: t('shortcut.toggleSource'),
+  centerWindow: t('shortcut.centerWindow'),
+}))
 
 // 快捷键说明
-const shortcutDescs: Record<keyof ShortcutSettings, string> = {
-  showMain: '全局快捷键，应用隐藏时也可触发',
-  prevNote: '应用内快捷键，切换到上一条笔记',
-  nextNote: '应用内快捷键，切换到下一条笔记',
-  newNote: '应用内快捷键，新建一条笔记',
-  deleteNote: '应用内快捷键，删除当前笔记',
-  pin: '应用内快捷键，切换窗口置顶状态',
-  lock: '应用内快捷键，锁定/解锁当前笔记',
-  toggleSource: '应用内快捷键，切换 Markdown/源码模式',
-  centerWindow: '应用内快捷键，将窗口居中到当前显示器',
-}
+const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
+  showMain: t('shortcut.showMainDesc'),
+  prevNote: t('shortcut.prevNoteDesc'),
+  nextNote: t('shortcut.nextNoteDesc'),
+  newNote: t('shortcut.newNoteDesc'),
+  deleteNote: t('shortcut.deleteNoteDesc'),
+  pin: t('shortcut.pinDesc'),
+  lock: t('shortcut.lockDesc'),
+  toggleSource: t('shortcut.toggleSourceDesc'),
+  centerWindow: t('shortcut.centerWindowDesc'),
+}))
 
 // 开始录制快捷键
 function startRecording(key: keyof ShortcutSettings) {
@@ -298,12 +305,12 @@ const userAssistants = computed(() => {
 async function handleTemplateClick(template: Assistant) {
   // 检查是否已存在相同 prompt 的用户助手
   if (assistantsStore.hasUserPrompt(template.prompt)) {
-    showToast('该助手已添加')
+    showToast(t('toast.assistantAlreadyAdded'))
     return
   }
   // 添加到用户助手列表
   await assistantsStore.addAssistant(template.name, template.prompt, template.searchEnabled)
-  showToast('添加成功')
+  showToast(t('toast.assistantAdded'))
 }
 
 // 点击添加助手
@@ -359,16 +366,16 @@ function getPromptPreview(prompt: string): string {
       <button class="back-btn" @click="goBack">
         <i class="i-mdi-arrow-left"></i>
       </button>
-      <h1 class="settings-title">设置</h1>
+      <h1 class="settings-title">{{ $t('settings.title') }}</h1>
     </div>
 
     <div class="settings-content">
       <section class="settings-section">
-        <h2 class="section-title">通用设置</h2>
+        <h2 class="section-title">{{ $t('settings.general') }}</h2>
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">主题</span>
+            <span class="setting-name">{{ $t('settings.theme') }}</span>
           </div>
           <div class="theme-selector">
             <button
@@ -377,7 +384,7 @@ function getPromptPreview(prompt: string): string {
               @click="settingStore.updateSettings('theme', 'light')"
             >
               <i class="i-mdi-weather-sunny"></i>
-              <span>浅色</span>
+              <span>{{ $t('settings.themeLight') }}</span>
             </button>
             <button
               class="theme-btn"
@@ -385,7 +392,7 @@ function getPromptPreview(prompt: string): string {
               @click="settingStore.updateSettings('theme', 'dark')"
             >
               <i class="i-mdi-weather-night"></i>
-              <span>深色</span>
+              <span>{{ $t('settings.themeDark') }}</span>
             </button>
             <button
               class="theme-btn"
@@ -393,14 +400,36 @@ function getPromptPreview(prompt: string): string {
               @click="settingStore.updateSettings('theme', 'auto')"
             >
               <i class="i-mdi-theme-light-dark"></i>
-              <span>自动</span>
+              <span>{{ $t('settings.themeAuto') }}</span>
             </button>
           </div>
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">透明度</span>
+            <span class="setting-name">{{ $t('settings.language') }}</span>
+          </div>
+          <div class="theme-selector">
+            <button
+              class="theme-btn"
+              :class="{ active: settingStore.settings.language === 'zh-CN' }"
+              @click="settingStore.updateSettings('language', 'zh-CN')"
+            >
+              <span>中文</span>
+            </button>
+            <button
+              class="theme-btn"
+              :class="{ active: settingStore.settings.language === 'en-US' }"
+              @click="settingStore.updateSettings('language', 'en-US')"
+            >
+              <span>English</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-name">{{ $t('settings.transparency') }}</span>
             <span class="setting-value">{{ Math.round(settingStore.settings.windowAlpha * 100) }}%</span>
           </div>
           <input
@@ -416,7 +445,7 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">字体大小</span>
+            <span class="setting-name">{{ $t('settings.fontSize') }}</span>
             <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
           </div>
           <input
@@ -432,7 +461,7 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">代码主题</span>
+            <span class="setting-name">{{ $t('settings.codeTheme') }}</span>
           </div>
           <div class="code-theme-selector">
             <button
@@ -450,7 +479,7 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">开机自启动</span>
+            <span class="setting-name">{{ $t('settings.autoLaunch') }}</span>
           </div>
           <button
             class="toggle-btn"
@@ -463,8 +492,8 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">记忆上次文件夹</span>
-            <span class="setting-desc">启动时恢复上次选择的文件夹</span>
+            <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
+            <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
           </div>
           <button
             class="toggle-btn"
@@ -478,11 +507,11 @@ function getPromptPreview(prompt: string): string {
       </section>
 
       <section class="settings-section">
-        <h2 class="section-title">AI 设置</h2>
+        <h2 class="section-title">{{ $t('settings.ai') }}</h2>
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">API URL</span>
+            <span class="setting-name">{{ $t('settings.aiUrl') }}</span>
           </div>
           <input
             type="text"
@@ -495,7 +524,7 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">API Key</span>
+            <span class="setting-name">{{ $t('settings.aiKey') }}</span>
           </div>
           <input
             type="password"
@@ -508,38 +537,38 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">模型</span>
+            <span class="setting-name">{{ $t('settings.aiModel') }}</span>
           </div>
           <input
             type="text"
             :value="settingStore.settings.aiModel"
             @change="settingStore.updateSettings('aiModel', ($event.target as HTMLInputElement).value)"
             class="text-input"
-            placeholder="deepseek-chat"
+            placeholder="deepseek-v4-flash"
           />
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">百度搜索 API Key</span>
-            <span class="setting-desc">启用联网搜索能力 (AppBuilder)</span>
+            <span class="setting-name">{{ $t('settings.aiBaiduKey') }}</span>
+            <span class="setting-desc">{{ $t('settings.aiBaiduKeyDesc') }}</span>
           </div>
           <input
             type="password"
             :value="settingStore.settings.baiduSearchKey"
             @change="settingStore.updateSettings('baiduSearchKey', ($event.target as HTMLInputElement).value)"
             class="text-input"
-            placeholder="请填写 AppBuilder API Key"
+            :placeholder="$t('settings.aiBaiduKeyPlaceholder')"
           />
           <button class="link-btn" @click="openBaiduKeyPage">
             <i class="i-mdi-open-in-new"></i>
-            查看MCP以及获取 AppBuilder API Key
+            {{ $t('settings.aiGetBaiduKey') }}
           </button>
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">模板助手</span>
+            <span class="setting-name">{{ $t('settings.aiTemplateAssistants') }}</span>
           </div>
           <div class="template-assistants">
             <button
@@ -555,7 +584,7 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
-            <span class="setting-name">我的助手</span>
+            <span class="setting-name">{{ $t('settings.aiMyAssistants') }}</span>
           </div>
           <div class="user-assistants">
             <div
@@ -575,7 +604,7 @@ function getPromptPreview(prompt: string): string {
                   class="action-btn search-btn"
                   :class="{ active: assistant.searchEnabled }"
                   @click="handleToggleSearch(assistant)"
-                  :title="assistant.searchEnabled ? '联网搜索已开启' : '联网搜索已关闭'"
+                  :title="assistant.searchEnabled ? t('assistant.searchOn') : t('assistant.searchOff')"
                 >
                   <i class="i-mdi-web"></i>
                 </button>
@@ -589,14 +618,14 @@ function getPromptPreview(prompt: string): string {
             </div>
             <button class="add-assistant-btn" @click="handleAddAssistant">
               <i class="i-mdi-plus"></i>
-              <span>添加助手</span>
+              <span>{{ $t('settings.addAssistant') }}</span>
             </button>
           </div>
         </div>
       </section>
 
       <section class="settings-section">
-        <h2 class="section-title">快捷键设置</h2>
+        <h2 class="section-title">{{ $t('settings.shortcuts') }}</h2>
 
         <div class="shortcut-list">
           <div
@@ -611,7 +640,7 @@ function getPromptPreview(prompt: string): string {
               <span class="shortcut-desc">{{ shortcutDescs[key as keyof ShortcutSettings] }}</span>
             </div>
             <div class="shortcut-value">
-              <span v-if="recordingKey === key" class="recording-text">点击按键...</span>
+              <span v-if="recordingKey === key" class="recording-text">{{ $t('settings.recording') }}</span>
               <span v-else class="shortcut-key">
                 {{ settingStore.settings.shortcuts[key as keyof ShortcutSettings] }}
               </span>
@@ -621,15 +650,15 @@ function getPromptPreview(prompt: string): string {
         </div>
 
         <p v-if="recordingKey" class="recording-hint">
-          按下快捷键组合，按 Escape 取消
+          {{ $t('settings.recordingHint') }}
         </p>
       </section>
 
       <section class="settings-section">
-        <h2 class="section-title">关于</h2>
+        <h2 class="section-title">{{ $t('settings.about') }}</h2>
         <div class="setting-item version-item">
           <div class="version-info">
-            <span class="version-label">当前版本</span>
+            <span class="version-label">{{ $t('settings.currentVersion') }}</span>
             <span class="version-number">v{{ currentVersion }}</span>
           </div>
           <button
@@ -638,17 +667,17 @@ function getPromptPreview(prompt: string): string {
             @click="checkForUpdates"
           >
             <i v-if="checkLoading" class="i-mdi-loading spin"></i>
-            <span v-else>检查更新</span>
+            <span v-else>{{ $t('settings.checkUpdate') }}</span>
           </button>
         </div>
 
         <div v-if="updateAvailable" class="setting-item update-available">
           <div class="update-info">
             <i class="i-mdi-update"></i>
-            <span>发现新版本 v{{ latestVersion }}</span>
+            <span>{{ $t('settings.updateAvailable', { version: latestVersion }) }}</span>
           </div>
           <button class="download-btn" @click="openReleasePage">
-            <span>前往下载</span>
+            <span>{{ $t('settings.download') }}</span>
             <i class="i-mdi-open-in-new"></i>
           </button>
         </div>
@@ -663,14 +692,14 @@ function getPromptPreview(prompt: string): string {
         <div v-else-if="latestVersion && !checkLoading" class="setting-item update-latest">
           <div class="update-info">
             <i class="i-mdi-check-circle-outline"></i>
-            <span>已是最新版本 (v{{ latestVersion }})</span>
+            <span>{{ $t('settings.upToDate', { version: latestVersion }) }}</span>
           </div>
         </div>
 
         <div class="setting-item links-item">
           <a :href="tagsUrl" target="_blank" class="link-item">
             <i class="i-mdi-tag-outline"></i>
-            <span>版本标签</span>
+            <span>{{ $t('settings.versionTags') }}</span>
             <i class="i-mdi-open-in-new link-icon"></i>
           </a>
         </div>

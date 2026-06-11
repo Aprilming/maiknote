@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Note, NoteMetadata } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useDirectoryStore } from '@/stores/directoryStore'
+import i18n from '@/i18n'
 
 export const useNoteStore = defineStore('note', () => {
   // File system
@@ -470,7 +471,7 @@ export const useNoteStore = defineStore('note', () => {
 
     // At first position - show hint, don't navigate
     if (activeIdx === 0) {
-      showHint('已经是第一篇笔记')
+      showHint(i18n.global.t('nav.firstNote'))
       return
     }
 
@@ -499,7 +500,7 @@ export const useNoteStore = defineStore('note', () => {
     if (activeIdx >= active.length - 1) {
       if (isEmpty) {
         // Last note is empty - show hint
-        showHint('已经是最后一篇笔记')
+        showHint(i18n.global.t('nav.lastNote'))
       } else {
         // Last note has content - create new note at tail
         await createNoteAtTail()

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, watchEffect, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import TiptapEditor from './TiptapEditor.vue'
 import DirectoryTree from '@/components/Search/DirectoryTree.vue'
 import { useNoteStore } from '@/stores/noteStore'
@@ -18,38 +19,39 @@ const settingStore = useSettingStore()
 // 当前目录名称（始终显示）
 const currentDirName = computed(() => {
   const id = noteStore.filterDirectoryId
-  if (id === null) return '主目录'
-  return directoryStore.getDirectory(id)?.name ?? '主目录'
+  if (id === null) return t('dirTree.rootDir')
+  return directoryStore.getDirectory(id)?.name ?? t('dirTree.rootDir')
 })
 const { writeNote } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
 
 const { isDark } = useTheme()
+const { t } = useI18n()
 
 const LIGHT_COLORS = [
-  { name: '暖黄', value: '#fff9e6' },
-  { name: '柔粉', value: '#fce4ec' },
-  { name: '淡紫', value: '#f3e5f5' },
-  { name: '天蓝', value: '#e3f2fd' },
-  { name: '薄荷', value: '#e0f2f1' },
-  { name: '淡橙', value: '#fff3e0' },
-  { name: '灰蓝', value: '#e8eaf6' },
-  { name: '淡灰', value: '#f5f5f5' },
-  { name: '浅绿', value: '#e8f5e9' },
-  { name: '米色', value: '#faf8f5' },
+  { nameKey: 'color.warmYellow', value: '#fff9e6' },
+  { nameKey: 'color.softPink', value: '#fce4ec' },
+  { nameKey: 'color.lightPurple', value: '#f3e5f5' },
+  { nameKey: 'color.skyBlue', value: '#e3f2fd' },
+  { nameKey: 'color.mint', value: '#e0f2f1' },
+  { nameKey: 'color.lightOrange', value: '#fff3e0' },
+  { nameKey: 'color.grayBlue', value: '#e8eaf6' },
+  { nameKey: 'color.lightGray', value: '#f5f5f5' },
+  { nameKey: 'color.lightGreen', value: '#e8f5e9' },
+  { nameKey: 'color.beige', value: '#faf8f5' },
 ]
 
 const DARK_COLORS = [
-  { name: '暗蓝', value: '#1e293b' },
-  { name: '暗紫', value: '#2a1a3e' },
-  { name: '暗绿', value: '#1a2e24' },
-  { name: '暗红', value: '#3d1a1a' },
-  { name: '深灰', value: '#1f2937' },
-  { name: '暗青', value: '#1a2e2e' },
-  { name: '暗橙', value: '#3d2a1a' },
-  { name: '墨蓝', value: '#0f172a' },
-  { name: '暗粉', value: '#2e1a2a' },
-  { name: '暗棕', value: '#2e241a' },
+  { nameKey: 'color.darkBlue', value: '#1e293b' },
+  { nameKey: 'color.darkPurple', value: '#2a1a3e' },
+  { nameKey: 'color.darkGreen', value: '#1a2e24' },
+  { nameKey: 'color.darkRed', value: '#3d1a1a' },
+  { nameKey: 'color.darkGray', value: '#1f2937' },
+  { nameKey: 'color.darkCyan', value: '#1a2e2e' },
+  { nameKey: 'color.darkOrange', value: '#3d2a1a' },
+  { nameKey: 'color.inkBlue', value: '#0f172a' },
+  { nameKey: 'color.darkPink', value: '#2e1a2a' },
+  { nameKey: 'color.darkBrown', value: '#2e241a' },
 ]
 
 const NOTE_COLORS = computed(() => isDark() ? DARK_COLORS : LIGHT_COLORS)
@@ -349,7 +351,7 @@ function handleToggleSourceMode() {
         class="source-textarea"
         :style="currentNote?.backgroundColor ? { background: currentNote.backgroundColor + ' !important' } : {}"
         :readonly="isLocked"
-        placeholder="在此输入 Markdown 源码..."
+        :placeholder="$t('editor.sourcePlaceholder')"
       ></textarea>
 
       <!-- 正常 Markdown 编辑模式 -->
@@ -370,7 +372,7 @@ function handleToggleSourceMode() {
         class="source-mode-button"
         :class="{ 'is-active': isSourceMode }"
         @click.stop="handleToggleSourceMode"
-        :title="isSourceMode ? '切换到 Markdown' : '切换到源码'"
+        :title="isSourceMode ? $t('editor.switchMarkdown') : $t('editor.switchSource')"
       >
         <i v-if="isSourceMode" class="i-mdi-markdown"></i>
         <i v-else class="i-mdi-code-tags"></i>
@@ -386,7 +388,7 @@ function handleToggleSourceMode() {
 
       <!-- note indicator -->
       <div class="note-indicator" @click.stop>
-        {{ noteStore.activeIndex + 1 }} / {{ noteStore.activeNoteList.length }}
+        {{ $t('editor.noteIndicator', { index: noteStore.activeIndex + 1, total: noteStore.activeNoteList.length }) }}
       </div>
 
       <!-- 目录指示器 -->
@@ -408,26 +410,34 @@ function handleToggleSourceMode() {
         class="lock-button"
         :class="{ 'is-locked': isLocked }"
         @click.stop="toggleLock"
-        :title="isLocked ? '解锁笔记' : '锁定笔记'"
+        :title="isLocked ? $t('editor.unlockNote') : $t('editor.lockNote')"
       >
         <i v-if="isLocked" class="i-mdi-lock"></i>
         <i v-else class="i-mdi-lock-open-variant"></i>
       </button>
 
-      <!-- word count -->
-      <div class="word-count" @click.stop>
-        {{ wordCount }} 字
+      <!-- bottom bar: word count, color, search -->
+      <div class="bottom-bar">
+        <div v-show="!searchVisible" class="word-count" @click.stop>
+          {{ $t('editor.wordCount', { count: wordCount }) }}
+        </div>
+        <button
+          class="color-btn"
+          :class="{ 'has-color': currentNote?.backgroundColor }"
+          @click.stop="toggleColorPicker"
+          :title="$t('editor.noteBgColor')"
+        >
+          <i class="i-mdi-palette-outline"></i>
+        </button>
+        <button
+          v-if="!isSourceMode && !searchVisible"
+          class="search-toggle-btn"
+          @click.stop="openSearch"
+          :title="$t('editor.searchInNote')"
+        >
+          <i class="i-mdi-magnify"></i>
+        </button>
       </div>
-
-      <!-- color button -->
-      <button
-        class="color-btn"
-        :class="{ 'has-color': currentNote?.backgroundColor }"
-        @click.stop="toggleColorPicker"
-        title="笔记背景颜色"
-      >
-        <i class="i-mdi-palette-outline"></i>
-      </button>
 
       <!-- color picker popup -->
       <div v-if="colorPickerVisible" class="color-picker-overlay" @click="colorPickerVisible = false">
@@ -440,22 +450,12 @@ function handleToggleSourceMode() {
         />
       </div>
 
-      <!-- search toggle -->
-      <button
-        v-if="!isSourceMode && !searchVisible"
-        class="search-toggle-btn"
-        @click.stop="openSearch"
-        title="在笔记中搜索"
-      >
-        <i class="i-mdi-magnify"></i>
-      </button>
-
       <!-- search bar -->
       <div v-if="!isSourceMode && searchVisible" class="search-bar" @click.stop>
         <input
           type="text"
           class="search-input"
-          placeholder="搜索..."
+          :placeholder="$t('editor.searchPlaceholder')"
           :value="searchQuery"
           @input="handleSearchInput"
           @keydown="handleSearchKeydown"
@@ -467,7 +467,7 @@ function handleToggleSourceMode() {
           class="search-nav-btn"
           @click="handleSearchPrev"
           :disabled="searchMatchCount === 0"
-          title="上一个匹配 (Shift+Enter)"
+          :title="$t('editor.searchPrev')"
         >
           <i class="i-mdi-chevron-up"></i>
         </button>
@@ -475,11 +475,11 @@ function handleToggleSourceMode() {
           class="search-nav-btn"
           @click="handleSearchNext"
           :disabled="searchMatchCount === 0"
-          title="下一个匹配 (Enter)"
+          :title="$t('editor.searchNext')"
         >
           <i class="i-mdi-chevron-down"></i>
         </button>
-        <button class="search-close-btn" @click="closeSearch" title="关闭搜索 (Esc)">
+        <button class="search-close-btn" @click="closeSearch" :title="$t('editor.searchClose')">
           <i class="i-mdi-close"></i>
         </button>
       </div>
@@ -737,11 +737,17 @@ function handleToggleSourceMode() {
   font-size: 16px;
 }
 
-.word-count {
+.bottom-bar {
   position: absolute;
   bottom: 10px;
   left: 10px;
   z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.word-count {
   padding: 6px 14px;
   background-color: var(--color-surface);
   border-radius: 20px;
@@ -757,10 +763,6 @@ function handleToggleSourceMode() {
 }
 
 .search-toggle-btn {
-  position: absolute;
-  bottom: 10px;
-  left: 80px;
-  z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -789,10 +791,6 @@ function handleToggleSourceMode() {
 }
 
 .color-btn {
-  position: absolute;
-  bottom: 10px;
-  left: 118px;
-  z-index: 11;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -805,6 +803,7 @@ function handleToggleSourceMode() {
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: all 0.2s;
+  flex-shrink: 0;
   -webkit-user-select: none;
 }
 

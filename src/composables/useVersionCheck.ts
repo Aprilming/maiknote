@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { fetch } from '@tauri-apps/plugin-http'
+import i18n from '../i18n'
 import packageJson from '../../package.json'
 
 const currentVersion = packageJson.version
@@ -53,13 +54,13 @@ async function checkForUpdates(): Promise<boolean> {
         updateAvailable.value = true
       }
     } else {
-      checkError.value = '无法解析版本信息'
+      checkError.value = i18n.global.t('version.parseError')
     }
 
     return updateAvailable.value
   } catch (error) {
     console.error('Failed to check for updates:', error)
-    checkError.value = '网络错误，请检查网络连接'
+    checkError.value = i18n.global.t('version.networkError')
     return false
   } finally {
     isLoading.value = false

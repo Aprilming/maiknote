@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+useI18n()
 
 export interface ColorOption {
-  name: string
+  nameKey: string
   value: string
 }
 
@@ -46,38 +49,38 @@ onUnmounted(() => {
 
 <template>
   <div class="color-picker-popup" @click.stop>
-    <div class="color-picker-header">背景</div>
+    <div class="color-picker-header">{{ $t('colorPicker.background') }}</div>
     <div class="color-grid">
       <button
         class="color-option"
         :class="{ active: !modelValue }"
-        title="默认"
+        :title="$t('colorPicker.default')"
         @click="selectColor(undefined)"
       >
         <span class="color-swatch color-swatch-none">
           <i class="i-mdi-close"></i>
         </span>
-        <span class="color-label">默认</span>
+        <span class="color-label">{{ $t('colorPicker.default') }}</span>
       </button>
       <button
         v-for="color in colors"
         :key="color.value"
         class="color-option"
         :class="{ active: modelValue === color.value }"
-        :title="color.name"
+        :title="$t(color.nameKey)"
         @click="selectColor(color.value)"
       >
         <span class="color-swatch" :style="{ background: color.value }"></span>
-        <span class="color-label">{{ color.name }}</span>
+        <span class="color-label">{{ $t(color.nameKey) }}</span>
       </button>
       <div
         class="color-option color-option-custom"
-        title="自定义颜色"
+        :title="$t('colorPicker.customColor')"
       >
         <span class="color-swatch color-swatch-custom">
           <i class="i-mdi-palette-outline"></i>
         </span>
-        <span class="color-label">自定义</span>
+        <span class="color-label">{{ $t('colorPicker.custom') }}</span>
         <input
           type="color"
           class="custom-color-input"

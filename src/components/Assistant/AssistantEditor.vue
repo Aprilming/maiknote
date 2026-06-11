@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Assistant } from '@/stores/assistantsStore'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: boolean
@@ -21,7 +24,7 @@ const searchEnabled = ref(false)
 const isEditMode = computed(() => !!props.assistant)
 
 // 弹窗标题
-const dialogTitle = computed(() => isEditMode.value ? '编辑助手' : '新建助手')
+const dialogTitle = computed(() => isEditMode.value ? t('assistant.editTitle') : t('assistant.newTitle'))
 
 // 合并监听 modelValue 和 assistant 变化
 watch(
@@ -80,27 +83,27 @@ function handleOverlayClick(e: MouseEvent) {
 
           <div class="dialog-content">
             <div class="form-item">
-              <label class="form-label">名称</label>
+              <label class="form-label">{{ $t('assistant.name') }}</label>
               <input
                 v-model="name"
                 type="text"
                 class="form-input"
-                placeholder="请输入助手名称"
+                :placeholder="$t('assistant.namePlaceholder')"
               />
             </div>
 
             <div class="form-item">
-              <label class="form-label">提示词</label>
+              <label class="form-label">{{ $t('assistant.prompt') }}</label>
               <textarea
                 v-model="prompt"
                 class="form-textarea"
-                placeholder="请输入提示词内容"
+                :placeholder="$t('assistant.promptPlaceholder')"
                 rows="6"
               ></textarea>
             </div>
 
             <div class="form-item">
-              <label class="form-label">联网搜索</label>
+              <label class="form-label">{{ $t('assistant.webSearch') }}</label>
               <div class="toggle-with-hint">
                 <button
                   class="toggle-btn"
@@ -109,14 +112,14 @@ function handleOverlayClick(e: MouseEvent) {
                 >
                   <span class="toggle-slider"></span>
                 </button>
-                <span class="toggle-hint">启用后，AI 将先搜索互联网获取实时信息，再处理内容</span>
+                <span class="toggle-hint">{{ $t('assistant.webSearchHint') }}</span>
               </div>
             </div>
           </div>
 
           <div class="dialog-footer">
-            <button class="btn btn-cancel" @click="closeDialog">取消</button>
-            <button class="btn btn-save" @click="handleSave" :disabled="!name.trim()">保存</button>
+            <button class="btn btn-cancel" @click="closeDialog">{{ $t('assistant.cancel') }}</button>
+            <button class="btn btn-save" @click="handleSave" :disabled="!name.trim()">{{ $t('assistant.save') }}</button>
           </div>
         </div>
       </div>

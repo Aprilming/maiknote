@@ -14,7 +14,7 @@ async function createNewNote() {
   <aside class="sidebar">
     <div class="sidebar-header">
       <h1 class="app-title">MaikNote</h1>
-      <button class="new-note-btn" @click="createNewNote" title="New Note (Cmd+N)">
+      <button class="new-note-btn" @click="createNewNote" :title="$t('sidebar.newNote')">
         <i class="i-mdi-plus"></i>
       </button>
     </div>

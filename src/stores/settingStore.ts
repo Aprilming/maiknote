@@ -29,6 +29,7 @@ export type CodeTheme =
   | 'nord'
 
 export interface AppSettings {
+  language: 'zh-CN' | 'en-US'
   theme: Theme
   fontSize: number
   fontFamily: string
@@ -57,6 +58,7 @@ export interface AppSettings {
 export const useSettingStore = defineStore('setting', () => {
   // State
   const settings = ref<AppSettings>({
+    language: 'zh-CN',
     theme: 'auto',
     fontSize: 14,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -83,7 +85,7 @@ export const useSettingStore = defineStore('setting', () => {
     },
     aiUrl: 'https://api.deepseek.com/chat/completions',
     aiKey: '',
-    aiModel: 'deepseek-chat',
+    aiModel: 'deepseek-v4-flash',
     aiOptimizePrompt: '你是一个笔记优化助手，严格按照以下规则优化笔记内容，直接输出结果，不附加任何说明。\n' +
         '输出格式\n' +
         '返回纯字符串，不使用 ``` 代码块包裹\n' +
@@ -171,6 +173,7 @@ export const useSettingStore = defineStore('setting', () => {
 
   function resetSettings() {
     settings.value = {
+      language: 'zh-CN',
       theme: 'auto',
       fontSize: 14,
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -197,7 +200,7 @@ export const useSettingStore = defineStore('setting', () => {
       },
       aiUrl: 'https://api.deepseek.com/chat/completions',
       aiKey: '',
-      aiModel: 'deepseek-chat',
+      aiModel: 'deepseek-v4-flash',
       aiOptimizePrompt: '你是一个笔记优化助手，严格按照以下规则优化笔记内容，直接输出结果，不附加任何说明。\n' +
           '输出格式\n' +
           '返回纯字符串，不使用 ``` 代码块包裹\n' +

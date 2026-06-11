@@ -146,13 +146,13 @@ async function startDrag(e: MouseEvent) {
     >
     <!-- Window Controls -->
     <div class="window-controls">
-      <button class="window-btn close" @click="closeWindow" title="关闭">
+      <button class="window-btn close" @click="closeWindow" :title="$t('titlebar.close')">
         <span class="dot"></span>
       </button>
-      <button class="window-btn minimize" @click="minimizeWindow" title="最小化">
+      <button class="window-btn minimize" @click="minimizeWindow" :title="$t('titlebar.minimize')">
         <span class="dot"></span>
       </button>
-      <button class="window-btn fullscreen" @click="toggleFullscreen" title="全屏">
+      <button class="window-btn fullscreen" @click="toggleFullscreen" :title="$t('titlebar.fullscreen')">
         <span class="dot"></span>
       </button>
     </div>
@@ -162,14 +162,14 @@ async function startDrag(e: MouseEvent) {
       <button
         class="action-btn"
         @click.stop="emit('openSearch')"
-        title="搜索 (Cmd+F)"
+        :title="$t('titlebar.search')"
       >
         <i class="i-mdi-magnify"></i>
       </button>
       <button
         class="action-btn"
         @click.stop="createNoteAfterCurrent"
-        title="新增笔记"
+        :title="$t('titlebar.newNote')"
       >
         <i class="i-mdi-plus"></i>
       </button>
@@ -177,32 +177,32 @@ async function startDrag(e: MouseEvent) {
         class="action-btn"
         :class="{ active: isPinned }"
         @click.stop="togglePin"
-        :title="isPinned ? '取消置顶' : '置顶窗口'"
+        :title="isPinned ? $t('titlebar.unpin') : $t('titlebar.pin')"
       >
         <i :class="isPinned ? 'i-mdi-pin' : 'i-mdi-pin-outline'"></i>
       </button>
       <button
         class="action-btn"
         @click.stop="deleteCurrentNote"
-        title="删除笔记"
+        :title="$t('titlebar.deleteNote')"
       >
         <i class="i-mdi-delete"></i>
       </button>
       <button
         class="action-btn"
         @click.stop="importMarkdown"
-        title="导入 Markdown"
+        :title="$t('titlebar.import')"
       >
         <i class="i-mdi-import"></i>
       </button>
       <button
         class="action-btn"
         @click.stop="exportMarkdown"
-        title="导出 Markdown"
+        :title="$t('titlebar.export')"
       >
         <i class="i-mdi-export"></i>
       </button>
-      <button class="action-btn" @click="openSettings" title="设置">
+      <button class="action-btn" @click="openSettings" :title="$t('titlebar.settings')">
         <i class="i-mdi-cog"></i>
       </button>
     </div>
