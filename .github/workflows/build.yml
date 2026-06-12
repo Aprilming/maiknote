@@ -87,12 +87,14 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets update-artifacts
-          find MaikNote-aarch64 -name '*.dmg'           -exec cp {} release-assets/   \;
-          find MaikNote-x86_64  -name '*.dmg'           -exec cp {} release-assets/   \;
-          find MaikNote-aarch64 -name '*.app.tar.gz'     -exec cp {} update-artifacts/ \;
-          find MaikNote-x86_64  -name '*.app.tar.gz'     -exec cp {} update-artifacts/ \;
-          find MaikNote-aarch64 -name '*.app.tar.gz.sig' -exec cp {} update-artifacts/ \;
-          find MaikNote-x86_64  -name '*.app.tar.gz.sig' -exec cp {} update-artifacts/ \;
+          # DMG 文件名自带架构后缀，直接复制
+          find MaikNote-aarch64 -name '*.dmg' -exec cp {} release-assets/ \;
+          find MaikNote-x86_64  -name '*.dmg' -exec cp {} release-assets/ \;
+          # .app.tar.gz 和 .sig 同名无架构后缀，复制时重命名加上架构
+          find MaikNote-aarch64 -name '*.app.tar.gz'     -exec sh -c 'for f; do cp "$f" "update-artifacts/$(basename "${f%.tar.gz}")_aarch64.app.tar.gz"; done' _ {} +
+          find MaikNote-x86_64  -name '*.app.tar.gz'     -exec sh -c 'for f; do cp "$f" "update-artifacts/$(basename "${f%.tar.gz}")_x86_64.app.tar.gz"; done' _ {} +
+          find MaikNote-aarch64 -name '*.app.tar.gz.sig' -exec sh -c 'for f; do cp "$f" "update-artifacts/$(basename "${f%.sig}")_aarch64.app.tar.gz.sig"; done' _ {} +
+          find MaikNote-x86_64  -name '*.app.tar.gz.sig' -exec sh -c 'for f; do cp "$f" "update-artifacts/$(basename "${f%.sig}")_x86_64.app.tar.gz.sig"; done' _ {} +
           ls -la release-assets/
           ls -la update-artifacts/
       - name: Generate latest.json
