@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { useNoteStore } from '@/stores/noteStore'
@@ -25,6 +26,7 @@ function showTitleBar() {
 }
 
 function hideTitleBar() {
+  if (dragState) return
   isVisible.value = false
 }
 
@@ -114,21 +116,61 @@ function openSettings() {
   emit('openSettings')
 }
 
-// 终极手动拖拽方案（无视部分 WebKit 透明层级 Bug）
+// 纯手动拖拽：requestAnimationFrame 同步到刷新率，统一使用物理像素
+let dragState = false
+let dragWinX = 0
+let dragWinY = 0
+let dragStartX = 0
+let dragStartY = 0
+let lastScreenX = 0
+let lastScreenY = 0
+let rafId = 0
+
 async function startDrag(e: MouseEvent) {
-  // 如果点在了可交互元素上，跳过
   if ((e.target as HTMLElement).closest('button, input, .window-controls, .right-actions')) {
     return
   }
-  // 左键点击才触发拖拽
-  if (e.buttons === 1 && appWindow) {
-    try {
-      await appWindow.startDragging()
-    } catch (err) {
-      console.error('Drag error:', err)
-    }
-  }
+  if (e.buttons !== 1 || !appWindow) return
+
+  const dpr = window.devicePixelRatio || 1
+  const pos = await appWindow.outerPosition()  // 物理像素
+  dragWinX = pos.x
+  dragWinY = pos.y
+  dragStartX = e.screenX * dpr  // 逻辑→物理
+  dragStartY = e.screenY * dpr
+  lastScreenX = dragStartX
+  lastScreenY = dragStartY
+  dragState = true
+  rafId = requestAnimationFrame(updateWindowPosition)
 }
+
+function updateWindowPosition() {
+  if (!dragState || !appWindow) return
+  const dx = lastScreenX - dragStartX
+  const dy = lastScreenY - dragStartY
+  appWindow.setPosition(new PhysicalPosition(dragWinX + dx, dragWinY + dy))
+  rafId = requestAnimationFrame(updateWindowPosition)
+}
+
+function onDragMove(e: MouseEvent) {
+  const dpr = window.devicePixelRatio || 1
+  lastScreenX = e.screenX * dpr
+  lastScreenY = e.screenY * dpr
+}
+
+function onDragEnd() {
+  dragState = false
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+}
+
+onMounted(() => {
+  document.addEventListener('mousemove', onDragMove)
+  document.addEventListener('mouseup', onDragEnd)
+})
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', onDragEnd)
+})
 </script>
 
 <template>

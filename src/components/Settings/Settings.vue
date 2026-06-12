@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
@@ -13,18 +14,51 @@ import { useI18n } from 'vue-i18n'
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
 const appWindow = isTauri ? getCurrentWindow() : null
 
-// 拖拽功能
+// 拖拽功能 - requestAnimationFrame 同步到刷新率，统一使用物理像素
+let dragState = false
+let dragWinX = 0
+let dragWinY = 0
+let dragStartX = 0
+let dragStartY = 0
+let lastScreenX = 0
+let lastScreenY = 0
+let rafId = 0
+
 async function startDrag(e: MouseEvent) {
   if ((e.target as HTMLElement).closest('button, input, .back-btn')) {
     return
   }
-  if (e.buttons === 1 && appWindow) {
-    try {
-      await appWindow.startDragging()
-    } catch (err) {
-      console.error('Drag error:', err)
-    }
-  }
+  if (e.buttons !== 1 || !appWindow) return
+
+  const dpr = window.devicePixelRatio || 1
+  const pos = await appWindow.outerPosition()  // 物理像素
+  dragWinX = pos.x
+  dragWinY = pos.y
+  dragStartX = e.screenX * dpr  // 逻辑→物理
+  dragStartY = e.screenY * dpr
+  lastScreenX = dragStartX
+  lastScreenY = dragStartY
+  dragState = true
+  rafId = requestAnimationFrame(updateWindowPosition)
+}
+
+function updateWindowPosition() {
+  if (!dragState || !appWindow) return
+  const dx = lastScreenX - dragStartX
+  const dy = lastScreenY - dragStartY
+  appWindow.setPosition(new PhysicalPosition(dragWinX + dx, dragWinY + dy))
+  rafId = requestAnimationFrame(updateWindowPosition)
+}
+
+function onDragMove(e: MouseEvent) {
+  const dpr = window.devicePixelRatio || 1
+  lastScreenX = e.screenX * dpr
+  lastScreenY = e.screenY * dpr
+}
+
+function onDragEnd() {
+  dragState = false
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
 }
 
 // Toast 通知
@@ -126,10 +160,14 @@ function blockNoteShortcuts(e: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', blockNoteShortcuts, true)
+  document.addEventListener('mousemove', onDragMove)
+  document.addEventListener('mouseup', onDragEnd)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', blockNoteShortcuts, true)
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', onDragEnd)
 })
 
 // 切换自启动
