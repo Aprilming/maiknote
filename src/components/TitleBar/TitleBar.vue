@@ -39,7 +39,12 @@ async function toggleFullscreen() {
 }
 
 async function closeWindow() {
-  await appWindow?.hide()
+  if (settingStore.settings.closeBehavior === 'quit') {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('exit_app')
+  } else {
+    await appWindow?.hide()
+  }
 }
 
 async function togglePin() {

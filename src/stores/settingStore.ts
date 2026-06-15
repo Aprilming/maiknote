@@ -38,6 +38,7 @@ export interface AppSettings {
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
   autoLaunch: boolean // 开机自启动
+  closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
   rememberLastDirectory: boolean // 启动时恢复上次选择的目录
   globalHotkey: string
   autoSaveInterval: number // milliseconds
@@ -67,6 +68,7 @@ export const useSettingStore = defineStore('setting', () => {
     windowAlpha: 1.0,
     alwaysOnTop: false,
     autoLaunch: false,
+    closeBehavior: 'hide',
     rememberLastDirectory: false,
     globalHotkey: 'Option+Cmd+A',
     autoSaveInterval: 500,
@@ -182,6 +184,7 @@ export const useSettingStore = defineStore('setting', () => {
       windowAlpha: 1.0,
       alwaysOnTop: false,
       autoLaunch: false,
+      closeBehavior: 'hide',
       rememberLastDirectory: false,
       globalHotkey: 'Option+Cmd+A',
       autoSaveInterval: 500,

@@ -532,6 +532,30 @@ function getPromptPreview(prompt: string): string {
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="setting-name">{{ $t('settings.closeBehavior') }}</span>
+          </div>
+          <div class="theme-selector">
+            <button
+              class="theme-btn"
+              :class="{ active: settingStore.settings.closeBehavior === 'hide' }"
+              @click="settingStore.updateSettings('closeBehavior', 'hide')"
+            >
+              <i class="i-mdi-eye-off-outline"></i>
+              <span>{{ $t('settings.closeBehaviorHide') }}</span>
+            </button>
+            <button
+              class="theme-btn"
+              :class="{ active: settingStore.settings.closeBehavior === 'quit' }"
+              @click="settingStore.updateSettings('closeBehavior', 'quit')"
+            >
+              <i class="i-mdi-exit-to-app"></i>
+              <span>{{ $t('settings.closeBehaviorQuit') }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
             <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
           </div>

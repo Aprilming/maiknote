@@ -332,6 +332,13 @@ async fn register_center_shortcut(
     Ok(())
 }
 
+/// 退出应用
+#[tauri::command]
+async fn exit_app(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
 /// 居中窗口
 #[tauri::command]
 async fn center_window(app: AppHandle) -> Result<(), String> {
@@ -1032,6 +1039,7 @@ pub fn run() {
             register_center_shortcut,
             center_window,
             toggle_window,
+            exit_app,
             set_window_alpha,
             autostart::enable_autostart,
             autostart::disable_autostart,

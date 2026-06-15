@@ -171,7 +171,11 @@ onMounted(async () => {
     }
     if (event.metaKey && event.code === 'KeyW') {
       event.preventDefault()
-      appWindow.hide()
+      if (settingStore.settings.closeBehavior === 'quit') {
+        invoke('exit_app')
+      } else {
+        appWindow.hide()
+      }
     }
   })
   // 监听系统主题变化，同步 surface 背景色
