@@ -137,6 +137,7 @@ export function createSlashCommand() {
               { title: 'emoji[表情]', command: 'emoji' },
               { title: '引用', command: 'blockquote' },
               { title: '代码块', command: 'code' },
+              { title: 'IP信息', command: 'ipinfo' },
             ]
             return allItems.filter(item =>
               item.title.toLowerCase().includes(query.toLowerCase())

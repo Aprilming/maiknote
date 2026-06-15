@@ -7,6 +7,34 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+use serde::Serialize;
+
+/// 出口 IP 信息（来自远程 API）
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+struct PublicIpInfo {
+    country: String,
+    province: String,
+    city: String,
+    ip: String,
+    isp: String,
+    scene: String,
+    company: String,
+}
+
+/// 本地网卡信息
+#[derive(Debug, Clone, Serialize)]
+struct LocalInterface {
+    name: String,
+    ips: Vec<String>,
+}
+
+/// 网络信息汇总
+#[derive(Debug, Clone, Serialize)]
+struct NetworkInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_ip: Option<PublicIpInfo>,
+    local_interfaces: Vec<LocalInterface>,
+}
 
 
 #[cfg(target_os = "macos")]
@@ -847,6 +875,64 @@ unsafe extern "C" fn display_reconfiguration_callback(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 获取网络信息（出口IP + 本地网卡）
+#[tauri::command]
+async fn get_network_info() -> Result<NetworkInfo, String> {
+    let public_ip = fetch_public_ip().await.ok();
+    let local_interfaces = list_local_interfaces().unwrap_or_default();
+
+    Ok(NetworkInfo {
+        public_ip,
+        local_interfaces,
+    })
+}
+
+/// 请求远程 API 获取出口 IP 信息
+async fn fetch_public_ip() -> Result<PublicIpInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://ip.911505.xyz/ip/location")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+
+    let info = resp
+        .json::<PublicIpInfo>()
+        .await
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+
+    Ok(info)
+}
+
+/// 枚举本地所有网卡，收集 IPv4 和 IPv6 地址
+fn list_local_interfaces() -> Result<Vec<LocalInterface>, String> {
+    let mut interfaces: Vec<LocalInterface> = Vec::new();
+
+    for iface in if_addrs::get_if_addrs().map_err(|e| e.to_string())? {
+        // 跳过 loopback 接口
+        if iface.is_loopback() {
+            continue;
+        }
+
+        let ip = iface.ip().to_string();
+
+        if let Some(existing) = interfaces.iter_mut().find(|i| i.name == iface.name) {
+            existing.ips.push(ip);
+        } else {
+            interfaces.push(LocalInterface {
+                name: iface.name.clone(),
+                ips: vec![ip],
+            });
+        }
+    }
+
+    Ok(interfaces)
+}
+
 pub fn run() {
     // 检测是否是开机自启启动
     let is_autolaunch = autostart::is_autolaunch();
@@ -950,6 +1036,7 @@ pub fn run() {
             autostart::enable_autostart,
             autostart::disable_autostart,
             autostart::is_autostart_enabled,
+            get_network_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -202,6 +202,8 @@ export default {
   'slash.backToCommands': 'Back to commands',
   'slash.noEmoji': 'No matching emoji',
   'slash.continueTyping': 'Keep typing to search...',
+  'slash.ipinfo': 'IP Info',
+  'slash.tools': 'Tools',
 
   'nav.firstNote': 'This is the first note',
   'nav.lastNote': 'This is the last note',

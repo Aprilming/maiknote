@@ -83,6 +83,7 @@ MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 - ✅ Dark / Light theme toggle
 - ✅ Custom note background color
 - ✅ Folder / Directory tree
+- ✅ `/ip` public IP & local network interface lookup
 
 ## Data Storage
 

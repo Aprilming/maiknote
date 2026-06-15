@@ -2,6 +2,7 @@
 import { ref, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Editor } from '@tiptap/vue-3'
+import { invoke } from '@tauri-apps/api/core'
 import { emojiCategories, filterEmojis, type EmojiItem } from './emojiData'
 
 const props = defineProps<{
@@ -65,6 +66,12 @@ const COMMAND_GROUPS = [
       { titleKey: 'slash.quote', command: 'blockquote', icon: '"' },
       { titleKey: 'slash.code', command: 'code', icon: '<>' },
       { titleKey: 'slash.table', command: 'table', icon: '⊞' },
+    ]
+  },
+  {
+    labelKey: 'slash.tools',
+    items: [
+      { titleKey: 'slash.ipinfo', command: 'ipinfo', icon: '🌐' },
     ]
   }
 ]
@@ -140,7 +147,99 @@ function runCommand(command: string) {
     case 'table':
       editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
       break
+    case 'ipinfo':
+      handleIpInfo()
+      break
   }
+}
+
+// 网络信息响应类型
+interface NetworkInfoResponse {
+  public_ip?: {
+    country: string
+    province: string
+    city: string
+    ip: string
+    isp: string
+    scene: string
+    company: string
+  } | null
+  local_interfaces: Array<{
+    name: string
+    ips: string[]
+  }>
+}
+
+// 获取并插入网络信息
+async function handleIpInfo() {
+  const editor = props.editor
+  if (!editor) return
+
+  // 记录当前光标位置（/ip 已被 deleteRange 删除）
+  const start = editor.state.selection.from
+
+  // 插入 loading 占位
+  const loadingHtml = '<p>⏳ 正在获取网络信息...</p>'
+  editor.chain().focus().insertContent(loadingHtml).run()
+
+  try {
+    const info = await invoke<NetworkInfoResponse>('get_network_info')
+    const html = buildIpInfoHtml(info)
+    // 删除 loading 占位，替换为实际内容
+    const end = editor.state.selection.to
+    editor.chain().focus().setTextSelection({ from: start, to: end }).deleteSelection().insertContent(html).run()
+  } catch {
+    // 请求失败：删除 loading 占位
+    editor.chain().focus().setTextSelection({ from: start, to: editor.state.selection.to }).deleteSelection().run()
+  }
+}
+
+// 构建 IP 信息 HTML（带颜色）
+function buildIpInfoHtml(info: NetworkInfoResponse): string {
+  const parts: string[] = []
+
+  // 标题
+  parts.push('<h3><span style="color: #667eea">〓 网络信息 〓</span></h3>')
+
+  // 出口 IP
+  if (info.public_ip) {
+    const p = info.public_ip
+    parts.push('<p>')
+    parts.push('<strong><span style="color: #e67e22">出口IP</span></strong>')
+    parts.push('<br><span style="color: #2ecc71">IP: </span>')
+    parts.push(`<code>${escapeHtml(p.ip)}</code>`)
+    parts.push('<br><span style="color: #2ecc71">国家: </span>')
+    parts.push(`${escapeHtml(p.country)} | ${escapeHtml(p.province)} | ${escapeHtml(p.city)}`)
+    parts.push('<br><span style="color: #2ecc71">ISP: </span>')
+    parts.push(escapeHtml(p.isp))
+    parts.push('</p>')
+  }
+
+  // 本地网卡
+  parts.push('<p>')
+  parts.push('<strong><span style="color: #27ae60">本地网卡</span></strong>')
+  for (const iface of info.local_interfaces) {
+    parts.push(`<br><span style="color: #3498db">${escapeHtml(iface.name)}</span>`)
+    for (let i = 0; i < iface.ips.length; i++) {
+      const ip = iface.ips[i]
+      const isV4 = ip.includes('.')
+      const color = isV4 ? '#9b59b6' : '#1abc9c'
+      const label = isV4 ? 'IPv4' : 'IPv6'
+      parts.push(` <span style="color: ${color}">${escapeHtml(ip)}</span>`)
+      parts.push(`<span style="color: var(--color-text-secondary); font-size: 0.85em">(${label})</span>`)
+    }
+  }
+  parts.push('</p>')
+
+  return parts.join('')
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 // 选择命令项

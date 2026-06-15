@@ -203,6 +203,8 @@ export default {
   'slash.backToCommands': '返回命令列表',
   'slash.noEmoji': '无匹配 emoji',
   'slash.continueTyping': '继续输入搜索...',
+  'slash.ipinfo': 'IP信息',
+  'slash.tools': '工具',
 
   'nav.firstNote': '已经是第一篇笔记',
   'nav.lastNote': '已经是最后一篇笔记',
