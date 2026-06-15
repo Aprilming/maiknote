@@ -25,16 +25,16 @@ let lastScreenY = 0
 let rafId = 0
 
 async function startDrag(e: MouseEvent) {
-  if ((e.target as HTMLElement).closest('button, input, .back-btn')) {
+  if ((e.target as HTMLElement).closest('button, input, .back-btn, .settings-nav')) {
     return
   }
   if (e.buttons !== 1 || !appWindow) return
 
   const dpr = window.devicePixelRatio || 1
-  const pos = await appWindow.outerPosition()  // 物理像素
+  const pos = await appWindow.outerPosition()
   dragWinX = pos.x
   dragWinY = pos.y
-  dragStartX = e.screenX * dpr  // 逻辑→物理
+  dragStartX = e.screenX * dpr
   dragStartY = e.screenY * dpr
   lastScreenX = dragStartX
   lastScreenY = dragStartY
@@ -89,6 +89,17 @@ const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
 const { t, locale } = useI18n()
 
+// 分类导航
+type CategoryKey = 'general' | 'ai' | 'shortcuts' | 'about'
+const activeCategory = ref<CategoryKey>('general')
+
+const categories = computed(() => [
+  { key: 'general' as const, icon: 'i-mdi-tune', label: t('settings.general') },
+  { key: 'ai' as const, icon: 'i-mdi-robot', label: t('settings.ai') },
+  { key: 'shortcuts' as const, icon: 'i-mdi-keyboard', label: t('settings.shortcuts') },
+  { key: 'about' as const, icon: 'i-mdi-information-outline', label: t('settings.about') },
+])
+
 // 同步语言设置到 i18n locale
 watch(() => settingStore.settings.language, (newLang) => {
   locale.value = newLang
@@ -97,7 +108,6 @@ watch(() => settingStore.settings.language, (newLang) => {
 // 初始化助手数据
 onMounted(async () => {
   await assistantsStore.loadAssistants()
-  // 从 iCloud 同步 AI 配置到设置
   if (assistantsStore.aiConfigExists) {
     settingStore.settings.aiUrl = assistantsStore.aiUrl
     settingStore.settings.aiKey = assistantsStore.aiKey
@@ -209,7 +219,6 @@ const shortcutLabels = computed((): Record<keyof ShortcutSettings, string> => ({
   centerWindow: t('shortcut.centerWindow'),
 }))
 
-// 快捷键说明
 const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
   showMain: t('shortcut.showMainDesc'),
   prevNote: t('shortcut.prevNoteDesc'),
@@ -222,59 +231,41 @@ const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
   centerWindow: t('shortcut.centerWindowDesc'),
 }))
 
-// 开始录制快捷键
 function startRecording(key: keyof ShortcutSettings) {
   recordingKey.value = key
 }
 
-// 停止录制快捷键
 function stopRecording() {
   recordingKey.value = null
 }
 
-// 处理键盘事件
 function handleKeydown(e: KeyboardEvent) {
   if (!recordingKey.value) return
 
-  // 阻止默认行为
   e.preventDefault()
   e.stopPropagation()
 
-  // 排除功能键单独按下（使用 e.code 判断）
   if (['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
     return
   }
 
-  // 构建快捷键字符串
   const parts: string[] = []
   if (e.ctrlKey) parts.push('Ctrl')
   if (e.altKey) parts.push('Option')
   if (e.shiftKey) parts.push('Shift')
   if (e.metaKey) parts.push('Cmd')
 
-  // 禁止单个键（没有任何修饰键）
-  if (parts.length === 0) {
-    return
-  }
+  if (parts.length === 0) return
+  if (parts.length > 4) return
 
-  // 最多4个组合键
-  if (parts.length > 4) {
-    return
-  }
-
-  // 使用 e.code 获取物理键名
   let keyName: string
   if (e.code.startsWith('Key')) {
-    // KeyA -> A
     keyName = e.code.slice(3)
   } else if (e.code.startsWith('Digit')) {
-    // Digit1 -> 1
     keyName = e.code.slice(5)
   } else if (e.code.startsWith('Bracket')) {
-    // BracketLeft -> [, BracketRight -> ]
     keyName = e.code === 'BracketLeft' ? '[' : ']'
   } else {
-    // 处理特殊键
     switch (e.code) {
       case 'Space': keyName = 'Space'; break
       case 'Enter': keyName = 'Enter'; break
@@ -287,20 +278,16 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   parts.push(keyName)
-
   const shortcut = parts.join('+')
 
-  // 更新设置
   settingStore.updateSettings('shortcuts', {
     ...settingStore.settings.shortcuts,
     [recordingKey.value]: shortcut,
   })
 
-  // 停止录制
   stopRecording()
 }
 
-// 取消录制
 function cancelRecording(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     stopRecording()
@@ -321,7 +308,6 @@ const codeThemeOptions: { value: CodeTheme; label: string; icon: string }[] = [
   { value: 'nord', label: 'Nord', icon: 'i-mdi-snowflake' },
 ]
 
-// 返回按钮
 const emit = defineEmits<{
   (e: 'back'): void
 }>()
@@ -332,68 +318,54 @@ function goBack() {
 
 // ==================== AI 助手相关 ====================
 
-// AssistantEditor 弹窗状态
 const assistantEditorVisible = ref(false)
 const editingAssistant = ref<Assistant | undefined>(undefined)
 
-// 用户助手列表（排除模板助手）
 const userAssistants = computed(() => {
   return assistantsStore.assistants.filter(a => !a.id.startsWith('template-'))
 })
 
-// 点击模板助手
 async function handleTemplateClick(template: Assistant) {
-  // 检查是否已存在相同 prompt 的用户助手
   if (assistantsStore.hasUserPrompt(template.prompt)) {
     showToast(t('toast.assistantAlreadyAdded'))
     return
   }
-  // 添加到用户助手列表
   await assistantsStore.addAssistant(template.name, template.prompt, template.searchEnabled)
   showToast(t('toast.assistantAdded'))
 }
 
-// 点击添加助手
 function handleAddAssistant() {
   editingAssistant.value = undefined
   assistantEditorVisible.value = true
 }
 
-// 点击编辑助手
 function handleEditAssistant(assistant: Assistant) {
   editingAssistant.value = assistant
   assistantEditorVisible.value = true
 }
 
-// 点击删除助手
 async function handleDeleteAssistant(assistant: Assistant) {
   await assistantsStore.deleteAssistant(assistant.id)
 }
 
-// 保存助手
 async function handleSaveAssistant(data: { name: string; prompt: string; searchEnabled: boolean }) {
   if (editingAssistant.value) {
-    // 编辑模式
     await assistantsStore.updateAssistant(editingAssistant.value.id, data)
   } else {
-    // 新建模式
     await assistantsStore.addAssistant(data.name, data.prompt, data.searchEnabled)
   }
 }
 
-// 切换助手搜索开关
 async function handleToggleSearch(assistant: Assistant) {
   await assistantsStore.updateAssistant(assistant.id, {
     searchEnabled: !assistant.searchEnabled,
   })
 }
 
-// 获取百度 AppBuilder API Key
 function openBaiduKeyPage() {
   openUrl('https://www.mcpworld.com/zh/detail/cKWidcA4kbFuEMzK9HrbP6')
 }
 
-// 提示词预览（截取前50字符）
 function getPromptPreview(prompt: string): string {
   const chars = [...prompt]
   return chars.length > 50 ? chars.slice(0, 50).join('') + '...' : prompt
@@ -409,369 +381,383 @@ function getPromptPreview(prompt: string): string {
       <h1 class="settings-title">{{ $t('settings.title') }}</h1>
     </div>
 
-    <div class="settings-content">
-      <section class="settings-section">
-        <h2 class="section-title">{{ $t('settings.general') }}</h2>
+    <div class="settings-body">
+      <!-- 左侧分类导航 -->
+      <nav class="settings-nav">
+        <button
+          v-for="cat in categories"
+          :key="cat.key"
+          class="nav-item"
+          :class="{ active: activeCategory === cat.key }"
+          @click="activeCategory = cat.key"
+        >
+          <i :class="cat.icon"></i>
+          <span>{{ cat.label }}</span>
+        </button>
+      </nav>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.theme') }}</span>
+      <!-- 右侧设置内容 -->
+      <div class="settings-content">
+        <!-- 通用 -->
+        <section v-if="activeCategory === 'general'" class="settings-section">
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.theme') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.theme === 'light' }"
+                @click="settingStore.updateSettings('theme', 'light')"
+              >
+                <i class="i-mdi-weather-sunny"></i>
+                <span>{{ $t('settings.themeLight') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.theme === 'dark' }"
+                @click="settingStore.updateSettings('theme', 'dark')"
+              >
+                <i class="i-mdi-weather-night"></i>
+                <span>{{ $t('settings.themeDark') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.theme === 'auto' }"
+                @click="settingStore.updateSettings('theme', 'auto')"
+              >
+                <i class="i-mdi-theme-light-dark"></i>
+                <span>{{ $t('settings.themeAuto') }}</span>
+              </button>
+            </div>
           </div>
-          <div class="theme-selector">
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.theme === 'light' }"
-              @click="settingStore.updateSettings('theme', 'light')"
-            >
-              <i class="i-mdi-weather-sunny"></i>
-              <span>{{ $t('settings.themeLight') }}</span>
-            </button>
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.theme === 'dark' }"
-              @click="settingStore.updateSettings('theme', 'dark')"
-            >
-              <i class="i-mdi-weather-night"></i>
-              <span>{{ $t('settings.themeDark') }}</span>
-            </button>
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.theme === 'auto' }"
-              @click="settingStore.updateSettings('theme', 'auto')"
-            >
-              <i class="i-mdi-theme-light-dark"></i>
-              <span>{{ $t('settings.themeAuto') }}</span>
-            </button>
-          </div>
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.language') }}</span>
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.language') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.language === 'zh-CN' }"
+                @click="settingStore.updateSettings('language', 'zh-CN')"
+              >
+                <span>中文</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.language === 'en-US' }"
+                @click="settingStore.updateSettings('language', 'en-US')"
+              >
+                <span>English</span>
+              </button>
+            </div>
           </div>
-          <div class="theme-selector">
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.language === 'zh-CN' }"
-              @click="settingStore.updateSettings('language', 'zh-CN')"
-            >
-              <span>中文</span>
-            </button>
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.language === 'en-US' }"
-              @click="settingStore.updateSettings('language', 'en-US')"
-            >
-              <span>English</span>
-            </button>
-          </div>
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.transparency') }}</span>
-            <span class="setting-value">{{ Math.round(settingStore.settings.windowAlpha * 100) }}%</span>
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.transparency') }}</span>
+              <span class="setting-value">{{ Math.round(settingStore.settings.windowAlpha * 100) }}%</span>
+            </div>
+            <input
+              type="range"
+              min="0.6"
+              max="1"
+              step="0.01"
+              :value="settingStore.settings.windowAlpha"
+              @input="onAlphaChange"
+              class="alpha-slider"
+            />
           </div>
-          <input
-            type="range"
-            min="0.6"
-            max="1"
-            step="0.01"
-            :value="settingStore.settings.windowAlpha"
-            @input="onAlphaChange"
-            class="alpha-slider"
-          />
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.fontSize') }}</span>
-            <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.fontSize') }}</span>
+              <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="32"
+              step="1"
+              :value="settingStore.settings.fontSize"
+              @input="settingStore.updateSettings('fontSize', parseInt(($event.target as HTMLInputElement).value))"
+              class="alpha-slider"
+            />
           </div>
-          <input
-            type="range"
-            min="10"
-            max="32"
-            step="1"
-            :value="settingStore.settings.fontSize"
-            @input="settingStore.updateSettings('fontSize', parseInt(($event.target as HTMLInputElement).value))"
-            class="alpha-slider"
-          />
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.codeTheme') }}</span>
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.codeTheme') }}</span>
+            </div>
+            <div class="code-theme-selector">
+              <button
+                v-for="theme in codeThemeOptions"
+                :key="theme.value"
+                class="code-theme-btn"
+                :class="{ active: settingStore.settings.codeTheme === theme.value }"
+                @click="settingStore.updateSettings('codeTheme', theme.value)"
+              >
+                <i :class="theme.icon"></i>
+                <span>{{ theme.label }}</span>
+              </button>
+            </div>
           </div>
-          <div class="code-theme-selector">
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.autoLaunch') }}</span>
+            </div>
             <button
-              v-for="theme in codeThemeOptions"
-              :key="theme.value"
-              class="code-theme-btn"
-              :class="{ active: settingStore.settings.codeTheme === theme.value }"
-              @click="settingStore.updateSettings('codeTheme', theme.value)"
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.autoLaunch }"
+              @click="toggleAutoLaunch"
             >
-              <i :class="theme.icon"></i>
-              <span>{{ theme.label }}</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.autoLaunch') }}</span>
-          </div>
-          <button
-            class="toggle-btn"
-            :class="{ active: settingStore.settings.autoLaunch }"
-            @click="toggleAutoLaunch"
-          >
-            <span class="toggle-slider"></span>
-          </button>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.closeBehavior') }}</span>
-          </div>
-          <div class="theme-selector">
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.closeBehavior === 'hide' }"
-              @click="settingStore.updateSettings('closeBehavior', 'hide')"
-            >
-              <i class="i-mdi-eye-off-outline"></i>
-              <span>{{ $t('settings.closeBehaviorHide') }}</span>
-            </button>
-            <button
-              class="theme-btn"
-              :class="{ active: settingStore.settings.closeBehavior === 'quit' }"
-              @click="settingStore.updateSettings('closeBehavior', 'quit')"
-            >
-              <i class="i-mdi-exit-to-app"></i>
-              <span>{{ $t('settings.closeBehaviorQuit') }}</span>
+              <span class="toggle-slider"></span>
             </button>
           </div>
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
-            <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
-          </div>
-          <button
-            class="toggle-btn"
-            :class="{ active: settingStore.settings.rememberLastDirectory }"
-            @click="settingStore.updateSettings('rememberLastDirectory', !settingStore.settings.rememberLastDirectory)"
-          >
-            <span class="toggle-slider"></span>
-          </button>
-        </div>
-
-      </section>
-
-      <section class="settings-section">
-        <h2 class="section-title">{{ $t('settings.ai') }}</h2>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiUrl') }}</span>
-          </div>
-          <input
-            type="text"
-            :value="settingStore.settings.aiUrl"
-            @change="settingStore.updateSettings('aiUrl', ($event.target as HTMLInputElement).value)"
-            class="text-input"
-            placeholder="https://api.deepseek.com/chat/completions"
-          />
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiKey') }}</span>
-          </div>
-          <input
-            type="password"
-            :value="settingStore.settings.aiKey"
-            @change="settingStore.updateSettings('aiKey', ($event.target as HTMLInputElement).value)"
-            class="text-input"
-            placeholder="sk-..."
-          />
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiModel') }}</span>
-          </div>
-          <input
-            type="text"
-            :value="settingStore.settings.aiModel"
-            @change="settingStore.updateSettings('aiModel', ($event.target as HTMLInputElement).value)"
-            class="text-input"
-            placeholder="deepseek-v4-flash"
-          />
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiBaiduKey') }}</span>
-            <span class="setting-desc">{{ $t('settings.aiBaiduKeyDesc') }}</span>
-          </div>
-          <input
-            type="password"
-            :value="settingStore.settings.baiduSearchKey"
-            @change="settingStore.updateSettings('baiduSearchKey', ($event.target as HTMLInputElement).value)"
-            class="text-input"
-            :placeholder="$t('settings.aiBaiduKeyPlaceholder')"
-          />
-          <button class="link-btn" @click="openBaiduKeyPage">
-            <i class="i-mdi-open-in-new"></i>
-            {{ $t('settings.aiGetBaiduKey') }}
-          </button>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiTemplateAssistants') }}</span>
-          </div>
-          <div class="template-assistants">
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
+              <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
+            </div>
             <button
-              v-for="template in defaultAssistants"
-              :key="template.id"
-              class="template-assistant-btn"
-              @click="handleTemplateClick(template)"
+                class="toggle-btn"
+                :class="{ active: settingStore.settings.rememberLastDirectory }"
+                @click="settingStore.updateSettings('rememberLastDirectory', !settingStore.settings.rememberLastDirectory)"
             >
-              <span class="template-name">{{ template.name }}</span>
+              <span class="toggle-slider"></span>
             </button>
           </div>
-        </div>
 
-        <div class="setting-item">
-          <div class="setting-label">
-            <span class="setting-name">{{ $t('settings.aiMyAssistants') }}</span>
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.closeBehavior') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.closeBehavior === 'hide' }"
+                @click="settingStore.updateSettings('closeBehavior', 'hide')"
+              >
+                <i class="i-mdi-eye-off-outline"></i>
+                <span>{{ $t('settings.closeBehaviorHide') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.closeBehavior === 'quit' }"
+                @click="settingStore.updateSettings('closeBehavior', 'quit')"
+              >
+                <i class="i-mdi-exit-to-app"></i>
+                <span>{{ $t('settings.closeBehaviorQuit') }}</span>
+              </button>
+            </div>
           </div>
-          <div class="user-assistants">
-            <div
-              v-for="assistant in userAssistants"
-              :key="assistant.id"
-              class="assistant-card"
-            >
-              <div class="assistant-info">
-                <div class="assistant-name">
-                  <i class="i-mdi-face-agent"></i>
-                  <span>{{ assistant.name }}</span>
+
+        </section>
+
+        <!-- AI -->
+        <section v-if="activeCategory === 'ai'" class="settings-section">
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiUrl') }}</span>
+            </div>
+            <input
+              type="text"
+              :value="settingStore.settings.aiUrl"
+              @change="settingStore.updateSettings('aiUrl', ($event.target as HTMLInputElement).value)"
+              class="text-input"
+              placeholder="https://api.deepseek.com/chat/completions"
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiKey') }}</span>
+            </div>
+            <input
+              type="password"
+              :value="settingStore.settings.aiKey"
+              @change="settingStore.updateSettings('aiKey', ($event.target as HTMLInputElement).value)"
+              class="text-input"
+              placeholder="sk-..."
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiModel') }}</span>
+            </div>
+            <input
+              type="text"
+              :value="settingStore.settings.aiModel"
+              @change="settingStore.updateSettings('aiModel', ($event.target as HTMLInputElement).value)"
+              class="text-input"
+              placeholder="deepseek-v4-flash"
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiBaiduKey') }}</span>
+              <span class="setting-desc">{{ $t('settings.aiBaiduKeyDesc') }}</span>
+            </div>
+            <input
+              type="password"
+              :value="settingStore.settings.baiduSearchKey"
+              @change="settingStore.updateSettings('baiduSearchKey', ($event.target as HTMLInputElement).value)"
+              class="text-input"
+              :placeholder="$t('settings.aiBaiduKeyPlaceholder')"
+            />
+            <button class="link-btn" @click="openBaiduKeyPage">
+              <i class="i-mdi-open-in-new"></i>
+              {{ $t('settings.aiGetBaiduKey') }}
+            </button>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiTemplateAssistants') }}</span>
+            </div>
+            <div class="template-assistants">
+              <button
+                v-for="template in defaultAssistants"
+                :key="template.id"
+                class="template-assistant-btn"
+                @click="handleTemplateClick(template)"
+              >
+                <span class="template-name">{{ template.name }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.aiMyAssistants') }}</span>
+            </div>
+            <div class="user-assistants">
+              <div
+                v-for="assistant in userAssistants"
+                :key="assistant.id"
+                class="assistant-card"
+              >
+                <div class="assistant-info">
+                  <div class="assistant-name">
+                    <i class="i-mdi-face-agent"></i>
+                    <span>{{ assistant.name }}</span>
+                  </div>
+                  <div class="assistant-preview">{{ getPromptPreview(assistant.prompt) }}</div>
                 </div>
-                <div class="assistant-preview">{{ getPromptPreview(assistant.prompt) }}</div>
+                <div class="assistant-actions">
+                  <button
+                    class="action-btn search-btn"
+                    :class="{ active: assistant.searchEnabled }"
+                    @click="handleToggleSearch(assistant)"
+                    :title="assistant.searchEnabled ? t('assistant.searchOn') : t('assistant.searchOff')"
+                  >
+                    <i class="i-mdi-web"></i>
+                  </button>
+                  <button class="action-btn edit-btn" @click="handleEditAssistant(assistant)">
+                    <i class="i-mdi-pencil"></i>
+                  </button>
+                  <button class="action-btn delete-btn" @click="handleDeleteAssistant(assistant)">
+                    <i class="i-mdi-delete"></i>
+                  </button>
+                </div>
               </div>
-              <div class="assistant-actions">
-                <button
-                  class="action-btn search-btn"
-                  :class="{ active: assistant.searchEnabled }"
-                  @click="handleToggleSearch(assistant)"
-                  :title="assistant.searchEnabled ? t('assistant.searchOn') : t('assistant.searchOff')"
-                >
-                  <i class="i-mdi-web"></i>
-                </button>
-                <button class="action-btn edit-btn" @click="handleEditAssistant(assistant)">
-                  <i class="i-mdi-pencil"></i>
-                </button>
-                <button class="action-btn delete-btn" @click="handleDeleteAssistant(assistant)">
-                  <i class="i-mdi-delete"></i>
-                </button>
+              <button class="add-assistant-btn" @click="handleAddAssistant">
+                <i class="i-mdi-plus"></i>
+                <span>{{ $t('settings.addAssistant') }}</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 快捷键 -->
+        <section v-if="activeCategory === 'shortcuts'" class="settings-section">
+          <div class="shortcut-list">
+            <div
+              v-for="(label, key) in shortcutLabels"
+              :key="key"
+              class="shortcut-item"
+              :class="{ recording: recordingKey === key }"
+              @click="startRecording(key as keyof ShortcutSettings)"
+            >
+              <div class="shortcut-info">
+                <span class="shortcut-label">{{ label }}</span>
+                <span class="shortcut-desc">{{ shortcutDescs[key as keyof ShortcutSettings] }}</span>
+              </div>
+              <div class="shortcut-value">
+                <span v-if="recordingKey === key" class="recording-text">{{ $t('settings.recording') }}</span>
+                <span v-else class="shortcut-key">
+                  {{ settingStore.settings.shortcuts[key as keyof ShortcutSettings] }}
+                </span>
+                <i v-if="recordingKey !== key" class="i-mdi-pencil edit-icon"></i>
               </div>
             </div>
-            <button class="add-assistant-btn" @click="handleAddAssistant">
-              <i class="i-mdi-plus"></i>
-              <span>{{ $t('settings.addAssistant') }}</span>
+          </div>
+
+          <p v-if="recordingKey" class="recording-hint">
+            {{ $t('settings.recordingHint') }}
+          </p>
+        </section>
+
+        <!-- 关于 -->
+        <section v-if="activeCategory === 'about'" class="settings-section">
+          <div class="setting-item version-item">
+            <div class="version-info">
+              <span class="version-label">{{ $t('settings.currentVersion') }}</span>
+              <span class="version-number">v{{ currentVersion }}</span>
+            </div>
+            <button
+              class="check-update-btn"
+              :disabled="checkLoading"
+              @click="checkForUpdates"
+            >
+              <i v-if="checkLoading" class="i-mdi-loading spin"></i>
+              <span v-else>{{ $t('settings.checkUpdate') }}</span>
             </button>
           </div>
-        </div>
-      </section>
 
-      <section class="settings-section">
-        <h2 class="section-title">{{ $t('settings.shortcuts') }}</h2>
-
-        <div class="shortcut-list">
-          <div
-            v-for="(label, key) in shortcutLabels"
-            :key="key"
-            class="shortcut-item"
-            :class="{ recording: recordingKey === key }"
-            @click="startRecording(key as keyof ShortcutSettings)"
-          >
-            <div class="shortcut-info">
-              <span class="shortcut-label">{{ label }}</span>
-              <span class="shortcut-desc">{{ shortcutDescs[key as keyof ShortcutSettings] }}</span>
+          <div v-if="updateAvailable" class="setting-item update-available">
+            <div class="update-info">
+              <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
+              <i v-else class="i-mdi-update"></i>
+              <span v-if="downloadState === 'downloading'">{{ $t('settings.downloading', { progress: downloadProgress }) }}</span>
+              <span v-else>{{ $t('settings.updateAvailable', { version: latestVersion }) }}</span>
             </div>
-            <div class="shortcut-value">
-              <span v-if="recordingKey === key" class="recording-text">{{ $t('settings.recording') }}</span>
-              <span v-else class="shortcut-key">
-                {{ settingStore.settings.shortcuts[key as keyof ShortcutSettings] }}
-              </span>
-              <i v-if="recordingKey !== key" class="i-mdi-pencil edit-icon"></i>
+            <button class="download-btn" :disabled="downloadState === 'downloading'" @click="downloadAndInstall">
+              <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
+              <i v-else class="i-mdi-download"></i>
+              <span v-if="downloadState === 'downloading'">{{ downloadProgress }}%</span>
+              <span v-else>{{ $t('settings.installUpdate') }}</span>
+            </button>
+          </div>
+
+          <div v-else-if="checkError" class="setting-item update-error">
+            <div class="update-info">
+              <i class="i-mdi-alert-circle-outline"></i>
+              <span>{{ checkError }}</span>
             </div>
           </div>
-        </div>
 
-        <p v-if="recordingKey" class="recording-hint">
-          {{ $t('settings.recordingHint') }}
-        </p>
-      </section>
-
-      <section class="settings-section">
-        <h2 class="section-title">{{ $t('settings.about') }}</h2>
-        <div class="setting-item version-item">
-          <div class="version-info">
-            <span class="version-label">{{ $t('settings.currentVersion') }}</span>
-            <span class="version-number">v{{ currentVersion }}</span>
+          <div v-else-if="latestVersion && !checkLoading" class="setting-item update-latest">
+            <div class="update-info">
+              <i class="i-mdi-check-circle-outline"></i>
+              <span>{{ $t('settings.upToDate', { version: latestVersion }) }}</span>
+            </div>
           </div>
-          <button
-            class="check-update-btn"
-            :disabled="checkLoading"
-            @click="checkForUpdates"
-          >
-            <i v-if="checkLoading" class="i-mdi-loading spin"></i>
-            <span v-else>{{ $t('settings.checkUpdate') }}</span>
-          </button>
-        </div>
 
-        <div v-if="updateAvailable" class="setting-item update-available">
-          <div class="update-info">
-            <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
-            <i v-else class="i-mdi-update"></i>
-            <span v-if="downloadState === 'downloading'">{{ $t('settings.downloading', { progress: downloadProgress }) }}</span>
-            <span v-else>{{ $t('settings.updateAvailable', { version: latestVersion }) }}</span>
+          <div class="setting-item links-item">
+            <a :href="tagsUrl" target="_blank" class="link-item">
+              <i class="i-mdi-tag-outline"></i>
+              <span>{{ $t('settings.versionTags') }}</span>
+              <i class="i-mdi-open-in-new link-icon"></i>
+            </a>
           </div>
-          <button class="download-btn" :disabled="downloadState === 'downloading'" @click="downloadAndInstall">
-            <i v-if="downloadState === 'downloading'" class="i-mdi-loading spin"></i>
-            <i v-else class="i-mdi-download"></i>
-            <span v-if="downloadState === 'downloading'">{{ downloadProgress }}%</span>
-            <span v-else>{{ $t('settings.installUpdate') }}</span>
-          </button>
-        </div>
-
-        <div v-else-if="checkError" class="setting-item update-error">
-          <div class="update-info">
-            <i class="i-mdi-alert-circle-outline"></i>
-            <span>{{ checkError }}</span>
-          </div>
-        </div>
-
-        <div v-else-if="latestVersion && !checkLoading" class="setting-item update-latest">
-          <div class="update-info">
-            <i class="i-mdi-check-circle-outline"></i>
-            <span>{{ $t('settings.upToDate', { version: latestVersion }) }}</span>
-          </div>
-        </div>
-
-        <div class="setting-item links-item">
-          <a :href="tagsUrl" target="_blank" class="link-item">
-            <i class="i-mdi-tag-outline"></i>
-            <span>{{ $t('settings.versionTags') }}</span>
-            <i class="i-mdi-open-in-new link-icon"></i>
-          </a>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
 
     <AssistantEditor
@@ -831,6 +817,56 @@ function getPromptPreview(prompt: string): string {
   color: var(--color-text);
 }
 
+/* 主体布局：左侧导航 + 右侧内容 */
+.settings-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* 左侧分类导航 */
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 160px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-background);
+  flex-shrink: 0;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.nav-item:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.nav-item.active {
+  background: var(--color-primary);
+  color: white;
+}
+
+.nav-item i {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* 右侧内容区 */
 .settings-content {
   flex: 1;
   padding: 24px;
@@ -839,7 +875,7 @@ function getPromptPreview(prompt: string): string {
 }
 
 .settings-section {
-  margin-bottom: 32px;
+  /* 去掉 margin-bottom，section 本身不再需要间距 */
 }
 
 .setting-item {
@@ -1009,15 +1045,6 @@ function getPromptPreview(prompt: string): string {
   transform: translateX(20px);
 }
 
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 16px;
-}
-
 .shortcut-list {
   display: flex;
   flex-direction: column;
@@ -1126,16 +1153,6 @@ function getPromptPreview(prompt: string): string {
 .text-input::placeholder {
   color: var(--color-text-secondary);
   opacity: 0.6;
-}
-
-.textarea-input {
-  resize: vertical;
-  min-height: 60px;
-  height: auto;
-  font-family: inherit;
-  line-height: 1.5;
-  overflow: auto;
-  field-sizing: content;
 }
 
 /* 版本信息样式 */
