@@ -3,12 +3,14 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
-import { useSettingStore, type ShortcutSettings, type CodeTheme } from '@/stores/settingStore'
+import { useSettingStore, type ShortcutSettings, type CodeTheme, type EditorStylePreset } from '@/stores/settingStore'
+import { editorStylePresets } from '@/composables/editorStylePresets'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
 import { useI18n } from 'vue-i18n'
+import { useTheme } from '@/composables/useTheme'
 
 // 安全获取 Tauri 窗口
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
@@ -86,6 +88,7 @@ const checkLoading = computed(() => downloadState.value === 'checking')
 const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
 
 const settingStore = useSettingStore()
+const { currentTheme } = useTheme()
 const assistantsStore = useAssistantsStore()
 const { t, locale } = useI18n()
 
@@ -308,6 +311,39 @@ const codeThemeOptions: { value: CodeTheme; label: string; icon: string }[] = [
   { value: 'nord', label: 'Nord', icon: 'i-mdi-snowflake' },
 ]
 
+// 编辑器样式预设选项
+const editorStylePresetOptions = computed(() => {
+  const keys = Object.keys(editorStylePresets) as EditorStylePreset[]
+  return keys.map((key) => ({
+    value: key,
+    ...editorStylePresets[key],
+  }))
+})
+
+// 自定义颜色辅助函数
+const CUSTOM_COLOR_KEYS = [
+  { key: 'codeBg', label: 'settings.customCodeBg' },
+  { key: 'codeBorder', label: 'settings.customCodeBorder' },
+  { key: 'codeText', label: 'settings.customCodeText' },
+  { key: 'inlineCodeBg', label: 'settings.customInlineCodeBg' },
+  { key: 'inlineCodeText', label: 'settings.customInlineCodeText' },
+  { key: 'blockquoteBg', label: 'settings.customBlockquoteBg' },
+  { key: 'blockquoteBorder', label: 'settings.customBlockquoteBorder' },
+  { key: 'blockquoteText', label: 'settings.customBlockquoteText' },
+] as const
+
+type CustomColorKey = (typeof CUSTOM_COLOR_KEYS)[number]['key']
+
+function updateCustomColor(mode: 'light' | 'dark', key: CustomColorKey, value: string) {
+  const current = settingStore.settings.customEditorStyle
+  const updated = {
+    light: { ...current.light },
+    dark: { ...current.dark },
+  }
+  updated[mode][key] = value
+  settingStore.updateSettings('customEditorStyle', updated)
+}
+
 const emit = defineEmits<{
   (e: 'back'): void
 }>()
@@ -501,6 +537,79 @@ function getPromptPreview(prompt: string): string {
                 <i :class="theme.icon"></i>
                 <span>{{ theme.label }}</span>
               </button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.editorStylePreset') }}</span>
+              <span class="setting-desc">{{ $t('settings.editorStylePresetDesc') }}</span>
+            </div>
+            <div class="preset-selector">
+              <button
+                v-for="preset in editorStylePresetOptions"
+                :key="preset.value"
+                class="preset-btn"
+                :class="{ active: settingStore.settings.editorStylePreset === preset.value }"
+                @click="settingStore.updateSettings('editorStylePreset', preset.value)"
+              >
+                <div class="preset-preview">
+                  <span class="preset-dot" :style="{ background: currentTheme === 'dark' ? preset.dark.codeBg : preset.light.codeBg, borderColor: currentTheme === 'dark' ? preset.dark.codeBorder : preset.light.codeBorder }"></span>
+                  <span class="preset-dot" :style="{ background: currentTheme === 'dark' ? preset.dark.blockquoteBg : preset.light.blockquoteBg, borderColor: currentTheme === 'dark' ? preset.dark.blockquoteBorder : preset.light.blockquoteBorder }"></span>
+                </div>
+                <span class="preset-label">{{ $t('settings.preset_' + preset.value) }}</span>
+              </button>
+              <button
+                class="preset-btn"
+                :class="{ active: settingStore.settings.editorStylePreset === 'custom' }"
+                @click="settingStore.updateSettings('editorStylePreset', 'custom')"
+              >
+                <div class="preset-preview">
+                  <span class="preset-dot custom-dot"></span>
+                  <span class="preset-dot custom-dot"></span>
+                </div>
+                <span class="preset-label">{{ $t('settings.preset_custom') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 自定义颜色面板 -->
+          <div v-if="settingStore.settings.editorStylePreset === 'custom'" class="custom-colors-section">
+            <div class="custom-colors-title">{{ $t('settings.customColors') }}</div>
+
+            <div class="custom-colors-grid">
+              <div class="custom-colors-header">
+                <span></span>
+                <span class="custom-mode-label">{{ $t('settings.customLight') }}</span>
+                <span class="custom-mode-label">{{ $t('settings.customDark') }}</span>
+              </div>
+
+              <div class="custom-group-title">{{ $t('settings.customGroupCodeBlock') }}</div>
+              <div v-for="item in CUSTOM_COLOR_KEYS.filter(k => k.key.startsWith('code'))" :key="item.key" class="custom-color-row">
+                <span class="custom-color-label">{{ $t(item.label) }}</span>
+                <input type="color" :value="settingStore.settings.customEditorStyle.light[item.key]"
+                  @input="updateCustomColor('light', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+                <input type="color" :value="settingStore.settings.customEditorStyle.dark[item.key]"
+                  @input="updateCustomColor('dark', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+              </div>
+
+              <div class="custom-group-title">{{ $t('settings.customGroupInlineCode') }}</div>
+              <div v-for="item in CUSTOM_COLOR_KEYS.filter(k => k.key.startsWith('inlineCode'))" :key="item.key" class="custom-color-row">
+                <span class="custom-color-label">{{ $t(item.label) }}</span>
+                <input type="color" :value="settingStore.settings.customEditorStyle.light[item.key]"
+                  @input="updateCustomColor('light', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+                <input type="color" :value="settingStore.settings.customEditorStyle.dark[item.key]"
+                  @input="updateCustomColor('dark', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+              </div>
+
+              <div class="custom-group-title">{{ $t('settings.customGroupBlockquote') }}</div>
+              <div v-for="item in CUSTOM_COLOR_KEYS.filter(k => k.key.startsWith('blockquote'))" :key="item.key" class="custom-color-row">
+                <span class="custom-color-label">{{ $t(item.label) }}</span>
+                <input type="color" :value="settingStore.settings.customEditorStyle.light[item.key]"
+                  @input="updateCustomColor('light', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+                <input type="color" :value="settingStore.settings.customEditorStyle.dark[item.key]"
+                  @input="updateCustomColor('dark', item.key, ($event.target as HTMLInputElement).value)" class="color-input" />
+              </div>
             </div>
           </div>
 
@@ -1028,6 +1137,140 @@ function getPromptPreview(prompt: string): string {
 
 .code-theme-btn i {
   font-size: 18px;
+}
+
+/* Editor style preset selector */
+.preset-selector {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 11px;
+  min-width: 68px;
+}
+
+.preset-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.preset-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.preset-preview {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid;
+}
+
+.preset-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.custom-dot {
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) !important;
+  border: 1.5px solid rgba(128, 128, 128, 0.4) !important;
+}
+
+/* Custom colors panel */
+.custom-colors-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.custom-colors-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 12px;
+}
+
+.custom-colors-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.custom-colors-header {
+  display: grid;
+  grid-template-columns: 1fr 60px 60px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.custom-mode-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.custom-group-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+  padding: 8px 0 4px 0;
+  border-top: 1px solid var(--color-border);
+  margin-top: 4px;
+}
+
+.custom-color-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 60px;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.custom-color-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.color-input {
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  justify-self: center;
+}
+
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
 }
 
 .toggle-slider {

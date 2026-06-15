@@ -1402,8 +1402,9 @@ defineExpose({
 /* 编辑器左侧留白已在 .tiptap > .ProseMirror 中设置 */
 
 :deep(.tiptap pre) {
-  background: var(--color-code-bg, #f5f5f5);
-  border: 2px solid var(--color-code-border, #e0e0e0);
+  background: var(--editor-code-bg, var(--color-code-bg, #f5f5f5));
+  border: 2px solid var(--editor-code-border, var(--color-code-border, #e0e0e0));
+  color: var(--editor-code-text, inherit);
   border-radius: 8px;
   padding: 12px 16px;
   margin: 16px 0;
@@ -1614,10 +1615,12 @@ defineExpose({
 
 /* 引用样式 */
 .tiptap blockquote {
-  border-left: 3px solid var(--color-border);
-  padding-left: 16px;
+  background: var(--editor-blockquote-bg, transparent);
+  border-left: 3px solid var(--editor-blockquote-border, var(--color-border));
+  padding: 12px 16px;
   margin: 16px 0;
-  color: var(--color-text-secondary);
+  color: var(--editor-blockquote-text, var(--color-text-secondary));
+  border-radius: 0 6px 6px 0;
 }
 
 /* 列表样式 */
@@ -1642,13 +1645,9 @@ defineExpose({
   height: 0;
 }
 
-/* 代码块样式增强 */
+/* 代码块容器定位（颜色由 scoped 样式 + editor 预设控制） */
 .tiptap pre {
   position: relative;
-  background: var(--color-surface) !important;
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin: 16px 0;
 }
 
 .tiptap pre code {
@@ -1661,7 +1660,8 @@ defineExpose({
 
 /* 行内代码样式 */
 .tiptap code {
-  background: var(--color-surface);
+  background: var(--editor-inline-code-bg, var(--color-surface));
+  color: var(--editor-inline-code-text, inherit);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.9em;

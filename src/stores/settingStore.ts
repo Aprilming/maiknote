@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useAssistantsStore } from '@/stores/assistantsStore'
+import type { PresetColors } from '@/composables/editorStylePresets'
 
 export type Theme = 'light' | 'dark' | 'auto'
 
@@ -28,6 +29,13 @@ export type CodeTheme =
   | 'dracula'
   | 'nord'
 
+export type EditorStylePreset = 'default' | 'minimal' | 'amber' | 'slate' | 'ocean' | 'rose' | 'forest' | 'lavender' | 'dusk' | 'paper' | 'ink' | 'coral' | 'moss' | 'custom'
+
+export interface CustomEditorStyle {
+  light: PresetColors
+  dark: PresetColors
+}
+
 export interface AppSettings {
   language: 'zh-CN' | 'en-US'
   theme: Theme
@@ -45,6 +53,8 @@ export interface AppSettings {
   autoDeleteDays: number // 0 = disabled
   shortcuts: ShortcutSettings
   codeTheme: CodeTheme
+  editorStylePreset: EditorStylePreset
+  customEditorStyle: CustomEditorStyle
   // AI 设置
   aiUrl: string
   aiKey: string
@@ -74,6 +84,11 @@ export const useSettingStore = defineStore('setting', () => {
     autoSaveInterval: 500,
     autoDeleteDays: 0,
     codeTheme: 'tokyo-night-dark',
+    editorStylePreset: 'default',
+    customEditorStyle: {
+      light: { codeBg: 'rgba(240, 240, 245, 0.75)', codeBorder: 'rgba(200, 205, 215, 0.5)', codeText: '#374151', inlineCodeBg: 'rgba(237, 238, 244, 0.8)', inlineCodeText: '#d63384', blockquoteBg: 'rgba(245, 246, 250, 0.5)', blockquoteBorder: 'rgba(156, 163, 175, 0.45)', blockquoteText: '#6b7280' },
+      dark: { codeBg: 'rgba(30, 33, 40, 0.8)', codeBorder: 'rgba(55, 60, 70, 0.5)', codeText: '#c9d1d9', inlineCodeBg: 'rgba(30, 33, 40, 0.8)', inlineCodeText: '#f0a0c0', blockquoteBg: 'rgba(35, 38, 45, 0.5)', blockquoteBorder: 'rgba(100, 110, 130, 0.45)', blockquoteText: '#9ca3af' },
+    },
     shortcuts: {
       showMain: 'Option+Cmd+A',
       prevNote: 'Cmd+[',
@@ -158,6 +173,10 @@ export const useSettingStore = defineStore('setting', () => {
           ...settings.value,
           ...parsed,
           shortcuts: { ...settings.value.shortcuts, ...(parsed.shortcuts || {}) },
+          customEditorStyle: {
+            light: { ...(settings.value.customEditorStyle?.light || {}), ...(parsed.customEditorStyle?.light || {}) },
+            dark: { ...(settings.value.customEditorStyle?.dark || {}), ...(parsed.customEditorStyle?.dark || {}) },
+          },
         }
       }
     } catch (e) {
@@ -190,6 +209,11 @@ export const useSettingStore = defineStore('setting', () => {
       autoSaveInterval: 500,
       autoDeleteDays: 0,
       codeTheme: 'tokyo-night-dark',
+      editorStylePreset: 'default',
+      customEditorStyle: {
+        light: { codeBg: 'rgba(240, 240, 245, 0.75)', codeBorder: 'rgba(200, 205, 215, 0.5)', codeText: '#374151', inlineCodeBg: 'rgba(237, 238, 244, 0.8)', inlineCodeText: '#d63384', blockquoteBg: 'rgba(245, 246, 250, 0.5)', blockquoteBorder: 'rgba(156, 163, 175, 0.45)', blockquoteText: '#6b7280' },
+        dark: { codeBg: 'rgba(30, 33, 40, 0.8)', codeBorder: 'rgba(55, 60, 70, 0.5)', codeText: '#c9d1d9', inlineCodeBg: 'rgba(30, 33, 40, 0.8)', inlineCodeText: '#f0a0c0', blockquoteBg: 'rgba(35, 38, 45, 0.5)', blockquoteBorder: 'rgba(100, 110, 130, 0.45)', blockquoteText: '#9ca3af' },
+      },
       shortcuts: {
         showMain: 'Option+Cmd+A',
         prevNote: 'Ctrl+[',

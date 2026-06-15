@@ -9,6 +9,7 @@ import { useSettingStore } from '@/stores/settingStore'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
+import { useEditorStyle } from '@/composables/useEditorStyle'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
@@ -24,6 +25,7 @@ const settingStore = useSettingStore()
 useShortcuts(openSettings)
 useGlobalShortcut()
 useTheme() // 初始化主题系统
+useEditorStyle() // 初始化编辑器样式预设
 const { locale } = useI18n()
 
 // 同步语言设置到 vue-i18n
