@@ -45,6 +45,9 @@ async function downloadAndInstall(): Promise<void> {
   let contentLength = 0
   let downloaded = 0
 
+  downloadState.value = 'downloading'
+  downloadProgress.value = 0
+
   try {
     const update = await check()
     if (!update) {
@@ -52,9 +55,6 @@ async function downloadAndInstall(): Promise<void> {
       downloadState.value = 'error'
       return
     }
-
-    downloadState.value = 'downloading'
-    downloadProgress.value = 0
 
     await update.downloadAndInstall((event) => {
       switch (event.event) {

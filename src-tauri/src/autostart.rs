@@ -1,7 +1,7 @@
 /// 开机自启管理
 ///
-/// macOS 13+: 使用 SMAppService API（系统推荐的现代方式）
-/// 回退方案: LaunchAgent plist（兼容旧版本 macOS 和开发模式）
+/// macOS 13+: 使用 SMAppService API，在系统设置 > 登录项中可见
+/// 回退方案: LaunchAgent plist（仅兼容旧版 macOS，用 open 命令启动避免终端弹出）
 
 use std::path::PathBuf;
 use std::fs;
@@ -19,8 +19,6 @@ mod apple {
     use std::ffi::CStr;
 
     fn sm_class() -> Option<&'static AnyClass> {
-        // C字符串字面量需要 \0 结尾；Rust 2021 支持 c"..." 语法
-        // 但为了兼容性，使用 from_bytes_with_nul
         let name = CStr::from_bytes_with_nul(b"SMAppService\0").ok()?;
         AnyClass::get(name)
     }
@@ -90,10 +88,24 @@ fn plist_path() -> PathBuf {
         .join(format!("{}.plist", APP_NAME))
 }
 
+/// 尝试从当前可执行路径向上找到 .app bundle
+/// 路径模式: MaikNote.app/Contents/MacOS/maiknote
+fn find_app_bundle() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut path = exe.as_path();
+    for _ in 0..3 {
+        path = path.parent()?;
+    }
+    if path.extension().map_or(false, |ext| ext == "app") && path.exists() {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
+}
+
 fn enable_plist() -> Result<(), String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("获取可执行路径失败: {}", e))?;
-    let exe_str = exe.to_string_lossy().to_string();
+    let app_bundle = find_app_bundle()
+        .ok_or_else(|| "未找到 .app bundle（可能在开发模式下运行）".to_string())?;
 
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -103,7 +115,13 @@ fn enable_plist() -> Result<(), String> {
     <key>Label</key>
     <string>{app}</string>
     <key>ProgramArguments</key>
-    <array><string>{exe}</string><string>{arg}</string></array>
+    <array>
+        <string>/usr/bin/open</string>
+        <string>-a</string>
+        <string>{bundle}</string>
+        <string>--args</string>
+        <string>{arg}</string>
+    </array>
     <key>RunAtLoad</key>
     <true/>
     <key>LimitLoadToSessionType</key>
@@ -111,7 +129,7 @@ fn enable_plist() -> Result<(), String> {
 </dict>
 </plist>"#,
         app = APP_NAME,
-        exe = exe_str,
+        bundle = app_bundle.to_string_lossy(),
         arg = LAUNCH_ARG
     );
 
@@ -123,7 +141,6 @@ fn enable_plist() -> Result<(), String> {
     fs::write(&path, plist)
         .map_err(|e| format!("写入 plist 失败: {}", e))?;
 
-    // 尝试注册到 launchd
     #[cfg(target_os = "macos")]
     {
         let uid = unsafe { libc::getuid() };
@@ -160,11 +177,14 @@ fn is_plist_enabled() -> bool {
 // ====== 对外 API ======
 
 /// 启用开机自启
+///
+/// macOS 13+ 使用 SMAppService（系统设置 > 登录项可见）
+/// 旧版 macOS 使用 LaunchAgent plist 回退
 pub fn enable() -> Result<(), String> {
     if apple::is_available() {
-        if let Err(e) = apple::enable() {
-            eprintln!("SMAppService 启用失败 (回退到 plist): {}", e);
-        }
+        // 先清理可能遗留的 plist，避免双重启动
+        let _ = disable_plist();
+        return apple::enable();
     }
     enable_plist()
 }
@@ -180,9 +200,7 @@ pub fn disable() -> Result<(), String> {
 /// 检查开机自启是否已启用
 pub fn is_enabled() -> bool {
     if apple::is_available() {
-        if let Ok(true) = apple::is_enrolled() {
-            return true;
-        }
+        return apple::is_enrolled().unwrap_or(false);
     }
     is_plist_enabled()
 }
