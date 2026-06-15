@@ -13,6 +13,6 @@ app.use(pinia);
 app.use(i18n);
 
 // 初始化主题（在应用挂载前，确保 data-theme 属性及时生效）
-initTheme();
-
-app.mount("#app");
+initTheme().then(() => {
+  app.mount("#app");
+});

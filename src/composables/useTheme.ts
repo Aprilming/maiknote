@@ -8,39 +8,39 @@ const currentTheme = ref<'light' | 'dark'>('light')
 // 系统主题媒体查询
 let mediaQuery: MediaQueryList | null = null
 
-// 获取系统主题
-function getSystemTheme(): 'light' | 'dark' {
+// 获取系统主题（同步，直接读 media query）
+function getSystemThemeSync(): 'light' | 'dark' {
   if (typeof window !== 'undefined' && window.matchMedia) {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   }
   return 'light'
 }
 
-// 根据设置计算当前应使用的主题
-function computeTheme(): 'light' | 'dark' {
+// 判断当前设置是否为 auto
+function isAutoMode(): boolean {
   const settings = localStorage.getItem('maiknote-settings')
   if (settings) {
     try {
       const parsed = JSON.parse(settings)
-      if (parsed.theme === 'auto') {
-        return getSystemTheme()
-      }
-      return parsed.theme || 'light'
-    } catch {
-      return getSystemTheme()
-    }
+      return parsed.theme === 'auto'
+    } catch {}
   }
-  return getSystemTheme()
+  return true
 }
 
-// 应用主题到 document
-async function applyTheme(theme: 'light' | 'dark') {
+// 仅设置 CSS 主题（不操作 Tauri setTheme）
+function applyThemeStyle(theme: 'light' | 'dark') {
   currentTheme.value = theme
-  // 通过 data 属性让 CSS 选择器可以区分
   document.documentElement.setAttribute('data-theme', theme)
-  // 同步设置 macOS 原生窗口外观主题，避免闪烁
+}
+
+// 应用主题到 document + Tauri 原生外观
+async function applyTheme(theme: 'light' | 'dark') {
+  applyThemeStyle(theme)
+
+  const themeArg = isAutoMode() ? null : theme
   try {
-    await setTheme(theme)
+    await setTheme(themeArg)
   } catch (e) {
     console.warn('Failed to set macOS window theme:', e)
   }
@@ -48,35 +48,38 @@ async function applyTheme(theme: 'light' | 'dark') {
 
 // 监听系统主题变化
 function handleSystemThemeChange(e: MediaQueryListEvent) {
+  if (isAutoMode()) {
+    applyThemeStyle(e.matches ? 'dark' : 'light')
+  }
+}
+
+// 检测并应用当前应使用的主题
+async function detectAndApplyTheme() {
   const settings = localStorage.getItem('maiknote-settings')
-  let theme: string = 'auto'
+  let targetTheme: 'light' | 'dark' = 'light'
+
   if (settings) {
     try {
       const parsed = JSON.parse(settings)
-      theme = parsed.theme || 'auto'
+      if (parsed.theme === 'auto') {
+        // 先重置 webview 主题覆盖，让 matchMedia 恢复真实系统值
+        try { await setTheme(null) } catch { /* ignore */ }
+        targetTheme = getSystemThemeSync()
+      } else {
+        targetTheme = (parsed.theme as 'light' | 'dark') || 'light'
+      }
     } catch {
-      theme = 'auto'
+      targetTheme = getSystemThemeSync()
     }
   }
-  if (theme === 'auto') {
-    applyTheme(e.matches ? 'dark' : 'light')
-  }
+
+  await applyTheme(targetTheme)
 }
 
 // 同步初始化主题（在应用挂载前调用）
 export async function initTheme() {
-  // 先设置 CSS 变量
-  const theme = computeTheme()
-  currentTheme.value = theme
-  document.documentElement.setAttribute('data-theme', theme)
-  // 再同步设置 macOS 原生窗口外观主题
-  try {
-    await setTheme(theme)
-  } catch (e) {
-    console.warn('Failed to set macOS window theme:', e)
-  }
+  await detectAndApplyTheme()
 
-  // 监听系统主题变化
   if (typeof window !== 'undefined' && window.matchMedia) {
     mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     mediaQuery.addEventListener('change', handleSystemThemeChange)
@@ -86,11 +89,10 @@ export async function initTheme() {
 export function useTheme() {
   const settingStore = useSettingStore()
 
-  // 监听设置变化
   watch(
     () => settingStore.settings.theme,
     () => {
-      applyTheme(computeTheme())
+      detectAndApplyTheme()
     }
   )
 

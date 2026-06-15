@@ -1,7 +1,7 @@
 {
   "name": "maiknote",
   "private": true,
-  "version": "0.10.14",
+  "version": "0.10.15",
   "license": "GPL-2.0-only",
   "type": "module",
   "contributors": [
