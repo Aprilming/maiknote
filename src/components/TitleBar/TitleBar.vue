@@ -7,9 +7,12 @@ import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { useNoteStore, extractTitle } from '@/stores/noteStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { setNativeDialogOpen } from '@/stores/dialogStore'
+import { usePinWindow } from '@/composables/usePinWindow'
 
 const noteStore = useNoteStore()
 const settingStore = useSettingStore()
+// 置顶开关：取消置顶时按设置决定窗口显示/隐藏
+const { togglePin: applyTogglePin } = usePinWindow()
 
 // 安全获取 Tauri 窗口，非 Tauri 环境下返回 null
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
@@ -61,11 +64,9 @@ async function closeWindow() {
 }
 
 async function togglePin() {
-  const newValue = !settingStore.settings.alwaysOnTop
-  // 调用 Tauri API 设置窗口置顶
+  // 调用 Tauri API 设置窗口置顶；取消置顶时的显示/隐藏由设置决定
   try {
-    await appWindow?.setAlwaysOnTop(newValue)
-    settingStore.updateSettings('alwaysOnTop', newValue)
+    await applyTogglePin()
   } catch (e) {
     console.error('setAlwaysOnTop failed:', e)
   }

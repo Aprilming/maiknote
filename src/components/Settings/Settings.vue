@@ -3,7 +3,7 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
-import { useSettingStore, type ShortcutSettings, type CodeTheme, type EditorStylePreset } from '@/stores/settingStore'
+import { useSettingStore, DEFAULT_SHORTCUTS, type ShortcutSettings, type ShortcutScope, type PinOffBehavior, type CodeTheme, type EditorStylePreset } from '@/stores/settingStore'
 import { editorStylePresets } from '@/composables/editorStylePresets'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
@@ -134,6 +134,9 @@ onMounted(async () => {
 
 // 阻止设置页面中的笔记操作快捷键
 function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+  // 快捷键允许为空（未设置），空值不匹配任何按键
+  if (!shortcut) return false
+
   const parts = shortcut.split('+')
   const key = parts[parts.length - 1].toLowerCase()
   const modifiers = parts.slice(0, -1)
@@ -268,11 +271,60 @@ function stopRecording() {
   recordingKey.value = null
 }
 
+// 清空某个快捷键（允许快捷键为空，即禁用该项）
+function clearShortcut(key: keyof ShortcutSettings, e?: Event) {
+  e?.stopPropagation()
+  settingStore.updateSettings('shortcuts', {
+    ...settingStore.settings.shortcuts,
+    [key]: '',
+  })
+  if (recordingKey.value === key) {
+    stopRecording()
+  }
+}
+
+// 单项恢复默认快捷键
+function resetShortcut(key: keyof ShortcutSettings, e?: Event) {
+  e?.stopPropagation()
+  settingStore.updateSettings('shortcuts', {
+    ...settingStore.settings.shortcuts,
+    [key]: DEFAULT_SHORTCUTS[key],
+  })
+  if (recordingKey.value === key) {
+    stopRecording()
+  }
+}
+
+// 全部恢复默认快捷键
+function resetAllShortcuts() {
+  stopRecording()
+  settingStore.updateSettings('shortcuts', { ...DEFAULT_SHORTCUTS })
+  showToast(t('toast.shortcutsReset'))
+}
+
+// 置顶快捷键作用范围：全局 / 应用内
+function setPinScope(scope: ShortcutScope) {
+  settingStore.updateSettings('pinShortcutScope', scope)
+}
+
+function setPinOffBehavior(behavior: PinOffBehavior) {
+  settingStore.updateSettings('pinOffBehavior', behavior)
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if (!recordingKey.value) return
 
   e.preventDefault()
   e.stopPropagation()
+
+  // 录制中按 Backspace / Delete（不带修饰键）：清空该快捷键
+  if (
+    (e.code === 'Backspace' || e.code === 'Delete') &&
+    !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey
+  ) {
+    clearShortcut(recordingKey.value)
+    return
+  }
 
   if (['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
     return
@@ -852,25 +904,105 @@ function getPromptPreview(prompt: string): string {
         <!-- 快捷键 -->
         <section v-if="activeCategory === 'shortcuts'" class="settings-section">
           <div class="shortcut-list">
-            <div
-              v-for="(label, key) in shortcutLabels"
-              :key="key"
-              class="shortcut-item"
-              :class="{ recording: recordingKey === key }"
-              @click="startRecording(key as keyof ShortcutSettings)"
-            >
-              <div class="shortcut-info">
-                <span class="shortcut-label">{{ label }}</span>
-                <span class="shortcut-desc">{{ shortcutDescs[key as keyof ShortcutSettings] }}</span>
+            <template v-for="(label, key) in shortcutLabels" :key="key">
+              <div
+                class="shortcut-item"
+                :class="{ recording: recordingKey === key }"
+                @click="startRecording(key as keyof ShortcutSettings)"
+              >
+                <div class="shortcut-info">
+                  <span class="shortcut-label">{{ label }}</span>
+                  <span class="shortcut-desc">{{ shortcutDescs[key as keyof ShortcutSettings] }}</span>
+                </div>
+                <div class="shortcut-value">
+                  <span v-if="recordingKey === key" class="recording-text">{{ $t('settings.recording') }}</span>
+                  <span v-else-if="!settingStore.settings.shortcuts[key as keyof ShortcutSettings]" class="shortcut-key shortcut-key-empty">
+                    {{ $t('settings.shortcutEmpty') }}
+                  </span>
+                  <span v-else class="shortcut-key">
+                    {{ settingStore.settings.shortcuts[key as keyof ShortcutSettings] }}
+                  </span>
+                  <button
+                    v-if="recordingKey !== key && settingStore.settings.shortcuts[key as keyof ShortcutSettings] !== DEFAULT_SHORTCUTS[key as keyof ShortcutSettings]"
+                    class="shortcut-action-btn"
+                    type="button"
+                    :title="$t('settings.shortcutReset')"
+                    @click.stop="resetShortcut(key as keyof ShortcutSettings, $event)"
+                  >
+                    <i class="i-mdi-restore"></i>
+                  </button>
+                  <button
+                    v-if="recordingKey !== key && settingStore.settings.shortcuts[key as keyof ShortcutSettings]"
+                    class="shortcut-action-btn"
+                    type="button"
+                    :title="$t('settings.shortcutClear')"
+                    @click.stop="clearShortcut(key as keyof ShortcutSettings, $event)"
+                  >
+                    <i class="i-mdi-close-circle"></i>
+                  </button>
+                  <i v-if="recordingKey !== key" class="i-mdi-pencil edit-icon"></i>
+                </div>
               </div>
-              <div class="shortcut-value">
-                <span v-if="recordingKey === key" class="recording-text">{{ $t('settings.recording') }}</span>
-                <span v-else class="shortcut-key">
-                  {{ settingStore.settings.shortcuts[key as keyof ShortcutSettings] }}
-                </span>
-                <i v-if="recordingKey !== key" class="i-mdi-pencil edit-icon"></i>
+
+              <!-- 置顶快捷键下方：选择作用范围 -->
+              <div v-if="key === 'pin'" class="shortcut-item shortcut-scope-item">
+                <div class="shortcut-info">
+                  <span class="shortcut-label">{{ $t('settings.pinScope') }}</span>
+                  <span class="shortcut-desc">{{ $t('settings.pinScopeDesc') }}</span>
+                </div>
+                <div class="scope-switch">
+                  <button
+                    class="scope-option"
+                    :class="{ active: settingStore.settings.pinShortcutScope === 'global' }"
+                    type="button"
+                    @click="setPinScope('global')"
+                  >
+                    {{ $t('settings.pinScopeGlobal') }}
+                  </button>
+                  <button
+                    class="scope-option"
+                    :class="{ active: settingStore.settings.pinShortcutScope === 'app' }"
+                    type="button"
+                    @click="setPinScope('app')"
+                  >
+                    {{ $t('settings.pinScopeApp') }}
+                  </button>
+                </div>
               </div>
-            </div>
+
+              <!-- 取消置顶时的行为 -->
+              <div v-if="key === 'pin'" class="shortcut-item shortcut-scope-item">
+                <div class="shortcut-info">
+                  <span class="shortcut-label">{{ $t('settings.pinOffBehavior') }}</span>
+                  <span class="shortcut-desc">{{ $t('settings.pinOffBehaviorDesc') }}</span>
+                </div>
+                <div class="scope-switch">
+                  <button
+                    class="scope-option"
+                    :class="{ active: settingStore.settings.pinOffBehavior === 'show' }"
+                    type="button"
+                    @click="setPinOffBehavior('show')"
+                  >
+                    {{ $t('settings.pinOffKeepShow') }}
+                  </button>
+                  <button
+                    class="scope-option"
+                    :class="{ active: settingStore.settings.pinOffBehavior === 'hide' }"
+                    type="button"
+                    @click="setPinOffBehavior('hide')"
+                  >
+                    {{ $t('settings.pinOffHide') }}
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="shortcut-footer">
+            <button class="reset-all-shortcuts-btn" type="button" @click="resetAllShortcuts">
+              <i class="i-mdi-restore"></i>
+              <span>{{ $t('settings.shortcutResetAll') }}</span>
+            </button>
           </div>
 
           <p v-if="recordingKey" class="recording-hint">
@@ -1418,6 +1550,48 @@ function getPromptPreview(prompt: string): string {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
+/* 置顶快捷键的作用范围选择行 */
+.shortcut-scope-item {
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  cursor: default;
+}
+
+.shortcut-scope-item:hover {
+  box-shadow: none;
+}
+
+.scope-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.scope-option {
+  padding: 6px 12px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.scope-option:hover {
+  color: var(--color-text);
+}
+
+.scope-option.active {
+  background: var(--color-background);
+  color: var(--color-text);
+  box-shadow: var(--shadow-xs);
+}
+
 .shortcut-info {
   display: flex;
   flex-direction: column;
@@ -1449,6 +1623,63 @@ function getPromptPreview(prompt: string): string {
   font-size: 13px;
   font-family: monospace;
   color: var(--color-text);
+}
+
+.shortcut-key-empty {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--color-text-secondary);
+  border-style: dashed;
+}
+
+.shortcut-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.shortcut-item:hover .shortcut-action-btn {
+  opacity: 1;
+}
+
+.shortcut-action-btn:hover {
+  color: var(--color-text);
+}
+
+.shortcut-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.reset-all-shortcuts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+}
+
+.reset-all-shortcuts-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
 }
 
 .recording-text {

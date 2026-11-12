@@ -232,6 +232,15 @@ async fn register_global_shortcut(
     shortcut_state: State<'_, GlobalShortcutState>,
     shortcut_str: String,
 ) -> Result<(), String> {
+    if shortcut_str.trim().is_empty() {
+        // 快捷键为空：仅取消注册，不再注册新快捷键
+        let mut current = shortcut_state.current_shortcut.lock().unwrap();
+        if let Some(old) = current.take() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+        return Ok(());
+    }
+
     let shortcut = parse_shortcut_str(&shortcut_str)?;
 
     // 取消之前的快捷键
@@ -393,6 +402,13 @@ async fn register_pin_shortcut(
                             Ok(current) => {
                                 let new_value = !current;
                                 if window.set_always_on_top(new_value).is_ok() {
+                                    // 打开置顶时窗口可能已被「失焦自动隐藏」藏起来，
+                                    // 这里一并显示并聚焦，否则只改原生置顶状态，用户看不到反应
+                                    if new_value {
+                                        let _ = window.show();
+                                        let _ = window.unminimize();
+                                        let _ = window.set_focus();
+                                    }
                                     let _ = app_clone.emit("on-always-on-top-changed", new_value);
                                 }
                             }

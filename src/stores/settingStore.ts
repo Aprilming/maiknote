@@ -21,6 +21,28 @@ export interface ShortcutSettings {
   centerWindow: string // 居中窗口
 }
 
+/** 快捷键作用范围：global=系统全局（应用不在前台也生效），app=仅应用内（窗口聚焦时生效） */
+export type ShortcutScope = 'global' | 'app'
+
+/** 取消置顶后的行为：show=窗口依旧显示，hide=隐藏窗口 */
+export type PinOffBehavior = 'show' | 'hide'
+
+/** 快捷键默认值（空字符串表示不设置该快捷键） */
+export const DEFAULT_SHORTCUTS: ShortcutSettings = {
+  showMain: 'Option+Cmd+A',
+  prevNote: 'Cmd+[',
+  nextNote: 'Cmd+]',
+  prevDirectory: 'Option+Cmd+[',
+  nextDirectory: 'Option+Cmd+]',
+  newNote: 'Cmd+N',
+  newNoteBefore: 'Cmd+Shift+N',
+  deleteNote: 'Cmd+Backspace',
+  pin: 'Shift+Cmd+P',
+  lock: 'Cmd+L',
+  toggleSource: 'Cmd+/',
+  centerWindow: 'Shift+Option+Cmd+A',
+}
+
 export type CodeTheme =
   | 'github'
   | 'github-dark'
@@ -60,6 +82,8 @@ export interface AppSettings {
   autoSaveInterval: number // milliseconds
   autoDeleteDays: number // 0 = disabled
   shortcuts: ShortcutSettings
+  pinShortcutScope: ShortcutScope // 置顶快捷键作用范围
+  pinOffBehavior: PinOffBehavior // 取消置顶时：依旧显示页面 / 隐藏页面
   codeTheme: CodeTheme
   editorStylePreset: EditorStylePreset
   customEditorStyle: CustomEditorStyle
@@ -99,20 +123,9 @@ export const useSettingStore = defineStore('setting', () => {
       light: { codeBg: 'rgba(240, 240, 245, 0.75)', codeBorder: 'rgba(200, 205, 215, 0.5)', codeText: '#374151', inlineCodeBg: 'rgba(237, 238, 244, 0.8)', inlineCodeText: '#d63384', blockquoteBg: 'rgba(245, 246, 250, 0.5)', blockquoteBorder: 'rgba(156, 163, 175, 0.45)', blockquoteText: '#6b7280' },
       dark: { codeBg: 'rgba(30, 33, 40, 0.8)', codeBorder: 'rgba(55, 60, 70, 0.5)', codeText: '#c9d1d9', inlineCodeBg: 'rgba(30, 33, 40, 0.8)', inlineCodeText: '#f0a0c0', blockquoteBg: 'rgba(35, 38, 45, 0.5)', blockquoteBorder: 'rgba(100, 110, 130, 0.45)', blockquoteText: '#9ca3af' },
     },
-    shortcuts: {
-      showMain: 'Option+Cmd+A',
-      prevNote: 'Cmd+[',
-      nextNote: 'Cmd+]',
-      prevDirectory: 'Option+Cmd+[',
-      nextDirectory: 'Option+Cmd+]',
-      newNote: 'Cmd+N',
-      newNoteBefore: 'Cmd+Shift+N',
-      deleteNote: 'Cmd+Backspace',
-      pin: 'Shift+Cmd+P',
-      lock: 'Cmd+L',
-      toggleSource: 'Cmd+/',
-      centerWindow: 'Shift+Option+Cmd+A',
-    },
+    shortcuts: { ...DEFAULT_SHORTCUTS },
+    pinShortcutScope: 'global',
+    pinOffBehavior: 'show',
     aiUrl: 'https://api.deepseek.com/chat/completions',
     aiKey: '',
     aiModel: 'deepseek-v4-flash',
@@ -230,20 +243,9 @@ export const useSettingStore = defineStore('setting', () => {
         light: { codeBg: 'rgba(240, 240, 245, 0.75)', codeBorder: 'rgba(200, 205, 215, 0.5)', codeText: '#374151', inlineCodeBg: 'rgba(237, 238, 244, 0.8)', inlineCodeText: '#d63384', blockquoteBg: 'rgba(245, 246, 250, 0.5)', blockquoteBorder: 'rgba(156, 163, 175, 0.45)', blockquoteText: '#6b7280' },
         dark: { codeBg: 'rgba(30, 33, 40, 0.8)', codeBorder: 'rgba(55, 60, 70, 0.5)', codeText: '#c9d1d9', inlineCodeBg: 'rgba(30, 33, 40, 0.8)', inlineCodeText: '#f0a0c0', blockquoteBg: 'rgba(35, 38, 45, 0.5)', blockquoteBorder: 'rgba(100, 110, 130, 0.45)', blockquoteText: '#9ca3af' },
       },
-      shortcuts: {
-        showMain: 'Option+Cmd+A',
-        prevNote: 'Ctrl+[',
-        nextNote: 'Ctrl+]',
-        prevDirectory: 'Option+Cmd+[',
-        nextDirectory: 'Option+Cmd+]',
-        newNote: 'Cmd+N',
-        newNoteBefore: 'Cmd+Shift+N',
-        deleteNote: 'Cmd+Backspace',
-        pin: 'Shift+Cmd+P',
-        lock: 'Cmd+L',
-        toggleSource: 'Cmd+/',
-        centerWindow: 'Shift+Option+Cmd+A',
-      },
+      shortcuts: { ...DEFAULT_SHORTCUTS },
+      pinShortcutScope: 'global',
+      pinOffBehavior: 'show',
       aiUrl: 'https://api.deepseek.com/chat/completions',
       aiKey: '',
       aiModel: 'deepseek-v4-flash',

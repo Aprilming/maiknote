@@ -4,11 +4,15 @@ import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useSourceMode } from '@/composables/useSourceMode'
+import { usePinWindow } from '@/composables/usePinWindow'
 
 /**
  * 检测按键是否匹配快捷键配置
  */
 function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  // 快捷键允许为空（表示未设置/禁用），空值不匹配任何按键
+  if (!shortcut) return false
+
   const parts = shortcut.split('+')
   const key = parts[parts.length - 1].toLowerCase()
   const modifiers = parts.slice(0, -1)
@@ -114,14 +118,12 @@ export function useShortcuts(onOpenSettings?: () => void) {
       return
     }
 
-    // 置顶窗口
-    if (matchesShortcut(e, shortcuts.pin)) {
+    // 置顶窗口：全局范围交给 Rust 侧处理，避免同一次按键触发两次；应用内范围走这里
+    if (settingStore.settings.pinShortcutScope !== 'global' && matchesShortcut(e, shortcuts.pin)) {
       e.preventDefault()
       try {
-        const appWindow = getCurrentWindow()
-        const newValue = !settingStore.settings.alwaysOnTop
-        await appWindow.setAlwaysOnTop(newValue)
-        settingStore.updateSettings('alwaysOnTop', newValue)
+        // 取消置顶后是否隐藏页面，由「取消置顶时」设置决定
+        await usePinWindow().togglePin()
       } catch (error) {
         console.error('Failed to toggle pin:', error)
       }
