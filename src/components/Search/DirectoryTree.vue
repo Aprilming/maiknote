@@ -3,6 +3,7 @@ import { ref, computed, provide, reactive, onMounted, onUnmounted } from 'vue'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useNoteStore } from '@/stores/noteStore'
 import { useI18n } from 'vue-i18n'
+import { confirmAction } from '@/composables/useConfirm'
 import type { Directory } from '@/types/note'
 import DirectoryTreeNode from './DirectoryTreeNode.vue'
 
@@ -129,7 +130,8 @@ async function handleDelete(id: string, e: MouseEvent) {
   const msg = count > 0
     ? t('dirTree.deleteConfirmWithNotes', { name: dir.name, count })
     : t('dirTree.deleteConfirm', { name: dir.name })
-  if (confirm(msg)) {
+  const confirmed = await confirmAction({ message: msg, confirmText: t('common.delete') })
+  if (confirmed) {
     const notesInDir = noteStore.getNotesByDirectory(id)
     for (const note of notesInDir) {
       await noteStore.moveNoteToDirectory(note.id, null)

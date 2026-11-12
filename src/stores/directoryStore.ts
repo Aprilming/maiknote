@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import type { Directory, DirectoryData } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
+import { directoryRelPath } from '@/utils/notePath'
 
 export const useDirectoryStore = defineStore('directory', () => {
   const fs = useFileSystem()
@@ -104,8 +105,9 @@ export const useDirectoryStore = defineStore('directory', () => {
       updatedAt: now,
     }
     directories.value.push(newDir)
-    // 在 iCloud 中创建实际文件夹（以 ID 命名）
-    await fs.createDirectoryFolder(newDir.id)
+    // 在 iCloud 中创建实际文件夹（按目录真实名字）
+    const relPath = directoryRelPath(directories.value, newDir.id)
+    if (relPath) await fs.createDirectoryFolder(relPath)
     await saveDirectories()
     return newDir
   }
@@ -113,9 +115,14 @@ export const useDirectoryStore = defineStore('directory', () => {
   async function renameDirectory(id: string, newName: string): Promise<void> {
     const dir = directories.value.find(d => d.id === id)
     if (dir) {
+      const oldRel = directoryRelPath(directories.value, id)
       dir.name = newName
       dir.updatedAt = Date.now()
+      const newRel = directoryRelPath(directories.value, id)
       await saveDirectories()
+      if (oldRel && newRel && oldRel !== newRel) {
+        await fs.renameDirectoryFolder(oldRel, newRel)
+      }
     }
   }
 
@@ -144,6 +151,7 @@ export const useDirectoryStore = defineStore('directory', () => {
       newParentId = reference.parentId
     }
 
+    const oldRel = directoryRelPath(directories.value, id)
     const nextDirectories = directories.value.filter(d => d.id !== id)
     dir.parentId = newParentId
     dir.updatedAt = Date.now()
@@ -154,6 +162,7 @@ export const useDirectoryStore = defineStore('directory', () => {
         nextDirectories.splice(position === 'before' ? referenceIndex : referenceIndex + 1, 0, dir)
         directories.value = nextDirectories
         await saveDirectories()
+        await moveFolderOnDisk(oldRel, id)
         return
       }
     }
@@ -161,6 +170,15 @@ export const useDirectoryStore = defineStore('directory', () => {
     nextDirectories.push(dir)
     directories.value = nextDirectories
     await saveDirectories()
+    await moveFolderOnDisk(oldRel, id)
+  }
+
+  /** 目录在树里换了位置 / 名字后，同步搬动磁盘文件夹 */
+  async function moveFolderOnDisk(oldRel: string | undefined, id: string): Promise<void> {
+    const newRel = directoryRelPath(directories.value, id)
+    if (oldRel && newRel && oldRel !== newRel) {
+      await fs.renameDirectoryFolder(oldRel, newRel)
+    }
   }
 
   async function deleteDirectory(id: string): Promise<void> {
@@ -168,8 +186,10 @@ export const useDirectoryStore = defineStore('directory', () => {
     if (!dir) return
     const parentId = dir.parentId
 
-    // 删除 iCloud 中的实际文件夹（.md 文件会被移回根目录）
-    await fs.deleteDirectoryFolder(id)
+    // 删除 iCloud 中的实际文件夹（子项会上抬一级到父目录）
+    const rel = directoryRelPath(directories.value, id)
+    const parentRel = directoryRelPath(directories.value, parentId)
+    if (rel) await fs.deleteDirectoryFolder(rel, parentRel ?? null)
 
     // 删除目录自身
     const index = directories.value.findIndex(d => d.id === id)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -30,8 +30,46 @@ const noteTitle = computed(() => {
   return title === 'Untitled' ? '' : title
 })
 
+// 标题栏上显示的名字：正文没标题时退回到文件名（空笔记也能点开改）
+const displayTitle = computed(() => {
+  if (noteTitle.value) return noteTitle.value
+  return (noteStore.currentNote?.fileName ?? '').replace(/\.md$/i, '')
+})
+
 // 标题栏行为：auto-hide 默认隐藏鼠标悬停时显示，always-show 始终显示
 const isVisible = ref(false)
+
+// 点击标题栏文件名可直接重命名（文件名 + 正文标题行一起改）
+const renaming = ref(false)
+const renameDraft = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
+
+function startRename() {
+  const note = noteStore.currentNote
+  if (!note) return
+  renameDraft.value = displayTitle.value || noteTitle.value || note.fileName?.replace(/\.md$/i, '') || ''
+  renaming.value = true
+  // 编辑期间不要让标题栏因鼠标离开而消失
+  isVisible.value = true
+  nextTick(() => {
+    renameInputRef.value?.focus()
+    renameInputRef.value?.select()
+  })
+}
+
+async function commitRename() {
+  if (!renaming.value) return
+  const note = noteStore.currentNote
+  const name = renameDraft.value.trim()
+  renaming.value = false
+  if (!note || !name || name === displayTitle.value) return
+  await noteStore.renameNoteFile(note.id, name)
+}
+
+function cancelRename() {
+  if (!renaming.value) return
+  renaming.value = false
+}
 
 const titleBarVisible = computed(() => isVisible.value || isPinned.value || settingStore.settings.titleBarBehavior === 'always-show')
 
@@ -41,6 +79,7 @@ function showTitleBar() {
 
 function hideTitleBar() {
   if (dragState) return
+  if (renaming.value) return
   if (isPinned.value) return
   if (settingStore.settings.titleBarBehavior === 'always-show') return
   isVisible.value = false
@@ -223,8 +262,27 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 当前笔记标题 -->
-    <div v-if="noteTitle" class="note-title" :title="noteTitle">{{ noteTitle }}</div>
+    <!-- 当前笔记标题：点击即可重命名（文件名与正文标题行一起改） -->
+    <input
+      v-if="renaming"
+      ref="renameInputRef"
+      v-model="renameDraft"
+      class="note-title-input"
+      :style="{ width: Math.min(Math.max(renameDraft.length + 2, 8), 40) + 'ch' }"
+      spellcheck="false"
+      @mousedown.stop
+      @click.stop
+      @keydown.enter.prevent="commitRename"
+      @keydown.esc.prevent="cancelRename"
+      @blur="commitRename"
+    />
+    <div
+      v-else-if="displayTitle"
+      class="note-title"
+      :title="$t('titlebar.renameHint')"
+      @mousedown.stop
+      @click.stop="startRename"
+    >{{ displayTitle }}</div>
     <div class="title-bar-spacer"></div>
 
     <!-- Right Actions -->
@@ -375,6 +433,31 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 1px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  cursor: text;
+  transition: background-color 0.15s ease;
+}
+
+.note-title:hover {
+  background-color: var(--color-hover, rgba(127, 127, 127, 0.14));
+}
+
+/* 重命名输入框：跟标题同样的字号字重，原地编辑 */
+.note-title-input {
+  max-width: 40%;
+  min-width: 8ch;
+  padding: 1px 6px;
+  border: 1px solid var(--color-primary, #3b82f6);
+  border-radius: 6px;
+  outline: none;
+  background-color: var(--color-surface, transparent);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 /* Search Container */

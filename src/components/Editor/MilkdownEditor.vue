@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, watchEffect, onMounted, onUnmounted, nextTick } from 'vue'
-import { useI18n } from 'vue-i18n'
 import TiptapEditor from './TiptapEditor.vue'
-import DirectoryTree from '@/components/Search/DirectoryTree.vue'
-import { useNoteStore } from '@/stores/noteStore'
+import { useNoteStore, extractTitle } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useAutoSave } from '@/composables/useAutoSave'
@@ -12,22 +10,18 @@ import { useSourceMode } from '@/composables/useSourceMode'
 import { useTheme } from '@/composables/useTheme'
 import NoteColorPicker from '@/components/NoteColorPicker.vue'
 import { createSourceTabInsertText } from './tabInsert'
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
+import { copyText } from '@/utils/clipboard'
+import { sanitizePathSegment, fileNameForTitle } from '@/utils/notePath'
 
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
 
-// 当前目录名称（始终显示）
-const currentDirName = computed(() => {
-  const id = noteStore.filterDirectoryId
-  if (id === null) return t('dirTree.rootDir')
-  return directoryStore.getDirectory(id)?.name ?? t('dirTree.rootDir')
-})
-const { writeNote } = useFileSystem()
+const { getICloudPath } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
 
 const { isDark } = useTheme()
-const { t } = useI18n()
 
 const LIGHT_COLORS = [
   { nameKey: 'color.warmYellow', value: '#fff9e6' },
@@ -90,92 +84,212 @@ function handleVortexDelete() {
   vortexDeleting.value = true
   noteStore.setDeletingNoteId(id)
 
-  // --- 内容动画（形变 + 模糊 + 亮度，颜色交由彩虹层负责）---
+  const DURATION = 900
   const wrapper = container.querySelector('.editor-content-wrapper') as HTMLElement | null
-  if (wrapper) {
-    // 确保父容器可定位子元素
-    const host = wrapper.parentElement
-    if (host && getComputedStyle(host).position === 'static') {
-      host.style.position = 'relative'
-    }
-
-    // --- 创建彩虹漩涡轨迹层：多条环带按角度/时间滞后错开，形成涡旋轨迹 ---
-    // 层数控制成本：每层都是带 mask/blur 的大元素，太多会卡顿
-    const TRAIL_COUNT = 4
-    const appendHost = host ?? wrapper
-    const trailLayers: HTMLElement[] = []
-    for (let i = 0; i < TRAIL_COUNT; i++) {
-      const layer = document.createElement('div')
-      layer.className = 'vortex-rainbow'
-      appendHost.appendChild(layer)
-      trailLayers.push(layer)
-    }
-
-    wrapper.animate([
-      // === 阶段 1: 空间撕裂 (0-6%) ===
-      { transform: 'translate(0, 0) scale(1) rotate(0deg) skew(0deg)', filter: 'blur(0px) brightness(1)', offset: 0 },
-      { transform: 'translate(3px, -2px) scale(1.01) rotate(0.5deg) skew(0.5deg)', filter: 'blur(0px) brightness(1.05)', offset: 0.02 },
-      { transform: 'translate(-4px, 3px) scale(0.98) rotate(-0.8deg) skew(-0.5deg)', filter: 'blur(0px) brightness(1.1)', offset: 0.04 },
-      { transform: 'translate(4px, 2px) scale(1.005) rotate(0.6deg) skew(0.3deg)', filter: 'blur(0px) brightness(1.15)', offset: 0.06 },
-      // === 阶段 2: 马桶式涡旋 (6-76%)：围绕中心顺时针旋转并螺旋收拢 ===
-      { transform: 'translate(13.2px, 4.8px) scale(0.97) rotate(20deg) skew(0.5deg)', filter: 'blur(0.5px) brightness(1.2)', offset: 0.08 },
-      { transform: 'translate(14px, 24.2px) scale(0.93) rotate(60deg) skew(0.8deg)', filter: 'blur(1px) brightness(1.3)', offset: 0.12 },
-      { transform: 'translate(-25.7px, 30.6px) scale(0.86) rotate(130deg) skew(1.2deg)', filter: 'blur(1.5px) brightness(1.4)', offset: 0.18 },
-      { transform: 'translate(-34.5px, -28.9px) scale(0.78) rotate(220deg) skew(1.5deg)', filter: 'blur(2px) brightness(1.55)', offset: 0.26 },
-      { transform: 'translate(36.4px, -21px) scale(0.68) rotate(330deg) skew(2deg)', filter: 'blur(2.5px) brightness(1.7)', offset: 0.36 },
-      { transform: 'translate(0px, 35px) scale(0.56) rotate(450deg) skew(2.4deg)', filter: 'blur(3px) brightness(1.9)', offset: 0.46 },
-      { transform: 'translate(-20.7px, -17.4px) scale(0.43) rotate(580deg) skew(2.8deg)', filter: 'blur(4px) brightness(2.1)', offset: 0.56 },
-      { transform: 'translate(17.7px, -3.1px) scale(0.3) rotate(710deg) skew(3.2deg)', filter: 'blur(5px) brightness(2.4)', offset: 0.66 },
-      { transform: 'translate(-3.8px, 10.3px) scale(0.18) rotate(830deg) skew(3.5deg)', filter: 'blur(6.5px) brightness(2.8)', offset: 0.76 },
-      // === 阶段 3: 冲入下水道 (76-93%)：加速收拢进中心 ===
-      { transform: 'translate(-4.7px, -1.7px) scale(0.08) rotate(920deg) skew(4deg)', filter: 'blur(8px) brightness(3.5)', offset: 0.86 },
-      { transform: 'translate(0, 0) scale(0.02) rotate(980deg) skew(4deg)', filter: 'blur(12px) brightness(5)', offset: 0.93 },
-      // === 阶段 4: 虚无 (93-100%) ===
-      { transform: 'translate(0, 0) scale(0) rotate(980deg) skew(0deg)', filter: 'blur(15px) brightness(8)', offset: 1 },
-    ], {
-      duration: 1200,
-      easing: 'cubic-bezier(0.45, 0.0, 0.6, 0.1)',
-      fill: 'forwards',
-    })
-
-    // === 彩虹漩涡轨迹动画：各层沿螺旋轨道旋转吸入，角度/时间双滞后形成可见轨迹 ===
-    const fade = (i: number) => Math.max(0.15, 1 - i * 0.12)
-    const rotOffset = (i: number) => (i * 360) / TRAIL_COUNT
-    const scaleBoost = (i: number) => 1 + i * 0.06
-    // 轨道坐标：角度 → 圆上百分比坐标（相对元素尺寸），半径随吸入收缩成螺旋
-    const orbit = (angle: number, radius: number) => {
-      const rad = angle * Math.PI / 180
-      return `${(Math.cos(rad) * radius).toFixed(2)}% ${(Math.sin(rad) * radius).toFixed(2)}%`
-    }
-
-    const trailAnims = trailLayers.map((layer, i) => {
-      // 越靠后的轨迹层越模糊、越淡，营造纵深与残影感（仅用 GPU 友好的 blur，避免 SVG 滤镜卡顿）
-      layer.style.filter = `blur(${(1.5 + i * 1.2).toFixed(1)}px) saturate(1.8)`
-      const base = rotOffset(i)
-      const boost = scaleBoost(i)
-      const s = (v: number) => (v * boost).toFixed(3)
-
-      return layer.animate([
-        { opacity: 0,              transform: `translate(${orbit(base, 15)}) rotate(${base}deg) scale(${s(0.4)})` },
-        { opacity: 0.45 * fade(i), transform: `translate(${orbit(base + 90, 13)}) rotate(${base + 90}deg) scale(${s(0.66)})` },
-        { opacity: 0.8 * fade(i),  transform: `translate(${orbit(base + 200, 10)}) rotate(${base + 200}deg) scale(${s(0.9)})` },
-        { opacity: fade(i),        transform: `translate(${orbit(base + 320, 7)}) rotate(${base + 320}deg) scale(${s(1.03)})` },
-        { opacity: 0.75 * fade(i), transform: `translate(${orbit(base + 430, 4.5)}) rotate(${base + 430}deg) scale(${s(0.85)})` },
-        { opacity: 0.4 * fade(i),  transform: `translate(${orbit(base + 530, 2.5)}) rotate(${base + 530}deg) scale(${s(0.5)})` },
-        { opacity: 0.12 * fade(i), transform: `translate(${orbit(base + 610, 1)}) rotate(${base + 610}deg) scale(${s(0.2)})` },
-        { opacity: 0,              transform: `translate(${orbit(base + 700, 0)}) rotate(${base + 700}deg) scale(${s(0.05)})` },
-      ], {
-        duration: 1100,
-        delay: i * 55,
-        easing: 'cubic-bezier(0.45, 0.0, 0.6, 0.1)',
-        fill: 'both',
-      })
-    })
-
-    // 全部轨迹层动画结束后统一清理
-    Promise.allSettled(trailAnims.map(a => a.finished))
-      .then(() => trailLayers.forEach(l => l.remove()))
+  const host = wrapper?.parentElement ?? container
+  if (getComputedStyle(host).position === 'static') {
+    host.style.position = 'relative'
   }
+
+  // 1) 正文：向左下塌陷、虚化、淡出，和粒子流向同一个出口
+  if (wrapper) {
+    // 与粒子同一条非线性节奏：先撑住不动，42% 之后才塌
+    wrapper.animate([
+      { transform: 'translate(0, 0) scale(1)', filter: 'blur(0px)', opacity: 1, offset: 0 },
+      { transform: 'translate(-1px, 1px) scale(0.9995)', filter: 'blur(0.15px)', opacity: 0.97, offset: 0.42 },
+      { transform: 'translate(-6px, 6px)', filter: 'blur(1.1px)', opacity: 0.8, offset: 0.58 },
+      { transform: 'translate(-20px, 20px) scale(0.985)', filter: 'blur(3px)', opacity: 0.35, offset: 0.82 },
+      { transform: 'translate(-40px, 40px) scale(0.96)', filter: 'blur(5px)', opacity: 0, offset: 1 },
+    ], { duration: DURATION, easing: 'linear', fill: 'forwards' })
+  }
+
+  // 2) 彩色粒子漏斗：全部从正文区域汇向左下角的一个汇聚点，越接近出口越挤、越密
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  const rect = host.getBoundingClientRect()
+  const width = rect.width
+  const height = rect.height
+
+  const canvas = document.createElement('canvas')
+  canvas.className = 'vortex-canvas'
+  canvas.width = Math.max(1, Math.round(width * dpr))
+  canvas.height = Math.max(1, Math.round(height * dpr))
+  canvas.style.width = `${width}px`
+  canvas.style.height = `${height}px`
+  host.appendChild(canvas)
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    canvas.remove()
+    vortexDeleting.value = false
+    noteStore.setDeletingNoteId(null)
+    return
+  }
+  ctx.scale(dpr, dpr)
+
+  const srcRect = wrapper ? wrapper.getBoundingClientRect() : rect
+  const box = {
+    x: Math.max(0, srcRect.left - rect.left),
+    y: Math.max(0, srcRect.top - rect.top),
+    w: Math.min(width, srcRect.width),
+    h: Math.min(height, srcRect.height),
+  }
+
+  // 漏斗出口：左下角内侧
+  const apex = { x: width * 0.05, y: height * 0.95 }
+
+  // 彩色但克制：一组挑选过的色相，避免纯彩虹的廉价感
+  const PALETTE = ['#6366f1', '#8b5cf6', '#d946ef', '#ec4899', '#fb7185', '#f59e0b', '#22d3ee', '#38bdf8']
+
+  const COUNT = Math.round(Math.min(900, Math.max(380, (box.w * box.h) / 900)))
+  type Particle = {
+    // 起点（正文区域随机）
+    sx: number
+    sy: number
+    // 出口附近的抖动半径，让漏斗有厚度而不是一根线
+    neck: number
+    // 弧线弯曲量（垂直于出口方向的控制点偏移）
+    bow: number
+    delay: number
+    size: number
+    color: string
+    glow: boolean
+    wobbleAmp: number
+    wobblePhase: number
+    wobbleFreq: number
+  }
+
+  const particles: Particle[] = []
+  for (let i = 0; i < COUNT; i++) {
+    particles.push({
+      sx: box.x + Math.random() * box.w,
+      sy: box.y + Math.random() * box.h,
+      neck: 1.5 + Math.random() * 9,
+      // 统一偏向一侧的弯曲（少量反向增加层次），整体像被卷入而不是直线吸过去
+      // 弧度要一眼看得出来：控制点偏移到弦长的 22%~56%，且 92% 朝同一侧，形成整体卷动方向
+      bow: (0.22 + Math.random() * 0.34) * (Math.random() < 0.92 ? 1 : -1),
+      // 起点越靠左上，越晚出发，形成连续不断的流
+      delay: Math.random() * 0.28,
+      size: 0.8 + Math.random() * 1.9,
+      color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
+      glow: Math.random() < 0.22,
+      wobbleAmp: 2 + Math.random() * 8,
+      wobblePhase: Math.random() * Math.PI * 2,
+      wobbleFreq: 3 + Math.random() * 4,
+    })
+  }
+
+  // 非线性时间曲线：前半段几乎被「吸住」原地悬停，过了 42% 才猛烈加速冲进出口
+  const easeOf = (t: number) => {
+    const HOLD = 0.42
+    if (t <= HOLD) return 0.05 * Math.pow(t / HOLD, 2.2)
+    return 0.05 + 0.95 * Math.pow((t - HOLD) / (1 - HOLD), 2.8)
+  }
+
+  // 单个粒子在进度 t 时的位置：以「起点 → 出口」为弦做二次贝塞尔，中途向一侧鼓出去，
+  // 所以每条流都是带弧度的曲线；横向摆动幅度随接近出口收窄，形成漏斗收口
+  const posAt = (particle: Particle, t: number) => {
+    const ease = easeOf(t)
+    const shrink = 1 - ease
+    const dx = apex.x - particle.sx
+    const dy = apex.y - particle.sy
+    const len = Math.hypot(dx, dy) || 1
+    // 垂直于弦的单位向量，控制点沿它偏移 → 弧线
+    const nx = -dy / len
+    const ny = dx / len
+    // 控制点压向弦的中点：这样弧线的最鼓处在半程，视觉上是一段明显的弯
+    const cx = particle.sx + dx * 0.5 + nx * len * particle.bow
+    const cy = particle.sy + dy * 0.5 + ny * len * particle.bow
+    const inv = 1 - ease
+    const bezX = inv * inv * particle.sx + 2 * inv * ease * cx + ease * ease * apex.x
+    const bezY = inv * inv * particle.sy + 2 * inv * ease * cy + ease * ease * apex.y
+
+    const wobble = Math.sin(t * Math.PI * particle.wobbleFreq + particle.wobblePhase)
+    const spread = particle.neck * shrink * shrink
+    return {
+      x: bezX + wobble * particle.wobbleAmp * shrink + spread,
+      y: bezY + Math.cos(t * Math.PI * particle.wobbleFreq * 0.8 + particle.wobblePhase) * particle.wobbleAmp * 0.6 * shrink,
+    }
+  }
+
+  let rafId = 0
+  const startedAt = performance.now()
+
+  const tick = (now: number) => {
+    const elapsed = now - startedAt
+    const p = Math.min(1, elapsed / DURATION)
+    ctx.clearRect(0, 0, width, height)
+
+    for (const particle of particles) {
+      const local = (p - particle.delay) / (1 - particle.delay)
+      if (local <= 0) {
+        // 还没出发：原地微微颤动，像被吸力扰动
+        if (p > 0) {
+          ctx.globalAlpha = 0.32
+          ctx.fillStyle = particle.color
+          ctx.fillRect(
+            particle.sx + Math.sin(p * 8 + particle.wobblePhase) * 1.2,
+            particle.sy + Math.cos(p * 7 + particle.wobblePhase) * 1.2,
+            particle.size,
+            particle.size
+          )
+        }
+        continue
+      }
+
+      const t = Math.min(1, local)
+      const head = posAt(particle, t)
+      const ease = easeOf(t)
+      // 冲刺阶段的拖尾更长，速度感才看得出来（同一帧里快的地方尾迹更长）
+      const sprint = t <= 0.42 ? 0 : Math.min(1, (t - 0.42) / 0.28)
+      const tail = posAt(particle, Math.max(0, t - (0.035 + 0.11 * sprint)))
+
+      // 越接近出口越亮，最后 12% 迅速消失
+      const shrink = 1 - ease
+      const brightness = 0.4 + 0.6 * (1 - shrink)
+      const fadeOut = t > 0.88 ? Math.max(0, 1 - (t - 0.88) / 0.12) : 1
+      const alpha = brightness * fadeOut
+      if (alpha <= 0.012) continue
+
+      const size = particle.size * (1 - t * 0.45)
+
+      if (particle.glow) {
+        ctx.globalAlpha = alpha * 0.18
+        ctx.fillStyle = particle.color
+        ctx.beginPath()
+        ctx.arc(head.x, head.y, size * 1.9, 0, Math.PI * 2)
+        ctx.fill()
+      }
+
+      // 拖尾 + 亮头：每帧上千个渐变太贵，用低透明度线 + 实心亮头做出同样的流动感
+      ctx.globalAlpha = alpha * 0.55
+      ctx.strokeStyle = particle.color
+      ctx.lineWidth = size * 0.8
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(tail.x, tail.y)
+      ctx.lineTo(head.x, head.y)
+      ctx.stroke()
+
+      ctx.globalAlpha = alpha
+      ctx.fillStyle = particle.color
+      ctx.beginPath()
+      ctx.arc(head.x, head.y, size * 0.62, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    ctx.globalAlpha = 1
+    if (p < 1) {
+      rafId = requestAnimationFrame(tick)
+    } else {
+      ctx.clearRect(0, 0, width, height)
+    }
+  }
+  rafId = requestAnimationFrame(tick)
+
+  setTimeout(() => {
+    cancelAnimationFrame(rafId)
+    canvas.remove()
+  }, DURATION + 120)
 
   // --- 动画结束后执行实际删除 ---
   setTimeout(() => {
@@ -185,7 +299,7 @@ function handleVortexDelete() {
     } else {
       noteStore.setDeletingNoteId(null)
     }
-  }, 1250)
+  }, DURATION + 40)
 }
 
 // 当前笔记是否锁定
@@ -207,6 +321,105 @@ const wordCount = computed(() => {
 
 // get current note
 const currentNote = computed(() => noteStore.currentNote)
+
+// ============================================
+// 底部路径：根目录就是 /，末段显示笔记标题
+// ============================================
+// 当前笔记所在的目录链（从根目录往下，只用可读的目录名）
+const noteDirNames = computed<string[]>(() => {
+  const names: string[] = []
+  let dirId = currentNote.value?.directoryId ?? null
+  let guard = 0
+  while (dirId && guard < 32) {
+    const dir = directoryStore.getDirectory(dirId)
+    if (!dir) break
+    names.unshift(sanitizePathSegment(dir.name))
+    dirId = dir.parentId ?? null
+    guard++
+  }
+  return names
+})
+
+// 末段：磁盘上的真实文件名（就是标题，重名时带序号）
+const noteDisplayName = computed(() => {
+  const note = currentNote.value
+  if (!note) return ''
+  if (note.fileName) return note.fileName
+  const content = note.content
+  if (!content) return ''
+  const title = extractTitle(content)
+  return title === 'Untitled' ? '未命名.md' : fileNameForTitle(title)
+})
+
+// 路径前半部分：/ 或 /目录/目录/
+const notePathHead = computed(() => {
+  if (!currentNote.value) return ''
+  const names = noteDirNames.value
+  return names.length ? `/${names.join('/')}/` : '/'
+})
+
+// ============================================
+// 点击路径：复制完整路径 / 在文件管理器中打开
+// ============================================
+/** 笔记在磁盘上的完整路径（目录按名字嵌套，文件名就是标题） */
+async function resolveFullNotePath(): Promise<string> {
+  const note = currentNote.value
+  if (!note) return ''
+  const base = await getICloudPath()
+  const dirs = noteDirNames.value
+  const fileName = note.fileName || fileNameForTitle(extractTitle(note.content || ''))
+  return dirs.length ? `${base}/${dirs.join('/')}/${fileName}` : `${base}/${fileName}`
+}
+
+// 点击后的短暂反馈：copied / failed
+const pathFeedback = ref<'' | 'copied' | 'failed'>('')
+let pathFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+
+function showPathFeedback(kind: 'copied' | 'failed') {
+  pathFeedback.value = kind
+  if (pathFeedbackTimer) clearTimeout(pathFeedbackTimer)
+  pathFeedbackTimer = setTimeout(() => {
+    pathFeedback.value = ''
+    pathFeedbackTimer = null
+  }, 1400)
+}
+
+async function handlePathClick() {
+  if (!currentNote.value) return
+  const action = settingStore.settings.pathClickAction
+  try {
+    const fullPath = await resolveFullNotePath()
+    if (!fullPath) return
+    if (action === 'reveal') {
+      await revealItemInDir(fullPath)
+      return
+    }
+    const ok = await copyText(fullPath)
+    showPathFeedback(ok ? 'copied' : 'failed')
+  } catch (err) {
+    console.error('[file-path] 路径操作失败:', err)
+    showPathFeedback('failed')
+  }
+}
+
+onUnmounted(() => {
+  if (pathFeedbackTimer) clearTimeout(pathFeedbackTimer)
+})
+
+// 外部改了正文（顶部标题栏重命名会改正文首行）时，同步回编辑器并重新挂载 Tiptap
+const editorResetKey = ref(0)
+const editorKey = computed(() => `${currentNote.value?.id ?? 'none'}:${editorResetKey.value}`)
+
+watch(
+  () => currentNote.value?.content,
+  (content) => {
+    if (typeof content !== 'string') return
+    if (content === localContent.value) return
+    localContent.value = content
+    editorResetKey.value++
+  }
+)
+
 
 // 导航方向由 store 统一维护（noteStore.navDirection），模板直接绑定，用于滑动过渡动画
 // 追踪目录切换，用于决定垂直滑动方向
@@ -239,9 +452,9 @@ watch(
         // 手动同步 textarea 的值到 localContent
         localContent.value = sourceTextareaRef.value.value
       }
-      // 直接调用 writeNote 同步保存，不依赖防抖机制
-      await writeNote(oldId, localContent.value)
+      // 直接落盘同步保存，不依赖防抖机制
       noteStore.updateNote(oldId, { content: localContent.value })
+      await noteStore.persistNoteNow(oldId)
     }
     localContent.value = currentNote.value?.content || ''
     // 切换笔记时保持源码模式状态，不强制重置
@@ -277,7 +490,8 @@ const { isSaving } = useAutoSave(
   () => currentNote.value?.id || null,
   () => localContent.value,
   async (id, content) => {
-    await writeNote(id, content)
+    noteStore.updateNote(id, { content })
+    await noteStore.persistNoteNow(id)
   },
   settingStore.settings.autoSaveInterval
 )
@@ -610,19 +824,6 @@ function handleSourceKeydown(e: KeyboardEvent) {
   }
 }
 
-// 目录选择器弹出状态
-const dirPickerVisible = ref(false)
-
-function toggleDirPicker() {
-  dirPickerVisible.value = !dirPickerVisible.value
-}
-
-function handleDirSelect(id: string | null) {
-  noteStore.setFilterDirectory(id)
-  dirPickerVisible.value = false
-}
-
-
 // 自定义切换源码模式函数，确保内容同步
 function handleToggleSourceMode() {
   saveCurrentModeScrollRatio()
@@ -675,7 +876,7 @@ function handleToggleSourceMode() {
         <TiptapEditor
           v-else
           ref="editorRef"
-          :key="currentNote?.id"
+          :key="editorKey"
           :initial-content="localContent"
           :font-size="settingStore.settings.fontSize"
           :font-family="settingStore.settings.fontFamily"
@@ -722,20 +923,6 @@ function handleToggleSourceMode() {
         </div>
       </div>
 
-      <!-- 目录指示器 -->
-      <div class="dir-indicator" @click.stop="toggleDirPicker">
-        <i class="i-mdi-folder-outline"></i>
-        <span>{{ currentDirName }}</span>
-        <i class="i-mdi-chevron-down" :class="{ rotated: dirPickerVisible }"></i>
-      </div>
-
-      <!-- 目录选择器弹出 -->
-      <div v-if="dirPickerVisible" class="dir-picker-overlay" @click="dirPickerVisible = false">
-        <div class="dir-picker-popup" @click.stop>
-          <DirectoryTree :on-select="handleDirSelect" :show-trash="false" />
-        </div>
-      </div>
-
       <!-- bottom bar: word count, color, search -->
       <div class="bottom-bar">
         <div v-show="!searchVisible" class="word-count" @click.stop>
@@ -757,6 +944,33 @@ function handleToggleSourceMode() {
         >
           <i class="i-mdi-magnify"></i>
         </button>
+      </div>
+
+      <!-- 当前笔记的路径：根目录为 /，末段是文件名，过长时中间省略；点击按设置复制或打开 -->
+      <div
+        v-if="noteDisplayName"
+        class="file-path-bar"
+        :class="{ 'is-copied': pathFeedback === 'copied', 'is-failed': pathFeedback === 'failed' }"
+        :title="settingStore.settings.pathClickAction === 'reveal' ? $t('editor.pathClickRevealHint') : $t('editor.pathClickCopyHint')"
+        @click.stop="handlePathClick"
+      >
+        <i
+          :class="pathFeedback === 'copied'
+            ? 'i-mdi-check file-path-icon'
+            : pathFeedback === 'failed'
+              ? 'i-mdi-alert-circle-outline file-path-icon'
+              : 'i-mdi-file-document-outline file-path-icon'"
+        ></i>
+        <template v-if="pathFeedback === 'copied'">
+          <span class="file-path-tail">{{ $t('editor.pathCopied') }}</span>
+        </template>
+        <template v-else-if="pathFeedback === 'failed'">
+          <span class="file-path-tail">{{ $t('editor.pathCopyFailed') }}</span>
+        </template>
+        <template v-else>
+          <span class="file-path-head">{{ notePathHead }}</span>
+          <span class="file-path-tail">{{ noteDisplayName }}</span>
+        </template>
       </div>
 
       <!-- color picker popup -->
@@ -1014,74 +1228,6 @@ function handleToggleSourceMode() {
   -webkit-user-select: none;
 }
 
-.dir-indicator {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 11;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  background-color: var(--color-surface);
-  border-radius: 20px;
-  font-size: 12px;
-  color: var(--color-primary);
-  box-shadow: var(--shadow-xs);
-  cursor: pointer;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  user-select: none;
-  -webkit-user-select: none;
-  transition: background var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
-}
-
-.dir-indicator:hover {
-  background-color: var(--color-popup-bg);
-  box-shadow: var(--shadow-sm);
-}
-
-.dir-indicator:active {
-  transform: translateX(-50%) scale(0.97);
-}
-
-.dir-indicator i.i-mdi-chevron-down {
-  font-size: 14px;
-  transition: transform 0.2s;
-}
-
-.dir-indicator i.i-mdi-chevron-down.rotated {
-  transform: rotate(180deg);
-}
-
-.dir-indicator i {
-  font-size: 14px;
-}
-
-.dir-picker-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  justify-content: center;
-}
-
-.dir-picker-popup {
-  position: absolute;
-  bottom: 48px;
-  width: 280px;
-  height: 50vh;
-  max-height: 50vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background-color: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-lg);
-}
-
 .lock-button {
   display: flex;
   align-items: center;
@@ -1162,6 +1308,81 @@ function handleToggleSourceMode() {
   display: flex;
   align-items: center;
   gap: var(--bottom-control-gap);
+}
+
+/* 当前笔记的文件路径：底部居中，过长时由头部省略、文件名保持完整 */
+.file-path-bar {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: calc(100% - 300px);
+  padding: 5px 12px;
+  background-color: var(--color-surface);
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-xs);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.file-path-bar:hover {
+  color: var(--color-text);
+  background-color: var(--color-popup-bg);
+}
+
+.file-path-bar:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
+.file-path-bar.is-copied {
+  color: var(--color-primary);
+}
+
+.file-path-bar.is-failed {
+  color: #e5484d;
+}
+
+.file-path-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.file-path-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+}
+
+.file-path-tail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .file-path-bar {
+    max-width: calc(100% - 260px);
+  }
 }
 
 .word-count {
@@ -1431,36 +1652,13 @@ function handleToggleSourceMode() {
   transform: translateX(-50%) translateY(-10px);
 }
 
-/* 彩虹漩涡轨迹层：环形色带，靠 transform 旋转带动色带流动（GPU 合成，零逐帧重绘） */
-:deep(.vortex-rainbow) {
+/* 删除动画：正文散成粒子飘向左下角的画布层 */
+:deep(.vortex-canvas) {
   position: absolute;
-  inset: -15%;
-  pointer-events: none;
-  border-radius: 50%;
+  left: 0;
+  top: 0;
   z-index: 100;
-  background: conic-gradient(
-    from 0deg,
-    #ff3b3b, #ff9d3b, #fff23b, #6dff3b,
-    #3bffe0, #3b8bff, #a13bff, #ff3bd6,
-    #ff3b3b
-  );
-  -webkit-mask-image: radial-gradient(circle at 50% 50%,
-    rgba(0,0,0,0.15) 0%,
-    rgba(0,0,0,0.9) 26%,
-    rgba(0,0,0,1) 38%,
-    rgba(0,0,0,0.7) 52%,
-    rgba(0,0,0,0) 68%
-  );
-  mask-image: radial-gradient(circle at 50% 50%,
-    rgba(0,0,0,0.15) 0%,
-    rgba(0,0,0,0.9) 26%,
-    rgba(0,0,0,1) 38%,
-    rgba(0,0,0,0.7) 52%,
-    rgba(0,0,0,0) 68%
-  );
-  filter: blur(1.5px) saturate(1.8);
-  mix-blend-mode: normal;
-  will-change: transform, opacity;
+  pointer-events: none;
 }
 
 /* 漩涡删除期间阻止交互 */

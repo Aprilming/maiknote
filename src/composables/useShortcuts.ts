@@ -39,6 +39,8 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
     keyMatch = event.code === 'BracketRight'
   } else if (key === '/') {
     keyMatch = event.code === 'Slash'
+  } else if (key === '\\') {
+    keyMatch = event.code === 'Backslash'
   } else if (key === 'space') {
     keyMatch = event.key === ' '
   } else if (key === 'enter') {
@@ -136,6 +138,13 @@ export function useShortcuts(onOpenSettings?: () => void) {
       if (noteStore.currentNoteId) {
         noteStore.toggleLock(noteStore.currentNoteId)
       }
+      return
+    }
+
+    // 展开/收起左侧文件树（具体显隐状态由 App 维护，这里只派发事件）
+    if (matchesShortcut(e, shortcuts.toggleSidebar)) {
+      e.preventDefault()
+      window.dispatchEvent(new CustomEvent('marknote:toggle-sidebar'))
       return
     }
 

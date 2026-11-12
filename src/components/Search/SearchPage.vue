@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useI18n } from 'vue-i18n'
+import { confirmAction } from '@/composables/useConfirm'
 import DirectoryTree from './DirectoryTree.vue'
 
 const emit = defineEmits<{
@@ -199,14 +200,22 @@ async function handleRestore(noteId: string) {
 }
 
 async function handlePermanentDelete(noteId: string) {
-  if (confirm(t('trash.deleteConfirm'))) {
+  const confirmed = await confirmAction({
+    message: t('trash.deleteConfirm'),
+    confirmText: t('trash.delete')
+  })
+  if (confirmed) {
     await noteStore.permanentlyDeleteNote(noteId)
   }
 }
 
 async function handleEmptyTrash() {
   if (noteStore.trashedNotes.length === 0) return
-  if (confirm(t('trash.emptyConfirm', { count: noteStore.trashedNotes.length }))) {
+  const confirmed = await confirmAction({
+    message: t('trash.emptyConfirm', { count: noteStore.trashedNotes.length }),
+    confirmText: t('trash.empty')
+  })
+  if (confirmed) {
     await noteStore.emptyTrash()
   }
 }

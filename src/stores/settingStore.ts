@@ -19,6 +19,7 @@ export interface ShortcutSettings {
   lock: string         // 锁定/解锁笔记
   toggleSource: string // 切换源码模式
   centerWindow: string // 居中窗口
+  toggleSidebar: string // 展开/收起侧栏
 }
 
 /** 快捷键作用范围：global=系统全局（应用不在前台也生效），app=仅应用内（窗口聚焦时生效） */
@@ -41,6 +42,7 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   lock: 'Cmd+L',
   toggleSource: 'Cmd+/',
   centerWindow: 'Shift+Option+Cmd+A',
+  toggleSidebar: 'Cmd+\\',
 }
 
 export type CodeTheme =
@@ -64,6 +66,13 @@ export interface CustomEditorStyle {
 
 export type TitleBarBehavior = 'auto-hide' | 'always-show'
 
+/** 点击编辑器底部路径的行为：copy=复制完整文件路径，reveal=在系统文件管理器中打开 */
+export type PathClickAction = 'copy' | 'reveal'
+
+/** 文件树同级排序：folders=文件夹在上，files=文件在上 */
+export type TreeOrder = 'folders' | 'files'
+
+
 export interface AppSettings {
   language: 'zh-CN' | 'en-US'
   theme: Theme
@@ -75,6 +84,8 @@ export interface AppSettings {
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
   titleBarBehavior: TitleBarBehavior
+  pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
+  treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
   autoLaunch: boolean // 开机自启动
   closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
   rememberLastDirectory: boolean // 启动时恢复上次选择的目录
@@ -111,6 +122,8 @@ export const useSettingStore = defineStore('setting', () => {
     windowAlpha: 1.0,
     alwaysOnTop: false,
     titleBarBehavior: 'auto-hide',
+    pathClickAction: 'copy',
+    treeOrder: 'folders',
     autoLaunch: false,
     closeBehavior: 'hide',
     rememberLastDirectory: false,
@@ -231,6 +244,8 @@ export const useSettingStore = defineStore('setting', () => {
       windowAlpha: 1.0,
       alwaysOnTop: false,
       titleBarBehavior: 'auto-hide',
+      pathClickAction: 'copy',
+      treeOrder: 'folders',
       autoLaunch: false,
       closeBehavior: 'hide',
       rememberLastDirectory: false,

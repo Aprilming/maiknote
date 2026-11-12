@@ -159,6 +159,8 @@ function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
     keyMatch = e.code === 'BracketRight'
   } else if (key === '/') {
     keyMatch = e.code === 'Slash'
+  } else if (key === '\\') {
+    keyMatch = e.code === 'Backslash'
   } else if (key === 'space') {
     keyMatch = e.key === ' '
   } else if (key === 'enter') {
@@ -246,6 +248,7 @@ const shortcutLabels = computed((): Record<keyof ShortcutSettings, string> => ({
   lock: t('shortcut.lock'),
   toggleSource: t('shortcut.toggleSource'),
   centerWindow: t('shortcut.centerWindow'),
+  toggleSidebar: t('shortcut.toggleSidebar'),
 }))
 
 const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
@@ -261,6 +264,7 @@ const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
   lock: t('shortcut.lockDesc'),
   toggleSource: t('shortcut.toggleSourceDesc'),
   centerWindow: t('shortcut.centerWindowDesc'),
+  toggleSidebar: t('shortcut.toggleSidebarDesc'),
 }))
 
 function startRecording(key: keyof ShortcutSettings) {
@@ -354,6 +358,7 @@ function handleKeydown(e: KeyboardEvent) {
       case 'Escape': keyName = 'Esc'; break
       case 'Backspace': keyName = 'Backspace'; break
       case 'Slash': keyName = '/'; break
+      case 'Backslash': keyName = '\\'; break
       default: keyName = e.code
     }
   }
@@ -778,6 +783,56 @@ function getPromptPreview(prompt: string): string {
               >
                 <i class="i-mdi-eye-outline"></i>
                 <span>{{ $t('settings.titleBarAlwaysShow') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.pathClickAction') }}</span>
+              <span class="setting-desc">{{ $t('settings.pathClickActionDesc') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.pathClickAction === 'copy' }"
+                @click="settingStore.updateSettings('pathClickAction', 'copy')"
+              >
+                <i class="i-mdi-content-copy"></i>
+                <span>{{ $t('settings.pathClickCopy') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.pathClickAction === 'reveal' }"
+                @click="settingStore.updateSettings('pathClickAction', 'reveal')"
+              >
+                <i class="i-mdi-folder-open-outline"></i>
+                <span>{{ $t('settings.pathClickReveal') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.treeOrder') }}</span>
+              <span class="setting-desc">{{ $t('settings.treeOrderDesc') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.treeOrder === 'folders' }"
+                @click="settingStore.updateSettings('treeOrder', 'folders')"
+              >
+                <i class="i-mdi-folder-outline"></i>
+                <span>{{ $t('settings.treeOrderFolders') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.treeOrder === 'files' }"
+                @click="settingStore.updateSettings('treeOrder', 'files')"
+              >
+                <i class="i-mdi-file-document-outline"></i>
+                <span>{{ $t('settings.treeOrderFiles') }}</span>
               </button>
             </div>
           </div>

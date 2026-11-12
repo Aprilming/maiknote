@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch, watchEffect, onMounted, onUnmounted, ref, computed } from 'vue'
+import { watch, watchEffect, onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
 import { useEditor, EditorContent, BubbleMenu } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { Extension, getHTMLFromFragment } from '@tiptap/core'
@@ -37,7 +37,11 @@ import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useI18n } from 'vue-i18n'
 import { SOURCE_TAB_INSERT_TEXT, createRichTabInsertText } from './tabInsert'
+import { EMPTY_LINE_MARK, EMPTY_LINE_CHAR, isBlankEmptyLineText } from './emptyLine'
+import { EmptyLineNormalizer } from './extensions/EmptyLineNormalizer'
 import { readText } from '@tauri-apps/plugin-clipboard-manager'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { copyText } from '@/utils/clipboard'
 
 const lowlight = createLowlight(all)
 
@@ -87,15 +91,43 @@ const HardBreakStable = HardBreak.extend({
 })
 
 // markdown 语法本身无法表达“空段落”（空行只会被当作段落分隔，往返后会丢失），
-// 这里把空段落（或仅含硬换行的段落）序列化为 <p><br></p>，
-// 使空行在源码/渲染模式间稳定往返保留
+// 这里把空段落（或仅含硬换行/空行标记的段落）序列化为零宽空格 U+200B，
+// 由 AlignedParagraph 的 parse.updateDOM 在加载时还原成真正的空段落，
+// 使空行在源码/渲染模式间稳定往返保留（源码里这一行看起来就是普通空行）
 const isEmptyParagraph = (node: any): boolean => {
   if (node.childCount === 0) return true
-  if (node.childCount === 1) {
-    const child = node.firstChild
-    return child?.type.name === 'hardBreak' || child?.text === ''
-  }
-  return false
+  let empty = true
+  node.forEach((child: any) => {
+    if (child.type.name === 'hardBreak') return
+    if (child.isText && isBlankEmptyLineText(child.text)) return
+    empty = false
+  })
+  return empty
+}
+
+// 解析 Markdown 时直接清掉空行标记（零宽空格），让文档一加载就是真正的空段落。
+// 放在解析阶段而不是加载后改文档，可以避免打开笔记时误触发一次“内容更新”（会改动 updatedAt）。
+const stripEmptyLineMarksFromDOM = (element: HTMLElement) => {
+  element.querySelectorAll('p').forEach((paragraph) => {
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT)
+    const textNodes: Text[] = []
+    let current = walker.nextNode()
+    while (current) {
+      textNodes.push(current as Text)
+      current = walker.nextNode()
+    }
+    textNodes.forEach((textNode) => {
+      const raw = textNode.nodeValue ?? ''
+      if (!raw.includes(EMPTY_LINE_CHAR)) return
+      // 只删零宽空格，保留 <br> 等结构
+      const cleaned = raw.replace(/\u200b/g, '')
+      if (cleaned === '') {
+        textNode.remove()
+      } else {
+        textNode.nodeValue = cleaned
+      }
+    })
+  })
 }
 
 const AlignedParagraph = Paragraph.extend({
@@ -104,13 +136,15 @@ const AlignedParagraph = Paragraph.extend({
       markdown: {
         serialize(state: any, node: any) {
           if (isEmptyParagraph(node)) {
-            state.write('<p><br></p>')
+            state.write(EMPTY_LINE_MARK)
             state.closeBlock(node)
             return
           }
           renderAlignedMarkdownBlock(state, node, defaultMarkdownSerializer.nodes.paragraph)
         },
-        parse: {},
+        parse: {
+          updateDOM: stripEmptyLineMarksFromDOM,
+        },
       },
     }
   },
@@ -290,6 +324,15 @@ const normalizeMarkdown = (markdown: string): string =>
     .replace(/<(https?:\/\/[^>\s]+)>/g, '[$1]($1)')
     .replace(/\u00A0/g, SOURCE_TAB_INSERT_TEXT)
 
+// 复制到剪贴板时把空行标记（零宽空格）还原成真正的空行：
+// 编辑器内部需要标记才能保留空段落，但粘到别的应用里不能留下零宽字符
+const markdownForClipboard = (markdown: string): string =>
+  markdown
+    .replace(/[\u200b]+[ \t]*\n[ \t]*\n/g, '\n')    // 标记行 + 它的分隔空行 → 一个空行
+    .replace(/&#8203;[ \t]*\n[ \t]*\n/gi, '\n')     // 兼容旧文件里的实体写法
+    .replace(/[\u200b]/g, '')                       // 结尾 / 嵌套结构里残留的标记
+    .replace(/&#(?:8203|x200b);/gi, '')
+
 const isImeEditing = (): boolean => {
   return Boolean(
     (window as any).__imeComposing ||
@@ -412,6 +455,7 @@ const savedSelectionText = ref('') // 保存右键菜单打开时的选中文本
 // 存储右键点击前的 ProseMirror 选区快照（用于在右键处理完成后恢复）
 let rightClickSnapshot: { from: number; to: number } | null = null
 const hasClipboardText = ref(false) // 剪贴板是否有文本（控制「粘贴」项显示）
+const contextMenuLinkHref = ref('') // 右键点中的链接地址（空串表示不是链接）
 
 // AI 相关
 const isAILoading = ref(false)
@@ -462,11 +506,20 @@ function stopAI() {
 
 // 右键菜单处理
 function handleContextMenu(e: MouseEvent) {
+  // 左侧文件树有自己的右键菜单，交给它处理（本监听器挂在 document 捕获阶段，必须在这里放行）
+  if ((e.target as HTMLElement | null)?.closest?.('[data-filetree]')) {
+    return
+  }
+
   // 锁定状态下不显示右键菜单
   if (props.isLocked) {
     e.preventDefault()
     return
   }
+
+  // 记录右键是否点在链接上（决定菜单里是否出现「打开链接 / 复制链接地址」）
+  const anchor = (e.target as HTMLElement | null)?.closest?.('a')
+  contextMenuLinkHref.value = anchor?.getAttribute('href') || ''
 
   // 使用右键点击前的选区快照（handleContextMenu 在 capture 阶段触发时，
   // macOS WebKit 可能已经在底层原生层面修改了 DOM 选区，故不能信任当前值）
@@ -538,23 +591,26 @@ function handleContextMenu(e: MouseEvent) {
 function hideContextMenu() {
   contextMenuVisible.value = false
   savedSelectionText.value = ''
+  contextMenuLinkHref.value = ''
   rightClickSnapshot = null
 }
 
 // 复制选中内容（Markdown 源码，与 Cmd+C 一致）
-function copySelection() {
+async function copySelection() {
   const ed = editor.value
   if (!ed) return
   const { from, to } = ed.state.selection
   if (from === to) return
   const slice = ed.state.doc.slice(from, to)
   const text = serializeSelectionToMarkdown(slice)
-  navigator.clipboard.writeText(text).then(() => {
-    showToast(t('toast.copied'))
-  }).catch((err) => {
-    console.error('复制失败:', err)
-  })
+  // 先收起菜单再写剪贴板：菜单收起会改变焦点，写在后面容易被浏览器拒绝
   hideContextMenu()
+  const ok = await copyText(text)
+  if (ok) {
+    showToast(t('toast.copied'))
+  } else {
+    console.error('复制失败: 剪贴板写入被拒绝')
+  }
 }
 
 // 粘贴剪贴板文本到光标/选区
@@ -858,16 +914,52 @@ async function callAI(assistantId: string) {
 }
 
 
-/* ----- 链接格式转换 ----- */
+/* ----- 链接交互 ----- */
 
-// 检测当前选区文本是否为纯 URL
-const isPlainUrl = () => {
+// 补全协议：用户可能只敲 example.com
+const normalizeHref = (raw: string): string => {
+  const value = (raw || '').trim()
+  if (!value) return ''
+  if (/^(https?:|mailto:|tel:|file:|#)/i.test(value)) return value
+  return `https://${value}`
+}
+
+// 选区里是否有文字（决定气泡菜单要不要显示「添加链接」）
+const hasTextSelection = (): boolean => {
   const ed = editor.value
   if (!ed) return false
   const { from, to } = ed.state.selection
-  if (from === to) return false
-  const text = ed.state.doc.textBetween(from, to)
-  return /^(http?:\/\/\S+)$/.test(text)
+  return from !== to
+}
+
+// 用系统默认浏览器打开（Tauri 走 opener 插件，纯 Web 调试回退 window.open）
+const openExternalLink = async (rawHref: string) => {
+  const url = normalizeHref(rawHref)
+  if (!url) return
+  try {
+    if ((window as any).__TAURI_INTERNALS__) {
+      await openUrl(url)
+      return
+    }
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch (err) {
+    console.error('[link] 打开链接失败', err)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+// 当前光标所在链接的地址（不在链接上则返回空串）
+const currentLinkHref = (): string => {
+  const ed = editor.value
+  if (!ed) return ''
+  const { $from } = ed.state.selection
+  const mark = $from.marks().find((m) => m.type.name === 'link')
+  return (mark?.attrs.href as string) || ''
+}
+
+const openCurrentLink = () => {
+  const href = currentLinkHref()
+  if (href) void openExternalLink(href)
 }
 
 // 链接 → 纯文本（取消链接）
@@ -877,16 +969,90 @@ const convertLinkToPlainText = () => {
   ed.chain().focus().unsetLink().run()
 }
 
-// 纯 URL → Markdown 链接格式 [url](url)
-const convertUrlToMarkdown = () => {
+// 块类型 → 普通段落；已经是段落时给个提示，避免「点了没反应」
+const applyParagraph = () => {
+  const ed = editor.value
+  if (!ed) return
+  if (ed.isActive('paragraph')) {
+    showToast(t('editor.alreadyParagraph'))
+    return
+  }
+  ed.chain().focus().setParagraph().run()
+}
+
+// 链接输入面板（新建 / 修改链接地址）
+const linkPanelVisible = ref(false)
+const linkPanelValue = ref('')
+const linkPanelStyle = ref<{ left: string; top: string }>({ left: '0px', top: '0px' })
+const linkPanelInputRef = ref<HTMLInputElement>()
+
+const closeLinkPanel = () => {
+  linkPanelVisible.value = false
+}
+
+// 面板外侧按下就收起（面板本身有 @mousedown.stop）
+const hideLinkPanelOnOutsideClick = (event: MouseEvent) => {
+  if (!linkPanelVisible.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest?.('.link-panel')) return
+  closeLinkPanel()
+}
+
+const openLinkPanel = () => {
   const ed = editor.value
   if (!ed) return
   const { from, to } = ed.state.selection
-  const text = ed.state.doc.textBetween(from, to)
-  const urlMatch = text.match(/^(https?:\/\/\S+)$/)
-  if (urlMatch) {
-    ed.chain().focus().setTextSelection({ from, to }).deleteSelection().insertContent(`[${urlMatch[1]}](${urlMatch[1]})`).run()
+  const href = currentLinkHref()
+  if (!href && from === to) {
+    showToast(t('editor.linkSelectFirst'))
+    return
   }
+  // 贴在选区下方；下方放不下就翻到上方
+  let left = 120
+  let top = 120
+  try {
+    const coords = ed.view.coordsAtPos(to)
+    left = Math.min(coords.left, Math.max(8, window.innerWidth - 348))
+    top = coords.bottom + 8
+    if (top + 56 > window.innerHeight) top = Math.max(8, coords.top - 52)
+  } catch {
+    /* 定位失败就用默认位置 */
+  }
+  linkPanelStyle.value = { left: `${Math.max(8, left)}px`, top: `${Math.max(8, top)}px` }
+  linkPanelValue.value = href || ed.state.doc.textBetween(from, to, ' ')
+  linkPanelVisible.value = true
+  void nextTick(() => {
+    linkPanelInputRef.value?.focus()
+    linkPanelInputRef.value?.select()
+  })
+}
+
+const applyLink = () => {
+  const ed = editor.value
+  if (!ed) return
+  const href = normalizeHref(linkPanelValue.value)
+  if (!href) {
+    if (currentLinkHref()) ed.chain().focus().extendMarkRange('link').unsetLink().run()
+    closeLinkPanel()
+    return
+  }
+  ed.chain().focus().extendMarkRange('link').setLink({ href }).run()
+  closeLinkPanel()
+}
+
+// 右键菜单里的链接操作
+const openContextMenuLink = () => {
+  const href = contextMenuLinkHref.value
+  if (!href) return
+  hideContextMenu()
+  void openExternalLink(href)
+}
+
+const copyContextMenuLink = async () => {
+  const href = contextMenuLinkHref.value
+  if (!href) return
+  hideContextMenu()
+  if (await copyText(href)) showToast(t('toast.copied'))
 }
 
 const editor = useEditor({
@@ -909,6 +1075,7 @@ const editor = useEditor({
     HardBreakStable,
     AlignedParagraph,
     AlignedHeading,
+    EmptyLineNormalizer,
     TextAlign,
     TaskList,
     TaskItem.configure({
@@ -958,6 +1125,17 @@ const editor = useEditor({
   content: props.initialContent,
   editorProps: {
     handleDOMEvents: {
+      // Cmd/Ctrl + 单击链接 → 用系统默认浏览器打开（普通单击仍然是放光标）
+      click: (_view, event) => {
+        const anchor = (event.target as HTMLElement | null)?.closest?.('a')
+        if (!anchor) return false
+        const href = anchor.getAttribute('href') || ''
+        if (!href) return false
+        if (!(event.metaKey || event.ctrlKey)) return false
+        event.preventDefault()
+        void openExternalLink(href)
+        return true
+      },
       compositionstart: (_view, event) => {
         if (imeUpdateTimer) {
           clearTimeout(imeUpdateTimer)
@@ -1387,7 +1565,7 @@ const getNormalizedMarkdown = (): string => {
 const serializeSelectionToMarkdown = (slice: any): string => {
   const ed = editor.value
   if (!ed) {
-    return normalizeMarkdown(slice.content.textBetween(0, slice.content.size, '\n\n', '\n'))
+    return markdownForClipboard(normalizeMarkdown(slice.content.textBetween(0, slice.content.size, '\n\n', '\n')))
   }
   const { from, to } = ed.state.selection
   const $from = ed.state.doc.resolve(from)
@@ -1397,9 +1575,9 @@ const serializeSelectionToMarkdown = (slice: any): string => {
     return slice.content.textBetween(0, slice.content.size, '\n', '\n')
   }
   if (from === 0 && to === ed.state.doc.content.size) {
-    return getNormalizedMarkdown() || ''
+    return markdownForClipboard(getNormalizedMarkdown() || '')
   }
-  return normalizeMarkdown(ed.storage.markdown.serializer.serialize(slice.content))
+  return markdownForClipboard(normalizeMarkdown(ed.storage.markdown.serializer.serialize(slice.content)))
 }
 
 watch(() => props.initialContent, (newContent) => {
@@ -1448,6 +1626,9 @@ onMounted(async () => {
   }
   document.addEventListener('contextmenu', handleContextMenu, true)
   document.addEventListener('click', hideContextMenu)
+
+  // 点别处关掉链接输入面板
+  document.addEventListener('mousedown', hideLinkPanelOnOutsideClick, true)
 
   // 编辑器 DOM 上 capture 阶段拦截右键 mousedown，保存 ProseMirror 选区快照
   // 不调用 preventDefault/stopImmediatePropagation，让事件自然传播
@@ -1509,6 +1690,7 @@ onUnmounted(() => {
   }
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
+  document.removeEventListener('mousedown', hideLinkPanelOnOutsideClick, true)
 })
 
 defineExpose({
@@ -1579,20 +1761,27 @@ defineExpose({
           :class="{ 'is-active': editor.isActive('strike') }" :data-tip="$t('editor.strikethrough')"><s>S</s></button>
         <button @click="editor.chain().focus().toggleCode().run()"
           :class="{ 'is-active': editor.isActive('code') }" :data-tip="$t('editor.inlineCode')">&lt;/&gt;</button>
-        <button @click="editor.chain().focus().unsetAllMarks().run()"
-          :data-tip="$t('editor.clearFormat')" class="bm-clear-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 5l14 14M5 19l7-7 7 7M5 5l7 7 7-7"/>
-          </svg>
-        </button>
       </div>
 
       <div class="bm-sep" />
 
 
-      <!-- 链接激活时：额外提供转纯文本 -->
+      <!-- 链接操作 -->
       <div class="bm-group">
         <template v-if="editor.isActive('link')">
+          <button @click="openCurrentLink" :data-tip="$t('editor.openLink')" class="bm-link-btn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+          </button>
+          <button @click="openLinkPanel" :data-tip="$t('editor.editLink')" class="bm-link-btn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+            </svg>
+          </button>
           <button @click="convertLinkToPlainText" :data-tip="$t('editor.linkToPlainText')" class="bm-link-btn">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -1601,11 +1790,12 @@ defineExpose({
             </svg>
           </button>
         </template>
-      <!-- 纯 URL 文本时：额外提供转 Markdown -->
-        <template v-else-if="isPlainUrl()">
-          <button @click="convertUrlToMarkdown" :data-tip="$t('editor.linkToMarkdown')" class="bm-link-btn">
+        <!-- 选中普通文字时：给它加链接 -->
+        <template v-else-if="hasTextSelection()">
+          <button @click="openLinkPanel" :data-tip="$t('editor.addLink')" class="bm-link-btn">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/><polyline points="8 12 12 16 16 12"/><line x1="12" y1="8" x2="12" y2="16"/>
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
             </svg>
           </button>
         </template>
@@ -1710,10 +1900,23 @@ defineExpose({
           </svg>
         </button>
       </div>
+      <!-- 只在当前块不是普通段落时才提供「转普通文本」 -->
+      <template v-if="!editor.isActive('paragraph')">
+        <div class="bm-sep" />
+        <div class="bm-group">
+          <button @click="applyParagraph" :data-tip="$t('editor.paragraph')"><span style="font-size:10px">¶</span></button>
+        </div>
+      </template>
+
+      <!-- 清除行内格式（末尾） -->
       <div class="bm-sep" />
       <div class="bm-group">
-        <button @click="editor.chain().focus().setParagraph().run()"
-          :class="{ 'is-active': editor.isActive('paragraph') }" :data-tip="$t('editor.paragraph')"><span style="font-size:10px">¶</span></button>
+        <button @click="editor.chain().focus().unsetAllMarks().run()"
+          :data-tip="$t('editor.clearFormat')" class="bm-clear-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 5l14 14M5 19l7-7 7 7M5 5l7 7 7-7"/>
+          </svg>
+        </button>
       </div>
     </BubbleMenu>
     <!-- 右键菜单 -->
@@ -1725,6 +1928,15 @@ defineExpose({
         :style="contextMenuStyle"
         @click.stop
       >
+        <template v-if="contextMenuLinkHref">
+          <div class="context-menu-item" @click="openContextMenuLink">
+            <span>{{ $t('editor.openLink') }}</span>
+          </div>
+          <div class="context-menu-item" @click="copyContextMenuLink">
+            <span>{{ $t('editor.copyLink') }}</span>
+          </div>
+          <div class="context-menu-divider"></div>
+        </template>
         <div
           class="context-menu-item"
           :class="{ 'context-menu-item--disabled': !savedSelectionText }"
@@ -1756,6 +1968,30 @@ defineExpose({
             <span>{{ $t('editor.noAssistant') }}</span>
           </div>
         </template>
+      </div>
+    </Teleport>
+
+    <!-- 链接地址输入面板 -->
+    <Teleport to="body">
+      <div
+        v-if="linkPanelVisible"
+        class="link-panel"
+        :style="linkPanelStyle"
+        @mousedown.stop
+        @click.stop
+      >
+        <input
+          ref="linkPanelInputRef"
+          v-model="linkPanelValue"
+          class="link-panel-input"
+          type="text"
+          spellcheck="false"
+          :placeholder="$t('editor.linkPlaceholder')"
+          @keydown.enter.prevent="applyLink"
+          @keydown.esc.prevent="closeLinkPanel"
+        />
+        <button class="link-panel-btn link-panel-btn--primary" @click="applyLink">{{ $t('editor.linkConfirm') }}</button>
+        <button class="link-panel-btn" @click="closeLinkPanel">{{ $t('common.cancel') }}</button>
       </div>
     </Teleport>
   </div>
@@ -1891,7 +2127,7 @@ defineExpose({
 }
 
 .bm-clear-btn:hover {
-  color: #f87171 !important;
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
 }
 
 /* 自定义 tooltip (WKWebView 不支持原生 title) */
@@ -2005,6 +2241,56 @@ defineExpose({
   background: var(--color-popup-border, rgba(255, 255, 255, 0.1));
 }
 
+/* 链接地址输入面板 */
+.link-panel {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--color-popup-bg, rgba(30, 30, 30, 0.95));
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  z-index: 10001;
+}
+
+.link-panel-input {
+  width: 220px;
+  padding: 5px 8px;
+  font-size: 13px;
+  color: var(--color-popup-text, #e0e0e0);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.12));
+  border-radius: 5px;
+  outline: none;
+}
+
+.link-panel-input:focus {
+  border-color: var(--color-primary);
+}
+
+.link-panel-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--color-popup-text, #e0e0e0);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.link-panel-btn:hover {
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
+}
+
+.link-panel-btn--primary {
+  color: #fff;
+  background: var(--color-primary);
+}
+
 /* BubbleMenu 新增元素 */
 .bm-sep {
   width: 1px;
@@ -2060,6 +2346,7 @@ defineExpose({
   position: absolute;
   top: 8px;
   right: 8px;
+  z-index: 6;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2072,7 +2359,19 @@ defineExpose({
   color: var(--color-text-secondary);
   cursor: pointer;
   opacity: 1;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+/* 图标切换纯靠 class，避免点击时改动按钮内部 DOM */
+:deep(.code-block-copy-btn .copy-icon) {
+  display: block;
+}
+
+:deep(.code-block-copy-btn .done-icon) {
+  display: none;
 }
 
 :deep(.code-block-copy-btn:hover) {
@@ -2083,6 +2382,14 @@ defineExpose({
 :deep(.code-block-copy-btn.copied) {
   background: rgba(76, 175, 80, 0.3);
   color: #4caf50;
+}
+
+:deep(.code-block-copy-btn.copied .copy-icon) {
+  display: none;
+}
+
+:deep(.code-block-copy-btn.copied .done-icon) {
+  display: block;
 }
 
 /* 代码块语言选择器样式 */
@@ -2266,6 +2573,12 @@ defineExpose({
 .tiptap a {
   color: var(--color-primary);
   text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.tiptap a:hover {
+  text-decoration-thickness: 2px;
 }
 
 /* Placeholder 样式 */

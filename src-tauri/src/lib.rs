@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 出口 IP 信息（来自远程 API）
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -652,23 +652,45 @@ async fn write_assistants(base_path: String, content: String) -> Result<(), Stri
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
-/// Build note file path, optionally inside a directory
-fn note_path(base_path: &str, id: &str, dir: Option<&str>) -> PathBuf {
+/// 文件名清洗：去掉路径分隔符与非法字符，截断长度，空则回落「未命名」
+fn sanitize_file_name(name: &str) -> String {
+    let mut cleaned = String::new();
+    for ch in name.chars() {
+        let bad = matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || ch.is_control();
+        cleaned.push(if bad { '-' } else { ch });
+    }
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    let mut limited: String = trimmed.chars().take(60).collect();
+    limited = limited.trim().to_string();
+    if limited.is_empty() {
+        "未命名".to_string()
+    } else {
+        limited
+    }
+}
+
+/// 生成最终的文件名：清洗 + 补齐 .md 后缀
+fn resolve_file_name(file_name: &str) -> String {
+    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+    let safe = sanitize_file_name(stem);
+    format!("{}.md", safe)
+}
+
+/// Build note file path: base/<目录相对路径>/<文件名>
+fn note_path(base_path: &str, dir: Option<&str>, file_name: &str) -> PathBuf {
     let mut path = PathBuf::from(base_path);
     if let Some(d) = dir {
-        path = path.join(d);
+        if !d.trim().is_empty() {
+            path = path.join(d);
+        }
     }
-    path.join(format!("note_{}.md", id))
+    path.join(resolve_file_name(file_name))
 }
 
 /// Read a single note file
 #[tauri::command]
-async fn read_note(base_path: String, id: String, dir: Option<String>) -> Result<String, String> {
-    let path = if let Some(ref d) = dir {
-        note_path(&base_path, &id, Some(d))
-    } else {
-        note_path(&base_path, &id, None)
-    };
+async fn read_note(base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
+    let path = note_path(&base_path, dir.as_deref(), &file_name);
 
     if !path.exists() {
         return Ok(String::new());
@@ -677,106 +699,368 @@ async fn read_note(base_path: String, id: String, dir: Option<String>) -> Result
     fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
-/// Write a single note file (optionally inside a directory)
+/// Write a single note file（目录 / 文件名都走真实名字）
 #[tauri::command]
-async fn write_note(base_path: String, id: String, content: String, dir: Option<String>) -> Result<(), String> {
-    let path = if let Some(ref d) = dir {
-        // Ensure the directory exists
-        let dir_path = PathBuf::from(&base_path).join(d);
-        fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
-        note_path(&base_path, &id, Some(d))
-    } else {
-        note_path(&base_path, &id, None)
-    };
+async fn write_note(
+    base_path: String,
+    dir: Option<String>,
+    file_name: String,
+    content: String,
+) -> Result<(), String> {
+    let path = note_path(&base_path, dir.as_deref(), &file_name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
-/// Delete a note file (optionally from a directory)
-#[tauri::command]
-async fn delete_note(base_path: String, id: String, dir: Option<String>) -> Result<(), String> {
-    let path = if let Some(ref d) = dir {
-        note_path(&base_path, &id, Some(d))
-    } else {
-        note_path(&base_path, &id, None)
-    };
+/// 把文件移动到系统废纸篓（~/.Trash），失败时回退为直接删除。
+/// 返回废纸篓中的新路径（用于提示），回退删除时返回空串。
+fn move_to_trash(path: &std::path::Path) -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|e| format!("读取 HOME 失败: {e}"))?;
+    let trash_dir = PathBuf::from(home).join(".Trash");
+    fs::create_dir_all(&trash_dir).map_err(|e| format!("创建废纸篓目录失败: {e}"))?;
 
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "无法解析文件名".to_string())?;
+
+    let mut target = trash_dir.join(file_name);
+    if target.exists() {
+        // 同名文件已存在：加时间戳后缀，避免覆盖废纸篓里的旧文件
+        let stem = path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("note")
+            .to_string();
+        let ext = path
+            .extension()
+            .and_then(|n| n.to_str())
+            .unwrap_or("md")
+            .to_string();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        target = trash_dir.join(format!("{stem} {stamp}.{ext}"));
     }
 
-    Ok(())
+    match fs::rename(path, &target) {
+        Ok(()) => Ok(target.to_string_lossy().to_string()),
+        Err(rename_err) => {
+            // 跨卷或废纸篓不可写时回退：直接删除，删除失败则如实报错
+            fs::remove_file(path)
+                .map_err(|e| format!("移入废纸篓失败({rename_err})，删除也失败: {e}"))?;
+            Ok(String::new())
+        }
+    }
+}
+
+/// Delete a note file —— 移入系统废纸篓，可从废纸篓还原
+#[tauri::command]
+async fn delete_note(base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
+    let path = note_path(&base_path, dir.as_deref(), &file_name);
+
+    if !path.exists() {
+        return Ok(String::new());
+    }
+
+    move_to_trash(&path)
+}
+
+/// 把任意文件移入系统废纸篓（用于清理磁盘残留笔记文件）
+#[tauri::command]
+async fn trash_file(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Ok(String::new());
+    }
+    move_to_trash(&p)
+}
+
+/// 磁盘上的笔记文件（用于发现 metadata 之外的残留文件）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteFileEntry {
+    /// 文件名（含 .md，即标题）
+    file_name: String,
+    /// 所在目录的相对路径（根目录为 null），如 "工作/子目录"
+    dir: Option<String>,
+    path: String,
+    size: u64,
+    /// 修改时间（毫秒）
+    modified: Option<u64>,
+}
+
+fn collect_note_files(
+    dir: &std::path::Path,
+    dir_rel: Option<String>,
+    out: &mut Vec<NoteFileEntry>,
+    depth: u8,
+) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match entry.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            // 图片目录不算笔记目录
+            if name == "images" || depth >= 8 {
+                continue;
+            }
+            let child_rel = match &dir_rel {
+                Some(parent) => format!("{}/{}", parent, name),
+                None => name.clone(),
+            };
+            collect_note_files(&path, Some(child_rel), out, depth + 1);
+            continue;
+        }
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let meta = entry.metadata().ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
+        out.push(NoteFileEntry {
+            file_name: name,
+            dir: dir_rel.clone(),
+            path: path.to_string_lossy().to_string(),
+            size,
+            modified,
+        });
+    }
+}
+
+/// 列出磁盘上所有笔记文件
+#[tauri::command]
+async fn list_note_files(base_path: String) -> Result<Vec<NoteFileEntry>, String> {
+    let base = PathBuf::from(&base_path);
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    collect_note_files(&base, None, &mut out, 0);
+    out.sort_by(|a, b| b.modified.unwrap_or(0).cmp(&a.modified.unwrap_or(0)));
+    Ok(out)
 }
 
 /// Create a directory folder for note organization
 #[tauri::command]
-async fn create_directory_folder(base_path: String, dir_id: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(&dir_id);
+async fn create_directory_folder(base_path: String, dir: String) -> Result<(), String> {
+    let path = PathBuf::from(base_path).join(&dir);
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
-/// Rename a directory folder
+/// Rename / move a directory folder（新旧都用相对路径）
 #[tauri::command]
-async fn rename_directory_folder(base_path: String, old_dir_id: String, new_dir_id: String) -> Result<(), String> {
+async fn rename_directory_folder(base_path: String, old_dir: String, new_dir: String) -> Result<(), String> {
     let root = PathBuf::from(&base_path);
-    let old_path = root.join(&old_dir_id);
-    let new_path = root.join(&new_dir_id);
-    if old_path.exists() {
-        fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+    let old_path = root.join(&old_dir);
+    let new_path = root.join(&new_dir);
+    if old_path == new_path || !old_path.exists() {
+        return Ok(());
     }
-    Ok(())
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
 }
 
-/// Delete a directory folder and move its note files to root
+/// Delete a directory folder：.md 与子目录都上抬一级到父目录，然后删掉空文件夹
 #[tauri::command]
-async fn delete_directory_folder(base_path: String, dir_id: String) -> Result<(), String> {
+async fn delete_directory_folder(base_path: String, dir: String, parent_dir: Option<String>) -> Result<(), String> {
     let root = PathBuf::from(&base_path);
-    let dir_path = root.join(&dir_id);
+    let dir_path = root.join(&dir);
     if !dir_path.exists() {
         return Ok(());
     }
+    let dest_dir = match parent_dir.as_deref() {
+        Some(p) if !p.trim().is_empty() => root.join(p),
+        _ => root.clone(),
+    };
+    fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
-    // Move all .md files from the directory to root
     if let Ok(entries) = fs::read_dir(&dir_path) {
         for entry in entries.flatten() {
             let file_path = entry.path();
-            if file_path.extension().map(|e| e == "md").unwrap_or(false) {
-                let file_name = file_path.file_name().unwrap().to_os_string();
-                let dest = root.join(&file_name);
-                let _ = fs::rename(&file_path, &dest);
+            let name = entry.file_name();
+            let mut dest = dest_dir.join(&name);
+            // 同名冲突时加序号，绝不覆盖父目录里已有的笔记
+            if dest.exists() {
+                let stem = file_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("未命名")
+                    .to_string();
+                let ext = file_path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| format!(".{}", s))
+                    .unwrap_or_default();
+                let mut i = 2;
+                loop {
+                    dest = dest_dir.join(format!("{} {}{}", stem, i, ext));
+                    if !dest.exists() {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            let _ = fs::rename(&file_path, &dest);
+        }
+    }
+
+    fs::remove_dir_all(&dir_path).map_err(|e| e.to_string())
+}
+
+/// Move / rename a note file（目录与文件名都用真实名字）
+#[tauri::command]
+async fn move_note_file(
+    base_path: String,
+    from_dir: Option<String>,
+    to_dir: Option<String>,
+    file_name: String,
+    new_file_name: Option<String>,
+) -> Result<(), String> {
+    let src = note_path(&base_path, from_dir.as_deref(), &file_name);
+    let target_name = new_file_name.as_deref().unwrap_or(&file_name);
+    let dest = note_path(&base_path, to_dir.as_deref(), target_name);
+
+    if src == dest {
+        return Ok(());
+    }
+    if !src.exists() {
+        // 源不存在就什么都不做；内容会在下次保存时写到目标位置
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // 目标已存在（同名笔记）时不覆盖，加序号
+    let mut final_dest = dest.clone();
+    if final_dest.exists() {
+        let stem = dest
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("未命名")
+            .to_string();
+        let mut i = 2;
+        loop {
+            let candidate = dest.with_file_name(format!("{} {}.md", stem, i));
+            if !candidate.exists() {
+                final_dest = candidate;
+                break;
+            }
+            i += 1;
+        }
+    }
+
+    fs::rename(&src, &final_dest).map_err(|e| e.to_string())
+}
+
+/// 迁移：把老布局（note_<id>.md、以目录 id 命名的扁平文件夹）改造成真实名字布局
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LayoutMove {
+    id: String,
+    /// 老位置：目录 id（根目录为 null）
+    from_dir: Option<String>,
+    /// 新位置：目录相对路径（根目录为 null）
+    to_dir: Option<String>,
+    /// 新文件名（含 .md）
+    to_file_name: String,
+}
+
+#[tauri::command]
+async fn migrate_note_layout(base_path: String, moves: Vec<LayoutMove>) -> Result<usize, String> {
+    let root = PathBuf::from(&base_path);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut migrated = 0usize;
+    for m in moves {
+        let old_name = format!("note_{}.md", m.id);
+        let candidates = [
+            match m.from_dir.as_deref() {
+                Some(d) if !d.trim().is_empty() => root.join(d).join(&old_name),
+                _ => root.join(&old_name),
+            },
+            root.join(&old_name),
+        ];
+        let src = candidates.iter().find(|p| p.exists()).cloned();
+        let Some(src) = src else { continue };
+
+        let dest = note_path(&base_path, m.to_dir.as_deref(), &m.to_file_name);
+        if src == dest {
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut final_dest = dest.clone();
+        if final_dest.exists() {
+            let stem = dest
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("未命名")
+                .to_string();
+            let mut i = 2;
+            loop {
+                let candidate = dest.with_file_name(format!("{} {}.md", stem, i));
+                if !candidate.exists() {
+                    final_dest = candidate;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if fs::rename(&src, &final_dest).is_ok() {
+            migrated += 1;
+        }
+    }
+
+    // 清理搬空的、以目录 id 命名的老文件夹
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "images" {
+                continue;
+            }
+            let empty = fs::read_dir(&path)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false);
+            if empty {
+                let _ = fs::remove_dir(&path);
             }
         }
     }
 
-    // Remove the directory (should be empty now)
-    fs::remove_dir_all(&dir_path).map_err(|e| e.to_string())
-}
-
-/// Move a note file between directories (dir can be None for root)
-#[tauri::command]
-async fn move_note_file(base_path: String, id: String, from_dir: Option<String>, to_dir: Option<String>) -> Result<(), String> {
-    let src = note_path(&base_path, &id, from_dir.as_deref());
-    let dest = if let Some(ref d) = to_dir {
-        let dir_path = PathBuf::from(&base_path).join(d);
-        fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
-        note_path(&base_path, &id, Some(d))
-    } else {
-        note_path(&base_path, &id, None)
-    };
-
-    if src.exists() {
-        fs::rename(&src, &dest).map_err(|e| e.to_string())?;
-    } else if src != dest {
-        // Source doesn't exist, write empty at destination
-        fs::write(&dest, "").map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
+    Ok(migrated)
 }
 
 /// Set note file to read-only (444 permission)
 #[tauri::command]
-async fn set_note_readonly(base_path: String, id: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+async fn set_note_readonly(base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
+    let path = note_path(&base_path, dir.as_deref(), &file_name);
 
     if path.exists() {
         #[cfg(unix)]
@@ -788,7 +1072,7 @@ async fn set_note_readonly(base_path: String, id: String) -> Result<(), String> 
         }
         #[cfg(not(unix))]
         {
-            let _ = (path, id);
+            let _ = &path;
         }
     }
 
@@ -797,8 +1081,8 @@ async fn set_note_readonly(base_path: String, id: String) -> Result<(), String> 
 
 /// Set note file to read-write (644 permission)
 #[tauri::command]
-async fn set_note_readwrite(base_path: String, id: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(format!("note_{}.md", id));
+async fn set_note_readwrite(base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
+    let path = note_path(&base_path, dir.as_deref(), &file_name);
 
     if path.exists() {
         #[cfg(unix)]
@@ -810,7 +1094,7 @@ async fn set_note_readwrite(base_path: String, id: String) -> Result<(), String>
         }
         #[cfg(not(unix))]
         {
-            let _ = (path, id);
+            let _ = &path;
         }
     }
 
@@ -1458,10 +1742,13 @@ pub fn run() {
             read_note,
             write_note,
             delete_note,
+            trash_file,
+            list_note_files,
             create_directory_folder,
             rename_directory_folder,
             delete_directory_folder,
             move_note_file,
+            migrate_note_layout,
             set_note_readonly,
             set_note_readwrite,
             ensure_images_folder,

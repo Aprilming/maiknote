@@ -1,12 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
-import type { Note, NoteMetadata } from '@/types/note'
+import type { Note, NoteMetadata, NoteFileEntry } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useDirectoryStore } from '@/stores/directoryStore'
+import { directoryRelPath, directoryIdFromRelPath, fileNameForTitle, sanitizePathSegment } from '@/utils/notePath'
 import i18n from '@/i18n'
 
 const TITLE_MAX_LENGTH = 50
 const TITLE_SCAN_LINES = 20
+/** metadata 版本：2 = 真实名字布局（目录按名字嵌套，笔记文件名为标题） */
+const METADATA_VERSION = 2
 
 const HTML_ENTITIES: Record<string, string> = {
   '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'",
@@ -27,6 +30,8 @@ function stripMarkdown(line: string): string {
     .replace(/[*_`~]/g, '')                              // 未成对的残留标记
     .replace(/\\([\\`*_{}[\]()#+\-.!>~|])/g, '$1')       // 转义字符
     .replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (m) => HTML_ENTITIES[m] ?? m)
+    .replace(/&#(?:8203|x200b);/gi, '')                  // 空行标记（零宽空格实体）
+    .replace(/\u200b/g, '')                              // 残留的零宽空格
     .trim()
 }
 
@@ -42,6 +47,68 @@ export function extractTitle(content: string): string {
 export const useNoteStore = defineStore('note', () => {
   // File system
   const fs = useFileSystem()
+
+  // ---- 真实名字布局：目录按名字嵌套，笔记文件名 = 标题 ----
+
+  /** 目录 id → 磁盘相对路径，如 "工作/子目录"（根目录返回 undefined） */
+  function dirRelPath(dirId?: string | null): string | undefined {
+    if (!dirId) return undefined
+    return directoryRelPath(useDirectoryStore().directories, dirId)
+  }
+
+  /** 反查：磁盘相对路径 → 目录 id */
+  function dirIdFromRel(rel?: string | null): string | undefined {
+    if (!rel) return undefined
+    return directoryIdFromRelPath(useDirectoryStore().directories, rel)
+  }
+
+  /** 笔记在磁盘上的文件名（缺省按标题推） */
+  function noteFile(note: { id: string; title: string; fileName?: string }): string {
+    return note.fileName || fileNameForTitle(note.title)
+  }
+
+  function isFileNameTaken(dirId: string | null | undefined, fileName: string, exceptId?: string): boolean {
+    const target = dirId ?? null
+    return notes.value.some(
+      n => n.id !== exceptId && (n.directoryId ?? null) === target && noteFile(n) === fileName
+    )
+  }
+
+  /** 同目录重名时加序号：标题.md → 标题 2.md */
+  function uniqueFileName(dirId: string | null | undefined, desired: string, exceptId?: string): string {
+    if (!isFileNameTaken(dirId, desired, exceptId)) return desired
+    const stem = desired.replace(/\.md$/i, '')
+    let i = 2
+    while (isFileNameTaken(dirId, `${stem} ${i}.md`, exceptId)) i++
+    return `${stem} ${i}.md`
+  }
+
+  /** 把一条笔记的文件同步到磁盘：标题改名会顺手重命名文件 */
+  async function syncNoteFileToDisk(note: Note): Promise<void> {
+    const dir = dirRelPath(note.directoryId)
+    const desired = uniqueFileName(note.directoryId, fileNameForTitle(note.title), note.id)
+    if (note.fileName && note.fileName !== desired) {
+      await fs.moveNoteFile(note.fileName, dir ?? null, dir ?? null, desired)
+    }
+    note.fileName = desired
+    await fs.writeNote(desired, note.content, dir)
+  }
+
+  /**
+   * 把正文里「产生标题的那一行」换成新名字，保留原有 Markdown 前缀（如 "# "、"1. "）
+   * 这样文件名、标题、正文三处始终保持一致
+   */
+  function replaceTitleLine(content: string, title: string): string {
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!line.trim()) continue
+      const prefix = line.match(/^[\s>]*(?:#{1,6}\s+|(?:[-*+]|\d+[.)])\s+|\[[ xX]\]\s+)?/)?.[0] ?? ''
+      lines[i] = `${prefix}${title}`
+      return lines.join('\n')
+    }
+    return content.trim() ? content : `${title}\n`
+  }
 
   // State
   const notes = ref<Note[]>([])
@@ -66,7 +133,9 @@ export const useNoteStore = defineStore('note', () => {
   const activeNotes = computed(() => notes.value.filter(n => !n.trashedAt))
 
   const trashedNotes = computed(() =>
-    notes.value.filter(n => n.trashedAt).sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0))
+    notes.value
+      .filter(n => n.trashedAt && !isNoteEmpty(n))
+      .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0))
   )
 
   const currentNote = computed(() =>
@@ -77,12 +146,12 @@ export const useNoteStore = defineStore('note', () => {
     activeNotes.value.findIndex(n => n.id === currentNoteId.value)
   )
 
-  /** 按 filterDirectoryId 过滤后的笔记列表 */
+  /** 按 filterDirectoryId 过滤后的笔记列表（置顶的排在最前，和文件树顺序一致） */
   const activeNoteList = computed(() => {
-    if (filterDirectoryId.value === null) {
-      return activeNotes.value.filter(n => !n.directoryId)
-    }
-    return activeNotes.value.filter(n => n.directoryId === filterDirectoryId.value)
+    const list = filterDirectoryId.value === null
+      ? activeNotes.value.filter(n => !n.directoryId)
+      : activeNotes.value.filter(n => n.directoryId === filterDirectoryId.value)
+    return list.slice().sort((a, b) => Number(b.isPinned) - Number(a.isPinned))
   })
 
   /** 当前笔记在 activeNoteList 中的索引 */
@@ -110,7 +179,8 @@ export const useNoteStore = defineStore('note', () => {
   // Helper: Check if note is empty
   function isNoteEmpty(note: Note | null): boolean {
     if (!note) return false
-    return !note.content || note.content.trim() === ''
+    // 空行标记是零宽空格，trim() 不会去掉它，这里显式清掉再判断
+    return !note.content || note.content.replace(/\u200b/g, '').trim() === ''
   }
 
   // Helper: Show navigation hint
@@ -167,7 +237,7 @@ export const useNoteStore = defineStore('note', () => {
 
       for (const note of notesToSave) {
         try {
-          await fs.writeNote(note.id, note.content, note.directoryId)
+          await syncNoteFileToDisk(note)
         } catch (e) {
           console.error('Failed to save note to iCloud:', e)
         }
@@ -189,6 +259,55 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * 把老布局迁移成真实名字布局（只跑一次，metadata.version 做版本闸）
+   * @returns 是否发生了迁移
+   */
+  async function migrateLayoutIfNeeded(metadata: NoteMetadata): Promise<boolean> {
+    if ((metadata.version ?? 1) >= METADATA_VERSION) return false
+    // 同目录重名要在这里就先算好，否则两个笔记会抢同一个文件名
+    const taken = new Map<string, Set<string>>()
+    const moves = metadata.notes.map((item) => {
+      const toDir = dirRelPath(item.directoryId) ?? null
+      const key = toDir ?? ''
+      let set = taken.get(key)
+      if (!set) {
+        set = new Set<string>()
+        taken.set(key, set)
+      }
+      let name = item.fileName ?? fileNameForTitle(item.title)
+      const stem = name.replace(/\.md$/i, '')
+      let i = 2
+      while (set.has(name)) {
+        name = `${stem} ${i}.md`
+        i++
+      }
+      set.add(name)
+      item.fileName = name
+      return {
+        id: item.id,
+        fromDir: item.directoryId ?? null,
+        toDir,
+        toFileName: name,
+      }
+    })
+    try {
+      const count = await fs.migrateNoteLayout(moves)
+      metadata.version = METADATA_VERSION
+      // 空目录在磁盘上也要存在，访达里看到的树才和侧边栏一致
+      const dirs = useDirectoryStore().directories
+      for (const dir of dirs) {
+        const rel = directoryRelPath(dirs, dir.id)
+        if (rel) await fs.createDirectoryFolder(rel)
+      }
+      console.info(`[MaikNote] 笔记布局迁移完成：${count}/${moves.length} 个文件`)
+      return true
+    } catch (e) {
+      console.error('Failed to migrate note layout:', e)
+      return false
+    }
+  }
+
+  /**
    * Load all notes from iCloud
    */
   async function loadNotes(): Promise<void> {
@@ -200,12 +319,16 @@ export const useNoteStore = defineStore('note', () => {
     try {
       const metadata = await fs.readMetadata()
 
+      // 老布局（note_<id>.md + 以目录 id 命名的扁平文件夹）一次性迁移成真实名字
+      const migrated = await migrateLayoutIfNeeded(metadata)
+
       // Convert metadata items to full notes with empty content
       const loadedNotes: Note[] = []
 
       for (const item of metadata.notes) {
         // Read content from file (from directory if applicable)
-        const content = await fs.readNote(item.id, item.directoryId)
+        const fileName = item.fileName ?? fileNameForTitle(item.title)
+        const content = await fs.readNote(fileName, dirRelPath(item.directoryId))
 
         loadedNotes.push({
           id: item.id,
@@ -219,10 +342,20 @@ export const useNoteStore = defineStore('note', () => {
           directoryId: item.directoryId,
           backgroundColor: item.backgroundColor,
           trashedAt: item.trashedAt,
+          fileName,
         })
       }
 
       notes.value = loadedNotes
+
+      // 迁移完成后把新的 metadata（含 fileName / 版本号）落盘
+      if (migrated) {
+        try {
+          await saveMetadataToCloud()
+        } catch (e) {
+          console.error('Failed to persist migrated metadata:', e)
+        }
+      }
 
       // 恢复上次打开的笔记（确保在过滤后的列表中）
       const lastOpenedId = localStorage.getItem('lastOpenedNoteId')
@@ -242,6 +375,9 @@ export const useNoteStore = defineStore('note', () => {
     } finally {
       isLoading.value = false
     }
+
+    // 启动后异步扫一遍磁盘，把 metadata 之外的残留文件找出来
+    void scanOrphanFiles()
   }
 
   /**
@@ -249,7 +385,7 @@ export const useNoteStore = defineStore('note', () => {
    */
   async function saveMetadataToCloud(): Promise<void> {
     const metadata: NoteMetadata = {
-      version: 1,
+      version: METADATA_VERSION,
       notes: notes.value.map((note) => ({
         id: note.id,
         title: note.title,
@@ -261,6 +397,7 @@ export const useNoteStore = defineStore('note', () => {
         directoryId: note.directoryId,
         backgroundColor: note.backgroundColor,
         trashedAt: note.trashedAt,
+        fileName: noteFile(note),
       })),
     }
 
@@ -272,8 +409,8 @@ export const useNoteStore = defineStore('note', () => {
    */
   async function saveNoteToCloud(note: Note): Promise<void> {
     try {
-      // Save content to file (in directory if assigned)
-      await fs.writeNote(note.id, note.content, note.directoryId)
+      // Save content to file（目录 / 文件名都按真实名字）
+      await syncNoteFileToDisk(note)
 
       // Update metadata
       await saveMetadataToCloud()
@@ -284,17 +421,39 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
-   * Delete note from iCloud
+   * 立即把某条笔记写盘（源码模式切换等场景，不等防抖）
    */
-  async function deleteNoteFromCloud(id: string): Promise<void> {
+  async function persistNoteNow(id: string): Promise<void> {
+    const note = notes.value.find(n => n.id === id)
+    if (!note) return
     try {
-      const note = notes.value.find(n => n.id === id)
-      await fs.deleteNote(id, note?.directoryId)
+      await syncNoteFileToDisk(note)
       await saveMetadataToCloud()
     } catch (e) {
-      console.error('Failed to delete note from iCloud:', e)
-      throw e
+      console.error('Failed to persist note now:', e)
     }
+  }
+
+  /**
+   * 把笔记文件移入系统废纸篓（只处理文件，元数据由调用方在成功后再保存）
+   */
+  /**
+   * 空笔记被丢弃时直接清掉磁盘文件：取消待写入任务，再把文件移入系统废纸篓。
+   * 这样既不会留在「磁盘残留」里，也不会在回收站出现。
+   */
+  async function purgeNoteFile(note: Note): Promise<void> {
+    pendingSaveNotes.delete(note.id)
+    try {
+      await fs.deleteNote(noteFile(note), dirRelPath(note.directoryId))
+    } catch (e) {
+      console.error('Failed to remove empty note file:', e)
+    }
+  }
+
+  async function deleteNoteFromCloud(id: string): Promise<void> {
+    const note = notes.value.find(n => n.id === id)
+    if (!note) return
+    await fs.deleteNote(noteFile(note), dirRelPath(note.directoryId))
   }
 
   // ============================================
@@ -506,6 +665,23 @@ export const useNoteStore = defineStore('note', () => {
     if (note) {
       const oldActive = activeNoteList.value
       const oldActiveIndex = oldActive.findIndex(n => n.id === id)
+
+      // 空笔记不进回收站：直接删掉文件和元数据
+      if (isNoteEmpty(note)) {
+        const index = notes.value.findIndex(n => n.id === id)
+        if (index !== -1) notes.value.splice(index, 1)
+        deletingNoteId.value = null
+        if (currentNoteId.value === id) {
+          const active = activeNoteList.value
+          const newIndex = Math.min(Math.max(0, oldActiveIndex - 1), active.length - 1)
+          navDirection.value = oldActiveIndex > 0 ? 'left' : 'right'
+          currentNoteId.value = active[newIndex]?.id ?? null
+        }
+        await purgeNoteFile(note)
+        await saveMetadataToCloud()
+        return
+      }
+
       note.trashedAt = Date.now()
       note.updatedAt = Date.now()
       note.isPinned = false
@@ -528,30 +704,192 @@ export const useNoteStore = defineStore('note', () => {
     if (!note?.trashedAt) return
 
     const directoryStore = useDirectoryStore()
+    const fromRel = dirRelPath(note.directoryId) ?? null
     if (note.directoryId && !directoryStore.getDirectory(note.directoryId)) {
       note.directoryId = undefined
     }
     note.trashedAt = undefined
     note.updatedAt = Date.now()
+    const toRel = dirRelPath(note.directoryId) ?? null
+    if (fromRel !== toRel) {
+      // 目录没了，把文件一起搬到现在的位置
+      const fileName = noteFile(note)
+      const desired = uniqueFileName(note.directoryId, fileName, note.id)
+      await fs.moveNoteFile(fileName, fromRel, toRel, desired)
+      note.fileName = desired
+    }
     await saveMetadataToCloud()
   }
 
-  async function permanentlyDeleteNote(id: string): Promise<void> {
+  /**
+   * 彻底删除：把文件移入系统废纸篓，并移除元数据。
+   * 文件移入失败时不动元数据（界面与磁盘保持一致），并提示用户。
+   * @returns 是否删除成功
+   */
+  async function permanentlyDeleteNote(id: string): Promise<boolean> {
     const index = notes.value.findIndex(n => n.id === id)
-    if (index === -1) return
+    if (index === -1) return true
 
-    notes.value.splice(index, 1)
-    await deleteNoteFromCloud(id)
+    try {
+      await deleteNoteFromCloud(id)
+    } catch (e) {
+      console.error('Failed to move note to trash:', e)
+      const msg = e instanceof Error ? e.message : String(e)
+      showHint(i18n.global.t('trash.deleteFailed', { reason: msg }))
+      return false
+    }
+
+    const currentIndex = notes.value.findIndex(n => n.id === id)
+    if (currentIndex !== -1) {
+      notes.value.splice(currentIndex, 1)
+    }
+    await saveMetadataToCloud()
 
     if (currentNoteId.value === id) {
       currentNoteId.value = activeNoteList.value[0]?.id ?? null
     }
+    return true
   }
 
   async function emptyTrash(): Promise<void> {
     const ids = trashedNotes.value.map(n => n.id)
+    let failed = 0
     for (const id of ids) {
-      await permanentlyDeleteNote(id)
+      const ok = await permanentlyDeleteNote(id)
+      if (!ok) failed++
+    }
+    if (failed > 0) {
+      showHint(i18n.global.t('trash.emptyFailed', { count: failed }))
+    } else if (ids.length > 0) {
+      showHint(i18n.global.t('trash.emptyDone', { count: ids.length }))
+      // 文件进了系统废纸篓，刷新残留列表
+      await scanOrphanFiles()
+    }
+  }
+
+  // ============================================
+  // 磁盘残留文件：metadata 里已经没有，但磁盘上还留着 note_<id>.md
+  // ============================================
+  const orphanFiles = ref<NoteFileEntry[]>([])
+  const orphanScanning = ref(false)
+
+  async function scanOrphanFiles(notify = false): Promise<void> {
+    orphanScanning.value = true
+    try {
+      const files = await fs.listNoteFiles()
+
+      // metadata 里登记的「目录 + 文件名」就是正本，其余都是残留
+      const known = new Set(notes.value.map(n => `${dirRelPath(n.directoryId) ?? ''}/${noteFile(n)}`))
+      const candidates = files.filter(
+        f => !known.has(`${f.dir ?? ''}/${f.fileName}`)
+      )
+
+      // 空文件（切换边界时自动建出来的空笔记）不算残留：顺手清掉，不显示在列表里
+      const leftovers: NoteFileEntry[] = []
+      for (const file of candidates) {
+        if (file.size <= 16) {
+          try {
+            const content = await fs.readNote(file.fileName, file.dir ?? undefined)
+            if (!content || content.replace(/\u200b/g, '').trim() === '') {
+              await fs.trashFile(file.path)
+              continue
+            }
+          } catch (e) {
+            console.error('Failed to inspect leftover file:', e)
+          }
+        }
+        leftovers.push(file)
+      }
+      orphanFiles.value = leftovers
+      if (notify) {
+        showHint(
+          orphanFiles.value.length
+            ? i18n.global.t('trash.orphanScanDone', { count: orphanFiles.value.length })
+            : i18n.global.t('trash.diskLeftoversEmpty')
+        )
+      }
+    } catch (e) {
+      console.error('Failed to scan note files on disk:', e)
+      orphanFiles.value = []
+      if (notify) {
+        const msg = e instanceof Error ? e.message : String(e)
+        showHint(i18n.global.t('trash.orphanScanFailed', { reason: msg }))
+      }
+    } finally {
+      orphanScanning.value = false
+    }
+  }
+
+  /** 依据磁盘上的文件重建一条笔记对象（文件本身不动） */
+  async function buildNoteFromFileEntry(entry: NoteFileEntry): Promise<Note> {
+    const dirId = dirIdFromRel(entry.dir)
+    const content = await fs.readNote(entry.fileName, entry.dir ?? undefined)
+    const stamp = entry.modified ?? Date.now()
+    return {
+      id: crypto.randomUUID(),
+      title: extractTitle(content),
+      content,
+      createdAt: stamp,
+      updatedAt: stamp,
+      isPinned: false,
+      isLocked: false,
+      directoryId: dirId,
+      fileName: entry.fileName,
+    }
+  }
+
+  /**
+   * 把残留文件收进 App 回收站：补回 metadata 并标记 trashedAt，文件先留在原处，
+   * 之后在回收站里可以还原，或再「删除」把它移入系统废纸篓。
+   */
+  async function trashOrphanFile(entry: NoteFileEntry): Promise<boolean> {
+    try {
+      const note = await buildNoteFromFileEntry(entry)
+      const dup = notes.value.findIndex(n => n.id === note.id)
+      if (dup !== -1) notes.value.splice(dup, 1)
+      notes.value.unshift({ ...note, trashedAt: Date.now() })
+      await saveMetadataToCloud()
+      orphanFiles.value = orphanFiles.value.filter(f => f.path !== entry.path)
+      return true
+    } catch (e) {
+      console.error('Failed to move orphan file to trash:', e)
+      const msg = e instanceof Error ? e.message : String(e)
+      showHint(i18n.global.t('trash.restoreFailed', { reason: msg }))
+      return false
+    }
+  }
+
+  /** 一键把所有残留文件收进回收站 */
+  async function trashAllOrphanFiles(): Promise<void> {
+    const list = [...orphanFiles.value]
+    let failed = 0
+    let done = 0
+    for (const entry of list) {
+      const ok = await trashOrphanFile(entry)
+      if (ok) done++
+      else failed++
+    }
+    if (failed > 0) {
+      showHint(i18n.global.t('trash.emptyFailed', { count: failed }))
+    } else if (done > 0) {
+      showHint(i18n.global.t('trash.orphanTrashDone', { count: done }))
+    }
+  }
+
+  /** 把残留文件恢复成笔记（文件已在磁盘上，只需补回元数据） */
+  async function restoreOrphanFile(entry: NoteFileEntry): Promise<void> {
+    try {
+      const restored = await buildNoteFromFileEntry(entry)
+      const dup = notes.value.findIndex(n => n.id === restored.id)
+      if (dup !== -1) notes.value.splice(dup, 1)
+      notes.value.unshift(restored)
+      await saveMetadataToCloud()
+      orphanFiles.value = orphanFiles.value.filter(f => f.path !== entry.path)
+      currentNoteId.value = restored.id
+    } catch (e) {
+      console.error('Failed to restore orphan file:', e)
+      const msg = e instanceof Error ? e.message : String(e)
+      showHint(i18n.global.t('trash.restoreFailed', { reason: msg }))
     }
   }
 
@@ -574,9 +912,9 @@ export const useNoteStore = defineStore('note', () => {
 
       // Set file permission based on lock state
       if (note.isLocked) {
-        await fs.setNoteReadonly(id)
+        await fs.setNoteReadonly(noteFile(note), dirRelPath(note.directoryId))
       } else {
-        await fs.setNoteReadwrite(id)
+        await fs.setNoteReadwrite(noteFile(note), dirRelPath(note.directoryId))
       }
 
       // Schedule metadata save to iCloud (debounced)
@@ -617,15 +955,17 @@ export const useNoteStore = defineStore('note', () => {
 
     // Current note is empty - delete it and navigate to previous
     if (isEmpty) {
-      const idToDelete = currentNoteId.value!
+      const noteToDelete = currentNote.value!
+      const idToDelete = noteToDelete.id
       const realIndex = notes.value.findIndex(n => n.id === idToDelete)
-      notes.value.splice(realIndex, 1)
+      if (realIndex !== -1) notes.value.splice(realIndex, 1)
       // 空笔记已从列表移除，watch 无法反查其索引，显式指定向上一条切换的方向
       navDirection.value = 'left'
       currentNoteId.value = active[activeIdx - 1].id
 
-      // Delete from iCloud
-      await deleteNoteFromCloud(idToDelete)
+      // 空笔记直接清掉磁盘文件，不留残余
+      await purgeNoteFile(noteToDelete)
+      await saveMetadataToCloud()
     } else {
       // Navigate to previous note
       navDirection.value = 'left'
@@ -655,15 +995,16 @@ export const useNoteStore = defineStore('note', () => {
     // Not at last position
     if (isEmpty) {
       // Current note is empty - delete it and navigate to next
-      const idToDelete = currentNoteId.value!
+      const noteToDelete = currentNote.value!
+      const idToDelete = noteToDelete.id
       const realIndex = notes.value.findIndex(n => n.id === idToDelete)
-      notes.value.splice(realIndex, 1)
+      if (realIndex !== -1) notes.value.splice(realIndex, 1)
       // 空笔记已从列表移除，watch 无法反查其索引，显式指定向下一条切换的方向
       navDirection.value = 'right'
       currentNoteId.value = active[activeIdx + 1].id
 
-      // Delete from iCloud
-      await deleteNoteFromCloud(idToDelete)
+      await purgeNoteFile(noteToDelete)
+      await saveMetadataToCloud()
     } else {
       // Navigate to next note
       navDirection.value = 'right'
@@ -711,18 +1052,54 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * 重命名笔记：文件名 + 正文标题行一起改名，保持「文件名 = 标题」
+   */
+  async function renameNoteFile(noteId: string, rawName: string): Promise<boolean> {
+    const note = notes.value.find(n => n.id === noteId)
+    if (!note) return false
+    const trimmed = String(rawName ?? '').replace(/\.md$/i, '').trim()
+    if (!trimmed) return false
+    const stem = sanitizePathSegment(trimmed)
+    const dir = dirRelPath(note.directoryId) ?? null
+    const from = noteFile(note)
+    if (stem === from.replace(/\.md$/i, '')) return true
+    const desired = uniqueFileName(note.directoryId, `${stem}.md`, note.id)
+    try {
+      await fs.moveNoteFile(from, dir, dir, desired)
+    } catch (err) {
+      console.error('[rename-note] 重命名文件失败:', err)
+      return false
+    }
+    note.fileName = desired
+    note.content = replaceTitleLine(note.content, stem)
+    note.title = extractTitle(note.content)
+    note.updatedAt = Date.now()
+    // 标题行改过了，把新内容写进改名后的文件
+    try {
+      await fs.writeNote(desired, note.content, dir ?? undefined)
+    } catch (err) {
+      console.error('[rename-note] 写入内容失败:', err)
+    }
+    await saveMetadataToCloud()
+    return true
+  }
+
+  /**
    * Move a note to a directory (also moves the file on filesystem)
    */
   async function moveNoteToDirectory(noteId: string, directoryId: string | null): Promise<void> {
     const note = notes.value.find(n => n.id === noteId)
     if (note) {
       if (note.trashedAt) return
-      const fromDir = note.directoryId ?? null
-      const toDir = directoryId
+      const fromRel = dirRelPath(note.directoryId) ?? null
+      const fileName = noteFile(note)
       note.directoryId = directoryId || undefined
       note.updatedAt = Date.now()
+      const toRel = dirRelPath(note.directoryId) ?? null
+      const desired = uniqueFileName(directoryId, fileName, note.id)
       // Move the actual file on the filesystem
-      await fs.moveNoteFile(noteId, fromDir, toDir)
+      await fs.moveNoteFile(fileName, fromRel, toRel, desired)
+      note.fileName = desired
       scheduleSave()
     }
   }
@@ -732,6 +1109,21 @@ export const useNoteStore = defineStore('note', () => {
    */
   async function initialize(): Promise<void> {
     await loadNotes()
+    await purgeEmptyTrash()
+  }
+
+  /**
+   * 历史遗留：以前空笔记被删会进回收站，这里统一清掉（文件移入系统废纸篓 + 移除元数据）。
+   */
+  async function purgeEmptyTrash(): Promise<void> {
+    const empties = notes.value.filter(n => n.trashedAt && isNoteEmpty(n))
+    if (!empties.length) return
+    for (const note of empties) {
+      await purgeNoteFile(note)
+      const index = notes.value.findIndex(n => n.id === note.id)
+      if (index !== -1) notes.value.splice(index, 1)
+    }
+    await saveMetadataToCloud()
   }
 
   return {
@@ -771,11 +1163,18 @@ export const useNoteStore = defineStore('note', () => {
     restoreNote,
     permanentlyDeleteNote,
     emptyTrash,
+    orphanFiles,
+    orphanScanning,
+    scanOrphanFiles,
+    trashOrphanFile,
+    trashAllOrphanFiles,
+    restoreOrphanFile,
     togglePin,
     toggleLock,
     reorderNotes,
     getNotesByDirectory,
     moveNoteToDirectory,
+    renameNoteFile,
     selectPrev,
     selectNext,
     navigatePrevOrCreate,
@@ -785,6 +1184,7 @@ export const useNoteStore = defineStore('note', () => {
     initialize,
     loadNotes,
     saveNoteToCloud,
+    persistNoteNow,
     saveMetadataToCloud,
   }
 })

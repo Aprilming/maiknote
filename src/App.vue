@@ -17,6 +17,8 @@ import TitleBar from '@/components/TitleBar/TitleBar.vue'
 import Editor from '@/components/Editor/MilkdownEditor.vue'
 import Settings from '@/components/Settings/Settings.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
+import FileTree from '@/components/Sidebar/FileTree.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 // Initialize stores and composables
 const noteStore = useNoteStore()
@@ -37,6 +39,35 @@ const { latestVersion, updateAvailable, checkForUpdates, downloadAndInstall, dow
 
 // 当前页面：'editor' | 'settings' | 'search'
 const currentView = ref<'editor' | 'settings' | 'search'>('editor')
+// 左侧文件树（侧边栏）显示状态与宽度，持久化到 localStorage
+const sidebarVisible = ref(localStorage.getItem('sidebar.visible') !== 'false')
+const sidebarWidth = ref(clampSidebarWidth(Number(localStorage.getItem('sidebar.width')) || 216))
+
+function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return 216
+  return Math.min(360, Math.max(160, width))
+}
+
+function toggleSidebar() {
+  sidebarVisible.value = !sidebarVisible.value
+  localStorage.setItem('sidebar.visible', sidebarVisible.value ? 'true' : 'false')
+}
+
+function handleSidebarResize(width: number) {
+  sidebarWidth.value = clampSidebarWidth(width)
+  localStorage.setItem('sidebar.width', String(sidebarWidth.value))
+}
+
+// 侧栏开关快捷键在设置里可自定义，useShortcuts 匹配到后派发事件
+function handleToggleSidebarEvent() {
+  toggleSidebar()
+}
+onMounted(() => {
+  window.addEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
+})
+onUnmounted(() => {
+  window.removeEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
+})
 // 初始化完成标志，防止开机自启时iCloud未准备好导致空白
 const isAppReady = ref(false)
 
@@ -137,11 +168,11 @@ onMounted(async () => {
     await invoke('set_window_alpha', { alpha: settingStore.settings.windowAlpha })
   }
 
+  // 先加载目录结构：笔记文件名 / 磁盘目录都依赖目录名字链
+  await directoryStore.loadDirectories()
+
   // Load notes from iCloud (will create initial note if none exists)
   await noteStore.initialize()
-
-  // 加载目录结构
-  await directoryStore.loadDirectories()
 
   // 如果启用了"记忆上次文件夹"，恢复上次选择的目录
   if (settingStore.settings.rememberLastDirectory) {
@@ -217,7 +248,25 @@ onUnmounted(() => {
       <TitleBar v-if="currentView !== 'settings'" @open-settings="openSettings" @open-search="openSearchPage" />
       <SearchPage v-if="currentView === 'search'" @close="closeSearchPage" />
       <Settings v-else-if="currentView === 'settings'" @back="closeSettings" />
-      <Editor v-else />
+      <div v-else class="editor-view">
+        <FileTree
+          v-show="sidebarVisible"
+          :width="sidebarWidth"
+          @collapse="toggleSidebar"
+          @resize="handleSidebarResize"
+        />
+        <!-- 侧栏开关：贴在编辑器左下角、字数统计的上方（原来展开按钮的位置） -->
+        <div class="editor-main">
+          <Editor />
+          <button
+            class="sidebar-open-btn"
+            :title="sidebarVisible ? $t('fileTree.collapse') : $t('fileTree.expand')"
+            @click="toggleSidebar"
+          >
+            <i :class="sidebarVisible ? 'i-mdi-chevron-double-left' : 'i-mdi-page-layout-sidebar-left'"></i>
+          </button>
+        </div>
+      </div>
 
       <!-- 更新提示 -->
       <div v-if="showUpdateToast" class="update-toast">
@@ -237,6 +286,9 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
+
+    <!-- 应用内确认框：WKWebView 不支持 window.confirm，统一走这里 -->
+    <ConfirmDialog />
   </div>
 </template>
 
@@ -335,7 +387,56 @@ onUnmounted(() => {
   animation: spin 1s linear infinite;
 }
 
-/* 更新提示 Toast */
+/* 编辑器视图：左侧文件树 + 右侧编辑器 */
+.editor-view {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.editor-main {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 文件树收起后：展开按钮浮在编辑器左下角、字数统计胶囊的正上方 */
+.sidebar-open-btn {
+  position: absolute;
+  left: 10px;
+  bottom: 44px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  opacity: 0.6;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out);
+}
+
+.sidebar-open-btn i {
+  font-size: 15px;
+}
+
+.sidebar-open-btn:hover {
+  opacity: 1;
+  background-color: var(--color-popup-bg);
+}
+
 .update-toast {
   position: absolute;
   bottom: 20px;

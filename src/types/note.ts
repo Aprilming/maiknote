@@ -13,6 +13,7 @@ export interface Note {
   directoryId?: string // null/undefined = root directory
   backgroundColor?: string // Optional background color for the note
   trashedAt?: number // Unix timestamp when moved to trash
+  fileName?: string // 磁盘文件名（含 .md），默认取标题
 }
 
 /**
@@ -34,6 +35,7 @@ export interface NoteMetadataItem {
   directoryId?: string
   backgroundColor?: string
   trashedAt?: number
+  fileName?: string
 }
 
 /**
@@ -50,4 +52,15 @@ export interface Directory {
 export interface DirectoryData {
   version: number
   directories: Directory[]
+}
+
+/**
+ * 磁盘上实际存在的笔记文件（用于发现 metadata 之外的残留文件）
+ */
+export interface NoteFileEntry {
+  fileName: string // 磁盘文件名（含 .md）
+  dir: string | null // 所在目录的相对路径（根目录为 null），如 "工作/子目录"
+  path: string // 完整路径
+  size: number // 字节
+  modified: number | null // 修改时间（毫秒）
 }
