@@ -12,6 +12,8 @@ export interface ColorOption {
 defineProps<{
   modelValue: string | undefined
   colors: ColorOption[]
+  /** 标题文案，不传就用「背景」 */
+  heading?: string
 }>()
 
 const emit = defineEmits<{
@@ -49,7 +51,7 @@ onUnmounted(() => {
 
 <template>
   <div class="color-picker-popup" @click.stop>
-    <div class="color-picker-header">{{ $t('colorPicker.background') }}</div>
+    <div class="color-picker-header">{{ heading || $t('colorPicker.background') }}</div>
     <div class="color-grid">
       <button
         class="color-option"

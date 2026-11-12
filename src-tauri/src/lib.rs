@@ -1,3 +1,4 @@
+// rebuild trigger 1794493368
 pub mod autostart;
 
 use std::collections::HashMap;
@@ -130,11 +131,21 @@ const kCGDisplayBeginConfiguration: u32 = 1 << 0;
 #[cfg(target_os = "macos")]
 const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY: usize = 1 << 8;
 
+#[cfg(target_os = "macos")]
+const NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+
+#[cfg(target_os = "macos")]
+const NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY: usize = 1 << 4;
+
+#[cfg(target_os = "macos")]
+const NS_WINDOW_COLLECTION_BEHAVIOR_IGNORES_CYCLE: usize = 1 << 6;
+
 /// 全局快捷键状态
 struct GlobalShortcutState {
     current_shortcut: Mutex<Option<Shortcut>>,
     center_shortcut: Mutex<Option<Shortcut>>,
     pin_shortcut: Mutex<Option<Shortcut>>,
+    edge_shortcut: Mutex<Option<Shortcut>>,
 }
 
 /// 用户设置的窗口透明度（失焦时需要补偿）
@@ -1610,6 +1621,525 @@ fn list_local_interfaces() -> Result<Vec<LocalInterface>, String> {
     Ok(interfaces)
 }
 
+/// 边缘面板折叠态厚度默认值（逻辑像素）
+const EDGE_STRIP_WIDTH: f64 = 12.0;
+/// 边缘面板展开态宽度默认值（逻辑像素，与前端默认值保持一致）
+const EDGE_EXPANDED_WIDTH: f64 = 320.0;
+
+/// 贴边方向：0=右 1=左 2=上 3=下
+static EDGE_SIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// 展开态厚度（逻辑像素，可在设置里调）
+static EDGE_PANEL_THICKNESS: Mutex<f64> = Mutex::new(EDGE_EXPANDED_WIDTH);
+/// 折叠态厚度 / 触发带厚度（逻辑像素，可在设置里调）
+static EDGE_TRIGGER: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH);
+
+/// 快捷键钉住的展开态：钉住后鼠标移开也不再收起
+static EDGE_PINNED: AtomicBool = AtomicBool::new(false);
+/// 边缘窗口当前厚度（逻辑像素）：用于区分展开/折叠态，避免收起动画中被热区误判重新展开
+static EDGE_CURRENT_WIDTH: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH);
+/// 上次实际下发的窗口几何 (x, y, w, h)：完全相同时不再重复设置，避免窗口反复重排导致闪烁
+static EDGE_LAST_GEOM: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+/// 主动收起后的静默期（毫秒时间戳）：期间一律视为「不展开」，
+/// 防止收起动画结束时鼠标恰好压在最右侧细条上，把面板又弹开
+static EDGE_SUPPRESS_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 快捷键当前是否处于按下状态：长按产生的重复 Pressed 事件不再翻转面板
+static EDGE_HOTKEY_DOWN: AtomicBool = AtomicBool::new(false);
+/// 上次快捷键切换的时间戳（毫秒），用于吞掉同一次按键的重复事件
+static EDGE_TOGGLE_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 边缘窗口当前是否可见
+static EDGE_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// 光标当前是否落在边缘热区内（用于去重 emit）
+static EDGE_HOVERED: AtomicBool = AtomicBool::new(false);
+/// 热区矩形（逻辑坐标，CGEvent 的左上原点）：[x0, x1, y0, y1]
+static EDGE_HOTZONE: Mutex<[f64; 4]> = Mutex::new([0.0, 0.0, 0.0, 0.0]);
+/// 热区轮询线程是否已启动
+static EDGE_TRACKER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// 读取全局光标位置（Quartz 全局坐标 points，左上原点），复用文件内已有的 CGEvent 声明
+fn edge_cursor_location() -> Option<(f64, f64)> {
+    unsafe {
+        let ev = CGEventCreate(std::ptr::null());
+        if ev.is_null() {
+            return None;
+        }
+        let p = CGEventGetLocation(ev);
+        CFRelease(ev as *const std::ffi::c_void);
+        Some((p.x, p.y))
+    }
+}
+
+/// 系统级热区轮询：不依赖网页的 mouseenter 事件，鼠标靠近屏幕右边缘就直接展开
+fn start_edge_hover_tracker(app: AppHandle) {
+    if EDGE_TRACKER_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut ticks: u32 = 0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            ticks = ticks.wrapping_add(1);
+            let mut inside = false;
+            if EDGE_VISIBLE.load(Ordering::Relaxed) {
+                let zone = *EDGE_HOTZONE.lock().unwrap_or_else(|e| e.into_inner());
+                if zone[2] > zone[3] || zone[1] <= zone[0] {
+                    inside = false;
+                } else if let Some((x, y)) = edge_cursor_location() {
+                    // 热区始终等于窗口当前实际占位，四个方向通用
+                    inside = x >= zone[0] && x <= zone[1] && y >= zone[2] && y <= zone[3];
+                }
+            }
+            // 钉住时始终视为「需要展开」，鼠标移开也不收起
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let suppressed = now_ms < EDGE_SUPPRESS_UNTIL.load(Ordering::SeqCst);
+            let effective = if suppressed {
+                false
+            } else {
+                EDGE_PINNED.load(Ordering::Relaxed) || inside
+            };
+            let changed = EDGE_HOVERED.swap(effective, Ordering::Relaxed) != effective;
+            // 状态变化时立即通知；此外每 20 拍补一次心跳，
+            // 避免前端热更新重挂载后错过一次状态、面板卡在折叠宽度
+            if changed || ticks % 20 == 0 {
+                let _ = app.emit_to("edge", "maiknote:edge-hover", effective);
+            }
+        }
+    });
+}
+
+/// 取边缘面板应贴附的显示器：优先主窗口所在屏幕，其次边缘窗口、主显示器
+fn edge_monitor<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    win: &tauri::WebviewWindow<R>,
+) -> Option<tauri::Monitor> {
+    app.get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| win.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())
+}
+
+/// 把边缘窗口布局成「贴右边缘 + 全高 + 指定逻辑宽度」，右边缘保持锚定
+fn edge_side() -> u8 {
+    EDGE_SIDE.load(Ordering::SeqCst)
+}
+
+fn edge_panel_thickness() -> f64 {
+    *EDGE_PANEL_THICKNESS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+fn edge_trigger_thickness() -> f64 {
+    *EDGE_TRIGGER.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 按贴边方向算窗口矩形（物理像素）：0=右 1=左 2=上 3=下
+fn edge_rect(side: u8, work: (i32, i32, i32, i32), thickness_px: u32) -> (i32, i32, u32, u32) {
+    let (wx, wy, ww, wh) = work;
+    let t = thickness_px.max(1);
+    match side {
+        0 => (wx + ww - t as i32, wy, t, wh as u32),
+        1 => (wx, wy, t, wh as u32),
+        2 => (wx, wy, ww as u32, t),
+        _ => (wx, wy + wh - t as i32, ww as u32, t),
+    }
+}
+
+/// 按贴边方向算触发/命中区域（逻辑坐标，CGEvent 左上原点）
+fn edge_zone(side: u8, area: [f64; 4], thickness: f64) -> [f64; 4] {
+    let [lx, ly, lw, lh] = area;
+    match side {
+        0 => [lx + lw - thickness, lx + lw, ly, ly + lh],
+        1 => [lx, lx + thickness, ly, ly + lh],
+        2 => [lx, lx + lw, ly, ly + thickness],
+        _ => [lx, lx + lw, ly + lh - thickness, ly + lh],
+    }
+}
+
+/// 按当前贴边方向与厚度算窗口矩形（物理像素）与热区（逻辑坐标）
+fn apply_edge_layout<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    win: &tauri::WebviewWindow<R>,
+    thickness: f64,
+) -> Result<(), String> {
+    let monitor = edge_monitor(app, win).ok_or_else(|| "no monitor available".to_string())?;
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+
+    let t = ((thickness * scale).round() as u32).max(1);
+    let wx = work.position.x;
+    let wy = work.position.y;
+    let ww = work.size.width as i32;
+    let wh = work.size.height as i32;
+
+    let side = edge_side();
+    let (x, y, w, h) = edge_rect(side, (wx, wy, ww, wh), t);
+
+    let geom = (x, y, w, h);
+    let unchanged = {
+        let mut last = EDGE_LAST_GEOM.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(geom) {
+            true
+        } else {
+            *last = Some(geom);
+            false
+        }
+    };
+    if !unchanged {
+        win.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: w,
+            height: h,
+        }))
+        .map_err(|e| e.to_string())?;
+        win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 同步热区（逻辑坐标）：严格等于窗口当前厚度，即折叠态只有那条细条本身能触发
+    let lx = work.position.x as f64 / scale;
+    let ly = work.position.y as f64 / scale;
+    let lw = work.size.width as f64 / scale;
+    let lh = work.size.height as f64 / scale;
+    let zone = edge_zone(side, [lx, ly, lw, lh], thickness);
+    if let Ok(mut z) = EDGE_HOTZONE.lock() {
+        *z = zone;
+    }
+    if let Ok(mut current) = EDGE_CURRENT_WIDTH.lock() {
+        *current = thickness;
+    }
+    Ok(())
+}
+
+#[link(name = "objc")]
+extern "C" {
+    fn sel_registerName(name: *const std::os::raw::c_char) -> *const std::ffi::c_void;
+    fn class_replaceMethod(
+        cls: *const std::ffi::c_void,
+        name: *const std::ffi::c_void,
+        imp: *const std::ffi::c_void,
+        types: *const std::os::raw::c_char,
+    ) -> *const std::ffi::c_void;
+}
+
+/// 让边缘窗口在非激活状态下也能接住第一次点击（否则点复制要先点一下激活窗口）
+#[cfg(target_os = "macos")]
+extern "C" fn edge_accepts_first_mouse(
+    _this: *mut objc2::runtime::AnyObject,
+    _cmd: objc2::runtime::Sel,
+    _event: *mut objc2::runtime::AnyObject,
+) -> i8 {
+    1
+}
+
+/// 递归给视图树里的每个视图类挂上 acceptsFirstMouse: YES
+#[cfg(target_os = "macos")]
+fn enable_first_mouse(view: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    if view.is_null() {
+        return;
+    }
+    unsafe {
+        let cls: *const std::ffi::c_void = msg_send![view, class];
+        if !cls.is_null() {
+            let sel =
+                sel_registerName(b"acceptsFirstMouse:\0".as_ptr() as *const std::os::raw::c_char);
+            let types = b"c@:@\0".as_ptr() as *const std::os::raw::c_char;
+            let imp = edge_accepts_first_mouse as *const std::ffi::c_void;
+            class_replaceMethod(cls, sel, imp, types);
+        }
+
+        let subviews: *mut objc2::runtime::AnyObject = msg_send![view, subviews];
+        if subviews.is_null() {
+            return;
+        }
+        let count: usize = msg_send![subviews, count];
+        for index in 0..count.min(64) {
+            let child: *mut objc2::runtime::AnyObject = msg_send![subviews, objectAtIndex: index];
+            enable_first_mouse(child);
+        }
+    }
+}
+
+/// 给边缘窗口上样式：毛玻璃 + 悬浮层级 + 所有 Space 可见（只做一次）
+#[cfg(target_os = "macos")]
+fn style_edge_window(win: &tauri::WebviewWindow) {
+    use cocoa::base::id;
+    use objc2::msg_send;
+
+    // 磨玻璃底（失败不影响功能）
+    let _ = apply_vibrancy(
+        win,
+        NSVisualEffectMaterial::Popover,
+        Some(NSVisualEffectState::Active),
+        Some(0.0),
+    );
+
+    if let Ok(ns_window) = win.ns_window() {
+        let ns_window_ptr = ns_window as id as *mut objc2::runtime::AnyObject;
+        unsafe {
+            // NSFloatingWindowLevel：悬浮在普通窗口之上，不进全屏/菜单栏层级
+            let _: () = msg_send![ns_window_ptr, setLevel: 3i64];
+            // 所有 Space 可见 + 不随窗口切换移动 + 不参与 Cmd+` 循环
+            let _: () = msg_send![
+                ns_window_ptr,
+                setCollectionBehavior: NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES
+                    | NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY
+                    | NS_WINDOW_COLLECTION_BEHAVIOR_IGNORES_CYCLE
+            ];
+            // 应用失焦时不隐藏，保证边缘条一直在
+            let _: () = msg_send![ns_window_ptr, setHidesOnDeactivate: 0i8];
+            // 非激活态下第一次点击也要落到网页上（复制按钮 / 选文本）
+            let content_view: *mut objc2::runtime::AnyObject = msg_send![ns_window_ptr, contentView];
+            enable_first_mouse(content_view);
+        }
+    }
+}
+
+static EDGE_WINDOW_STYLED: AtomicBool = AtomicBool::new(false);
+
+/// 初始化边缘面板窗口：样式 + 贴右边缘布局 + 显示
+/// AppKit 调用必须在主线程，所以这里统一 dispatch 回主线程执行
+#[tauri::command]
+fn init_edge_window(app: AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(win) = handle.get_webview_window("edge") else {
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        if !EDGE_WINDOW_STYLED.swap(true, Ordering::Relaxed) {
+            style_edge_window(&win);
+        }
+        let _ = apply_edge_layout(&handle, &win, edge_trigger_thickness());
+        let _ = win.show();
+        EDGE_VISIBLE.store(true, Ordering::Relaxed);
+        EDGE_HOVERED.store(false, Ordering::Relaxed);
+        start_edge_hover_tracker(handle.clone());
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 更新边缘面板的贴边方向与尺寸（设置页改动时调用）
+#[tauri::command]
+fn set_edge_prefs(
+    app: AppHandle,
+    side: String,
+    panel_width: f64,
+    trigger_width: f64,
+) -> Result<(), String> {
+    let side_id = match side.as_str() {
+        "left" => 1u8,
+        "top" => 2u8,
+        "bottom" => 3u8,
+        _ => 0u8,
+    };
+    EDGE_SIDE.store(side_id, Ordering::SeqCst);
+    if let Ok(mut v) = EDGE_PANEL_THICKNESS.lock() {
+        *v = panel_width.clamp(120.0, 1200.0);
+    }
+    if let Ok(mut v) = EDGE_TRIGGER.lock() {
+        *v = trigger_width.clamp(4.0, 64.0);
+    }
+    // 几何变了就强制重排一次
+    if let Ok(mut last) = EDGE_LAST_GEOM.lock() {
+        *last = None;
+    }
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("edge") {
+            let expanded = EDGE_PINNED.load(Ordering::Relaxed) || EDGE_HOVERED.load(Ordering::Relaxed);
+            let thickness = if expanded {
+                edge_panel_thickness()
+            } else {
+                edge_trigger_thickness()
+            };
+            let _ = apply_edge_layout(&handle, &win, thickness);
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 设置边缘面板宽度（展开 / 折叠动画逐帧调用）
+#[tauri::command]
+fn set_edge_width(app: AppHandle, width: f64) -> Result<(), String> {
+    let clamped = width.clamp(4.0, 1400.0);
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("edge") {
+            let _ = apply_edge_layout(&handle, &win, clamped);
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 隐藏边缘面板窗口（没有任何置顶笔记时）
+#[tauri::command]
+fn hide_edge_window(app: AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        EDGE_VISIBLE.store(false, Ordering::Relaxed);
+        EDGE_HOVERED.store(false, Ordering::Relaxed);
+        EDGE_PINNED.store(false, Ordering::Relaxed);
+        if let Some(win) = handle.get_webview_window("edge") {
+            let _ = win.hide();
+        }
+        let _ = handle.emit("maiknote:edge-pinned", false);
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 切换边缘面板：未钉住 -> 展开并钉住；已钉住 -> 收起并解除钉住
+fn toggle_edge_panel_impl(app: &AppHandle) {
+    // 同一次按键可能被上报两次（按住重复 / 重复注册），250ms 内只认第一次
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = EDGE_TOGGLE_AT.swap(now, Ordering::SeqCst);
+    if now.saturating_sub(last) < 120 {
+        return;
+    }
+    let pinned = !EDGE_PINNED.load(Ordering::Relaxed);
+    EDGE_PINNED.store(pinned, Ordering::Relaxed);
+    if pinned {
+        EDGE_VISIBLE.store(true, Ordering::Relaxed);
+    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("edge") {
+            #[cfg(target_os = "macos")]
+            if !EDGE_WINDOW_STYLED.swap(true, Ordering::Relaxed) {
+                style_edge_window(&win);
+            }
+            let width = if pinned { edge_panel_thickness() } else { edge_trigger_thickness() };
+            let _ = apply_edge_layout(&handle, &win, width);
+            if pinned {
+                let _ = win.show();
+                EDGE_HOVERED.store(true, Ordering::Relaxed);
+                start_edge_hover_tracker(handle.clone());
+            }
+        }
+        let _ = handle.emit("maiknote:edge-pinned", pinned);
+        let _ = handle.emit_to("edge", "maiknote:edge-hover", pinned);
+    });
+}
+
+/// 快捷键：展开/隐藏边缘面板
+#[tauri::command]
+fn toggle_edge_panel(app: AppHandle) -> Result<(), String> {
+    toggle_edge_panel_impl(&app);
+    Ok(())
+}
+
+/// 面板上的隐藏按钮：解除钉住并收回到细条
+#[tauri::command]
+fn collapse_edge_panel(app: AppHandle) -> Result<(), String> {
+    EDGE_PINNED.store(false, Ordering::Relaxed);
+    let until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64 + 700)
+        .unwrap_or(0);
+    EDGE_SUPPRESS_UNTIL.store(until, Ordering::SeqCst);
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        EDGE_HOVERED.store(false, Ordering::Relaxed);
+        if let Some(win) = handle.get_webview_window("edge") {
+            let _ = apply_edge_layout(&handle, &win, edge_trigger_thickness());
+        }
+        let _ = handle.emit("maiknote:edge-pinned", false);
+        let _ = handle.emit_to("edge", "maiknote:edge-hover", false);
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 注册全局边缘面板快捷键（无系统焦点时也可展开/隐藏）
+#[tauri::command]
+async fn register_edge_shortcut(
+    app: AppHandle,
+    shortcut_state: State<'_, GlobalShortcutState>,
+    shortcut_str: String,
+) -> Result<(), String> {
+    if shortcut_str.trim().is_empty() {
+        let mut current = shortcut_state.edge_shortcut.lock().unwrap();
+        if let Some(old) = current.take() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+        return Ok(());
+    }
+
+    let shortcut = parse_shortcut_str(&shortcut_str)?;
+
+    {
+        let mut current = shortcut_state.edge_shortcut.lock().unwrap();
+        if let Some(old) = current.take() {
+            let _ = app.global_shortcut().unregister(old);
+        }
+    }
+
+    let app_handle = app.clone();
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| match event.state {
+            ShortcutState::Pressed => {
+                // 长按时系统会连续上报 Pressed：只有「从抬起变成第一次按下」才算一次切换
+                if !EDGE_HOTKEY_DOWN.swap(true, Ordering::SeqCst) {
+                    toggle_edge_panel_impl(&app_handle);
+                }
+            }
+            ShortcutState::Released => {
+                EDGE_HOTKEY_DOWN.store(false, Ordering::SeqCst);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut current = shortcut_state.edge_shortcut.lock().unwrap();
+        *current = Some(shortcut);
+    }
+
+    println!("Edge panel shortcut registered: {}", shortcut_str);
+    Ok(())
+}
+
+/// 读取系统剪贴板文本（边缘面板右键「粘贴」用）
+#[tauri::command]
+fn read_clipboard(app: AppHandle) -> Result<String, String> {
+    use objc2::msg_send;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.run_on_main_thread(move || {
+        let text = unsafe {
+            let pb: *mut objc2::runtime::AnyObject =
+                msg_send![objc2::class!(NSPasteboard), generalPasteboard];
+            if pb.is_null() {
+                String::new()
+            } else {
+                let ty_c = std::ffi::CString::new("public.utf8-plain-text").unwrap();
+                let ty: *mut objc2::runtime::AnyObject = msg_send![
+                    objc2::class!(NSString),
+                    stringWithUTF8String: ty_c.as_ptr()
+                ];
+                let value: *mut objc2::runtime::AnyObject = msg_send![pb, stringForType: ty];
+                if value.is_null() {
+                    String::new()
+                } else {
+                    let bytes: *const std::os::raw::c_char = msg_send![value, UTF8String];
+                    if bytes.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(bytes).to_string_lossy().into_owned()
+                    }
+                }
+            }
+        };
+        let _ = tx.send(text);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     // 检测是否是开机自启启动
     let is_autolaunch = autostart::is_autolaunch();
@@ -1621,7 +2151,11 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["edge"])
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1629,6 +2163,7 @@ pub fn run() {
             current_shortcut: Mutex::new(None),
             center_shortcut: Mutex::new(None),
             pin_shortcut: Mutex::new(None),
+            edge_shortcut: Mutex::new(None),
         })
         .manage(WindowAlphaState {
             alpha: Mutex::new(1.0),
@@ -1638,6 +2173,10 @@ pub fn run() {
             ready: AtomicBool::new(false),
         })
         .on_window_event(|window, event| {
+            // 边缘面板窗口的移动/缩放不代表主窗口位置，直接跳过
+            if window.label() != "main" {
+                return;
+            }
             #[cfg(target_os = "macos")]
             {
                 match event {
@@ -1756,10 +2295,18 @@ pub fn run() {
             register_global_shortcut,
             register_center_shortcut,
             register_pin_shortcut,
+            register_edge_shortcut,
+            toggle_edge_panel,
+            collapse_edge_panel,
             center_window,
             toggle_window,
             exit_app,
             set_window_alpha,
+            init_edge_window,
+            set_edge_width,
+            set_edge_prefs,
+            hide_edge_window,
+            read_clipboard,
             autostart::enable_autostart,
             autostart::disable_autostart,
             autostart::is_autostart_enabled,
@@ -1767,4 +2314,47 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod edge_layout_tests {
+    use super::*;
+
+    /// 1920×1080 屏，菜单栏 25px，工作区 (0,25,1920,1055)
+    const WORK: (i32, i32, i32, i32) = (0, 25, 1920, 1055);
+
+    #[test]
+    fn right_side_sticks_to_right_edge() {
+        assert_eq!(edge_rect(0, WORK, 320), (1600, 25, 320, 1055));
+        assert_eq!(edge_rect(0, WORK, 12), (1908, 25, 12, 1055));
+    }
+
+    #[test]
+    fn left_side_sticks_to_left_edge() {
+        assert_eq!(edge_rect(1, WORK, 320), (0, 25, 320, 1055));
+    }
+
+    #[test]
+    fn top_side_spans_width_at_top() {
+        assert_eq!(edge_rect(2, WORK, 320), (0, 25, 1920, 320));
+    }
+
+    #[test]
+    fn bottom_side_spans_width_at_bottom() {
+        assert_eq!(edge_rect(3, WORK, 320), (0, 760, 1920, 320));
+    }
+
+    #[test]
+    fn hotzones_follow_the_same_edge() {
+        let area = [0.0, 25.0, 1920.0, 1055.0];
+        assert_eq!(edge_zone(0, area, 12.0), [1908.0, 1920.0, 25.0, 1080.0]);
+        assert_eq!(edge_zone(1, area, 12.0), [0.0, 12.0, 25.0, 1080.0]);
+        assert_eq!(edge_zone(2, area, 12.0), [0.0, 1920.0, 25.0, 37.0]);
+        assert_eq!(edge_zone(3, area, 12.0), [0.0, 1920.0, 1068.0, 1080.0]);
+    }
+
+    #[test]
+    fn thickness_is_clamped_to_at_least_one_pixel() {
+        assert_eq!(edge_rect(0, WORK, 0), (1919, 25, 1, 1055));
+    }
 }

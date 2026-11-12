@@ -20,7 +20,11 @@ export interface ShortcutSettings {
   toggleSource: string // 切换源码模式
   centerWindow: string // 居中窗口
   toggleSidebar: string // 展开/收起侧栏
+  edgePanel: string    // 展开/隐藏边缘面板
 }
+
+/** 边缘面板贴靠的屏幕边缘 */
+export type EdgePosition = 'right' | 'left' | 'top' | 'bottom'
 
 /** 快捷键作用范围：global=系统全局（应用不在前台也生效），app=仅应用内（窗口聚焦时生效） */
 export type ShortcutScope = 'global' | 'app'
@@ -43,6 +47,7 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   toggleSource: 'Cmd+/',
   centerWindow: 'Shift+Option+Cmd+A',
   toggleSidebar: 'Cmd+\\',
+  edgePanel: '',
 }
 
 export type CodeTheme =
@@ -83,9 +88,14 @@ export interface AppSettings {
   translucent: boolean
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
+  edgeAutoHide: boolean // 边缘面板：鼠标移开是否自动收起
+  edgePosition: EdgePosition // 边缘面板贴哪一边
+  edgeWidth: number // 边缘面板展开宽度（px）
+  edgeTriggerWidth: number // 边缘面板触发/收起时的厚度（px）
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
+  defaultNoteBackgroundColor: string // 新建笔记的默认背景色，空字符串=不设默认
   autoLaunch: boolean // 开机自启动
   closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
   rememberLastDirectory: boolean // 启动时恢复上次选择的目录
@@ -121,9 +131,14 @@ export const useSettingStore = defineStore('setting', () => {
     translucent: true,
     windowAlpha: 1.0,
     alwaysOnTop: false,
+    edgeAutoHide: true,
+    edgePosition: 'right',
+    edgeWidth: 320,
+    edgeTriggerWidth: 12,
     titleBarBehavior: 'auto-hide',
     pathClickAction: 'copy',
     treeOrder: 'folders',
+    defaultNoteBackgroundColor: '',
     autoLaunch: false,
     closeBehavior: 'hide',
     rememberLastDirectory: false,
@@ -243,9 +258,14 @@ export const useSettingStore = defineStore('setting', () => {
       translucent: true,
       windowAlpha: 1.0,
       alwaysOnTop: false,
+      edgeAutoHide: true,
+      edgePosition: 'right',
+      edgeWidth: 320,
+      edgeTriggerWidth: 12,
       titleBarBehavior: 'auto-hide',
       pathClickAction: 'copy',
       treeOrder: 'folders',
+      defaultNoteBackgroundColor: '',
       autoLaunch: false,
       closeBehavior: 'hide',
       rememberLastDirectory: false,

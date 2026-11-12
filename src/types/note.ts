@@ -12,6 +12,7 @@ export interface Note {
   isLocked: boolean // Whether the note is locked (cannot edit or delete)
   directoryId?: string // null/undefined = root directory
   backgroundColor?: string // Optional background color for the note
+  color?: string // 文件树里显示的颜色（文字 + 图标）
   trashedAt?: number // Unix timestamp when moved to trash
   fileName?: string // 磁盘文件名（含 .md），默认取标题
 }
@@ -34,6 +35,7 @@ export interface NoteMetadataItem {
   isLocked: boolean
   directoryId?: string
   backgroundColor?: string
+  color?: string
   trashedAt?: number
   fileName?: string
 }
@@ -47,6 +49,7 @@ export interface Directory {
   parentId: string | null // null = root level
   createdAt: number
   updatedAt: number
+  color?: string // 文件树里显示的颜色（文字 + 图标）
 }
 
 export interface DirectoryData {

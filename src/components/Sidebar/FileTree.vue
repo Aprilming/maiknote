@@ -6,6 +6,9 @@ import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import type { Directory, Note, NoteFileEntry } from '@/types/note'
+import NoteColorPicker from '@/components/NoteColorPicker.vue'
+import { useTheme } from '@/composables/useTheme'
+import { TREE_DARK_COLORS, TREE_LIGHT_COLORS } from '@/utils/treeColors'
 
 const props = withDefaults(defineProps<{
   width?: number
@@ -22,6 +25,9 @@ const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
 const { t } = useI18n()
+
+const { isDark } = useTheme()
+const treeColors = computed(() => (isDark() ? TREE_DARK_COLORS : TREE_LIGHT_COLORS))
 
 const EXPANDED_KEY = 'fileTree.expandedDirs'
 const ROOT_EXPANDED_KEY = 'fileTree.rootExpanded'
@@ -48,6 +54,32 @@ watch(expandedDirs, (value) => {
 watch(rootExpanded, (value) => {
   localStorage.setItem(ROOT_EXPANDED_KEY, value ? 'true' : 'false')
 })
+
+// ---------- 置顶固顶区 ----------
+
+const PINNED_EXPANDED_KEY = 'fileTree.pinnedExpanded'
+const pinnedExpanded = ref(localStorage.getItem(PINNED_EXPANDED_KEY) !== 'false')
+watch(pinnedExpanded, (value) => {
+  localStorage.setItem(PINNED_EXPANDED_KEY, value ? 'true' : 'false')
+})
+
+function togglePinned() {
+  pinnedExpanded.value = !pinnedExpanded.value
+}
+
+/** 置顶区里显示笔记所在的目录路径，避免和目录里的同名笔记混淆 */
+function noteDirLabel(note: Note): string {
+  const names: string[] = []
+  let current = note.directoryId ?? null
+  let guard = 0
+  while (current && guard++ < 64) {
+    const dir = directoryStore.getDirectory(current)
+    if (!dir) break
+    names.unshift(dir.name)
+    current = dir.parentId
+  }
+  return names.length ? names.join(' / ') : t('dirTree.rootDir')
+}
 
 // ---------- 回收站 ----------
 
@@ -278,6 +310,7 @@ function noteLabel(note: Note): string {
 // ---------- 打开笔记 / 目录 ----------
 
 function openNote(note: Note) {
+  if (suppressClick) return
   const dirId = note.directoryId ?? null
   // 静默同步过滤目录，避免 setFilterDirectory 在空目录里自动新建笔记
   if (noteStore.filterDirectoryId !== dirId) {
@@ -530,9 +563,71 @@ function purgePreviewing() {
   if (note) purgeTrashed(note)
 }
 
+// ---------- 文件树颜色 ----------
+
+type ColorTarget = { type: 'dir'; id: string } | { type: 'note'; id: string }
+
+const colorPop = ref<{ x: number; y: number; target: ColorTarget } | null>(null)
+
+const colorPopValue = computed<string | undefined>(() => {
+  const pop = colorPop.value
+  if (!pop) return undefined
+  if (pop.target.type === 'dir') return directoryStore.getDirectory(pop.target.id)?.color
+  return noteStore.notes.find(n => n.id === pop.target.id)?.color
+})
+
+function openColorPopAt(x: number, y: number, target: ColorTarget) {
+  const width = 208
+  const height = 252
+  colorPop.value = {
+    x: Math.max(6, Math.min(x, window.innerWidth - width - 8)),
+    y: Math.max(6, Math.min(y, window.innerHeight - height - 8)),
+    target,
+  }
+}
+
+function ctxDirColor() {
+  const dir = ctxDir.value
+  const pos = ctxMenu.value
+  closeContextMenu()
+  if (!dir || !pos) return
+  openColorPopAt(pos.x, pos.y, { type: 'dir', id: dir.id })
+}
+
+function ctxNoteColor() {
+  const note = ctxNote.value
+  const pos = ctxMenu.value
+  closeContextMenu()
+  if (!note || !pos) return
+  openColorPopAt(pos.x, pos.y, { type: 'note', id: note.id })
+}
+
+function closeColorPop() {
+  colorPop.value = null
+}
+
+function applyTreeColor(color: string | undefined) {
+  const pop = colorPop.value
+  colorPop.value = null
+  if (!pop) return
+  if (pop.target.type === 'dir') {
+    void directoryStore.setDirectoryColor(pop.target.id, color)
+  } else {
+    noteStore.updateNote(pop.target.id, { color })
+  }
+}
+
+/** 行内着色：没设颜色就交给 CSS 默认色 */
+function rowColorStyle(color: string | undefined) {
+  return color ? { color } : undefined
+}
+
 function onDocumentPointerDown(e: PointerEvent) {
-  if (!ctxMenu.value) return
   const el = e.target as HTMLElement | null
+  if (colorPop.value && !el?.closest('.tree-color-pop')) {
+    colorPop.value = null
+  }
+  if (!ctxMenu.value) return
   if (el?.closest('.tree-ctx-menu')) return
   closeContextMenu()
 }
@@ -581,58 +676,136 @@ async function removeNote(note: Note) {
     confirmText: t('common.delete')
   })
   if (!confirmed) return
+  // 删的是当前正在看的笔记：交给编辑器播粒子动画，动画结束由它落地删除
+  if (note.id === noteStore.currentNoteId) {
+    window.dispatchEvent(new CustomEvent('marknote:delete-note'))
+    return
+  }
   await noteStore.deleteNote(note.id)
 }
 
-// ---------- 拖拽排序目录 ----------
+// ---------- 拖拽：目录同级排序 / 笔记拖进目录 ----------
+// WKWebView 里 HTML5 drag&drop 不触发，这里全部用 pointer 事件自己实现
 
 const dragDirId = ref<string | null>(null)
+const dragNoteId = ref<string | null>(null)
 const dragOverDirId = ref<string | null>(null)
-const dragOverPos = ref<'before' | 'after'>('before')
+const dragOverRoot = ref(false)
+const dragOverPos = ref<'before' | 'after' | 'into'>('before')
+const dragGhost = ref<{ x: number; y: number; label: string; isDir: boolean } | null>(null)
 
-function resetDirDrag() {
+// 松手后浏览器还会补发一次 click，用它把这次点击吞掉，免得误打开笔记
+let suppressClick = false
+let dragOrigin: { mode: 'note' | 'dir'; id: string; label: string; x: number; y: number } | null = null
+let dragging = false
+
+function resetDrag() {
   dragDirId.value = null
+  dragNoteId.value = null
   dragOverDirId.value = null
+  dragOverRoot.value = false
   dragOverPos.value = 'before'
+  dragGhost.value = null
 }
 
-function onDirDragStart(e: DragEvent, dir: Directory) {
+function detachDragListeners() {
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+  window.removeEventListener('pointercancel', onDragEnd)
+  document.body.style.userSelect = ''
+}
+
+function beginDrag(e: PointerEvent, mode: 'note' | 'dir', id: string, label: string) {
+  if (e.button !== 0) return
+  if (mode === 'dir' && renamingId.value === id) return
   const target = e.target as HTMLElement | null
-  // 行内有输入框时不启动拖拽，否则选不中文字
-  if (target && target.closest('input')) {
-    e.preventDefault()
+  // 行内按钮/输入框上按下时不算拖拽
+  if (target && target.closest('input, .row-actions, .orphan-action, .note-pin')) return
+  dragOrigin = { mode, id, label, x: e.clientX, y: e.clientY }
+  dragging = false
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('pointerup', onDragEnd)
+  window.addEventListener('pointercancel', onDragEnd)
+}
+
+function onDragMove(e: PointerEvent) {
+  const origin = dragOrigin
+  if (!origin) return
+  if (!dragging && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 4) return
+  if (!dragging) {
+    dragging = true
+    document.body.style.userSelect = 'none'
+    if (origin.mode === 'note') {
+      dragNoteId.value = origin.id
+    } else {
+      dragDirId.value = origin.id
+    }
+  }
+  dragGhost.value = { x: e.clientX, y: e.clientY, label: origin.label, isDir: origin.mode === 'dir' }
+
+  // 用坐标反查指针下面的行
+  dragOverRoot.value = false
+  dragOverDirId.value = null
+  const under = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+
+  if (under?.closest('[data-root-drop]')) {
+    dragOverRoot.value = true
+    dragOverPos.value = 'into'
     return
   }
-  dragDirId.value = dir.id
-  dragOverDirId.value = null
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', dir.id)
-  }
-}
 
-function onDirDragOver(e: DragEvent, dir: Directory) {
-  const sourceId = dragDirId.value
-  if (!sourceId || sourceId === dir.id) return
-  const source = directoryStore.getDirectory(sourceId)
-  // 只允许同级排序，跨级请用右键菜单移动
-  if (!source || source.parentId !== dir.parentId) return
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  dragOverDirId.value = dir.id
+  const dirEl = under?.closest('[data-dir-id]') as HTMLElement | null
+  const dirId = dirEl?.dataset.dirId
+  if (!dirEl || !dirId) return
+
+  if (origin.mode === 'note') {
+    dragOverDirId.value = dirId
+    dragOverPos.value = 'into'
+    return
+  }
+
+  const source = directoryStore.getDirectory(origin.id)
+  const target = directoryStore.getDirectory(dirId)
+  // 目录只允许同级排序，跨级请用右键菜单
+  if (!source || !target || source.id === target.id || source.parentId !== target.parentId) return
+  const rect = dirEl.getBoundingClientRect()
+  dragOverDirId.value = dirId
   dragOverPos.value = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
 
-async function onDirDrop(e: DragEvent, dir: Directory) {
-  e.preventDefault()
-  const sourceId = dragDirId.value
+async function onDragEnd() {
+  const origin = dragOrigin
+  const moved = dragging
+  const overDirId = dragOverDirId.value
+  const overRoot = dragOverRoot.value
   const position = dragOverPos.value
-  resetDirDrag()
-  if (!sourceId || sourceId === dir.id) return
-  const source = directoryStore.getDirectory(sourceId)
-  if (!source || source.parentId !== dir.parentId) return
-  await directoryStore.moveDirectory(sourceId, dir.parentId, position, dir.id)
+  const targetParent = overDirId ? directoryStore.getDirectory(overDirId) : null
+
+  dragOrigin = null
+  dragging = false
+  detachDragListeners()
+  resetDrag()
+  if (!origin || !moved) return
+
+  suppressClick = true
+  setTimeout(() => {
+    suppressClick = false
+  }, 0)
+
+  if (origin.mode === 'note') {
+    if (overRoot) {
+      await noteStore.moveNoteToDirectory(origin.id, null)
+      return
+    }
+    if (overDirId) {
+      await noteStore.moveNoteToDirectory(origin.id, overDirId)
+      expandDirs(overDirId)
+    }
+    return
+  }
+
+  if (!overDirId || !targetParent || position === 'into') return
+  await directoryStore.moveDirectory(origin.id, targetParent.parentId, position, overDirId)
 }
 
 // ---------- 拖拽调宽 ----------
@@ -691,8 +864,52 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="tree-body" @contextmenu="openBlankContextMenu">
+      <!-- 置顶固顶区：所有目录下的置顶笔记都固定显示在这里，不受目录展开/当前目录影响 -->
+      <template v-if="noteStore.allPinnedNotes.length">
+        <div
+          class="tree-row pinned-head"
+          @click="togglePinned"
+        >
+          <span class="row-toggle">
+            <i class="i-mdi-chevron-right" :class="{ expanded: pinnedExpanded }"></i>
+          </span>
+          <i class="i-mdi-pin row-icon"></i>
+          <span class="row-label">{{ $t('fileTree.pinnedSection') }}</span>
+          <span class="row-count">{{ noteStore.allPinnedNotes.length }}</span>
+        </div>
+        <template v-if="pinnedExpanded">
+          <div
+            v-for="note in noteStore.allPinnedNotes"
+            :key="`pinned:${note.id}`"
+            class="tree-row note-row pinned-note-row"
+            :class="{ active: note.id === noteStore.currentNoteId }"
+            :data-pinned-note-id="note.id"
+            :title="`${noteLabel(note)}\n${noteDirLabel(note)}`"
+            @click="openNote(note)"
+            @contextmenu="openContextMenu($event, { type: 'note', note })"
+          >
+            <span class="row-toggle placeholder"></span>
+            <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(note.color)"></i>
+            <span class="row-label" :style="rowColorStyle(note.color)">{{ noteLabel(note) }}</span>
+            <i
+              class="i-mdi-pin note-pin"
+              :title="$t('fileTree.unpin')"
+              @click.stop="noteStore.togglePin(note.id)"
+            ></i>
+            <i v-if="note.isLocked" class="i-mdi-lock note-lock"></i>
+          </div>
+        </template>
+        <div class="pinned-divider"></div>
+      </template>
+
       <!-- 根节点 -->
-      <div class="tree-row root-row" @click="toggleRoot" @contextmenu="openContextMenu($event, { type: 'root' })">
+      <div
+        class="tree-row root-row"
+        :class="{ 'drop-into': dragOverRoot }"
+        data-root-drop="true"
+        @click="toggleRoot"
+        @contextmenu="openContextMenu($event, { type: 'root' })"
+      >
         <span class="row-toggle">
           <i class="i-mdi-chevron-right" :class="{ expanded: rootExpanded }"></i>
         </span>
@@ -728,21 +945,20 @@ onBeforeUnmount(() => {
             dragging: dragDirId === row.dir.id,
             'drop-before': dragOverDirId === row.dir.id && dragOverPos === 'before',
             'drop-after': dragOverDirId === row.dir.id && dragOverPos === 'after',
+            'drop-into': dragOverDirId === row.dir.id && dragOverPos === 'into',
           }"
           :style="{ paddingLeft: indent(row.depth) }"
-          :draggable="renamingId !== row.dir.id"
+          :data-dir-id="row.dir.id"
           @click="toggleDir(row.dir.id)"
           @contextmenu="openContextMenu($event, { type: 'dir', dir: row.dir })"
-          @dragstart="onDirDragStart($event, row.dir)"
-          @dragover="onDirDragOver($event, row.dir)"
-          @drop="onDirDrop($event, row.dir)"
-          @dragend="resetDirDrag"
+          @pointerdown="beginDrag($event, 'dir', row.dir.id, row.dir.name)"
         >
           <span class="row-toggle">
             <i class="i-mdi-chevron-right" :class="{ expanded: isExpanded(row.dir.id) }"></i>
           </span>
           <i
             class="row-icon"
+            :style="rowColorStyle(row.dir.color)"
             :class="isExpanded(row.dir.id) ? 'i-mdi-folder-open-outline' : 'i-mdi-folder-outline'"
           ></i>
           <input
@@ -756,7 +972,12 @@ onBeforeUnmount(() => {
             @blur="confirmRename"
           />
           <template v-else>
-            <span class="row-label" :title="row.dir.name" @dblclick.stop="startRename(row.dir)">
+            <span
+              class="row-label"
+              :style="rowColorStyle(row.dir.color)"
+              :title="row.dir.name"
+              @dblclick.stop="startRename(row.dir)"
+            >
               {{ row.dir.name }}
             </span>
             <span class="row-count">{{ dirNoteCount(row.dir.id) || '' }}</span>
@@ -771,14 +992,19 @@ onBeforeUnmount(() => {
         <div
           v-else
           class="tree-row note-row"
-          :class="{ active: row.note.id === noteStore.currentNoteId }"
+          :class="{
+            active: row.note.id === noteStore.currentNoteId,
+            dragging: dragNoteId === row.note.id,
+          }"
           :style="{ paddingLeft: indent(row.depth) }"
+          :data-note-id="row.note.id"
           @click="openNote(row.note)"
           @contextmenu="openContextMenu($event, { type: 'note', note: row.note })"
+          @pointerdown="beginDrag($event, 'note', row.note.id, noteLabel(row.note))"
         >
           <span class="row-toggle placeholder"></span>
-          <i class="i-mdi-file-document-outline row-icon"></i>
-          <span class="row-label" :title="noteLabel(row.note)">{{ noteLabel(row.note) }}</span>
+          <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(row.note.color)"></i>
+          <span class="row-label" :title="noteLabel(row.note)" :style="rowColorStyle(row.note.color)">{{ noteLabel(row.note) }}</span>
           <i
             v-if="row.note.isPinned"
             class="i-mdi-pin note-pin"
@@ -961,6 +1187,10 @@ onBeforeUnmount(() => {
           <i class="i-mdi-pencil-outline"></i>
           <span>{{ $t('dirTree.rename') }}</span>
         </button>
+        <button class="ctx-item" @click="ctxDirColor">
+          <i class="i-mdi-palette-outline"></i>
+          <span>{{ $t('fileTree.color') }}</span>
+        </button>
         <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="ctxDeleteDir">
           <i class="i-mdi-trash-can-outline"></i>
@@ -1029,6 +1259,10 @@ onBeforeUnmount(() => {
           <i class="i-mdi-folder-move-outline"></i>
           <span>{{ $t('fileTree.moveToRoot') }}</span>
         </button>
+        <button class="ctx-item" @click="ctxNoteColor">
+          <i class="i-mdi-palette-outline"></i>
+          <span>{{ $t('fileTree.color') }}</span>
+        </button>
         <div class="ctx-sep"></div>
         <button class="ctx-item danger" :class="{ disabled: ctxNote.isLocked }" @click="ctxDeleteNote">
           <i class="i-mdi-trash-can-outline"></i>
@@ -1036,6 +1270,36 @@ onBeforeUnmount(() => {
         </button>
       </template>
     </div>
+
+    <!-- 颜色选择弹层 -->
+    <div
+      v-if="colorPop"
+      class="tree-color-pop"
+      :style="{ left: `${colorPop.x}px`, top: `${colorPop.y}px` }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <NoteColorPicker
+        :model-value="colorPopValue"
+        :colors="treeColors"
+        :heading="$t('fileTree.colorTitle')"
+        @update:model-value="applyTreeColor"
+        @close="closeColorPop"
+      />
+    </div>
+
+    <!-- 拖拽时跟随指针的小标签 -->
+    <Teleport to="body">
+      <div
+        v-if="dragGhost"
+        class="drag-ghost"
+        :class="{ 'is-dir': dragGhost.isDir }"
+        :style="{ left: `${dragGhost.x}px`, top: `${dragGhost.y}px` }"
+      >
+        <i :class="dragGhost.isDir ? 'i-mdi-folder-outline' : 'i-mdi-file-document-outline'"></i>
+        <span>{{ dragGhost.label }}</span>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -1248,6 +1512,31 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--tree-orphan) 18%, transparent);
 }
 
+/* 置顶固顶区 */
+.pinned-head .row-icon {
+  color: var(--color-primary);
+}
+
+.pinned-head .row-label {
+  color: color-mix(in srgb, var(--color-primary) 60%, var(--color-text));
+  font-weight: 500;
+}
+
+.pinned-head .row-count {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.pinned-note-row .row-label {
+  color: color-mix(in srgb, var(--color-text) 88%, var(--color-primary));
+}
+
+.pinned-divider {
+  height: 1px;
+  margin: 4px 6px 6px;
+  background: color-mix(in srgb, var(--color-border) 90%, transparent);
+}
+
 .tree-row.is-current .row-label {
   font-weight: 500;
 }
@@ -1314,8 +1603,61 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 2px 0 var(--color-primary);
 }
 
+.dir-row.drop-into,
+.root-row.drop-into {
+  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.dir-row.drop-into .row-label,
+.root-row.drop-into .row-label {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.note-row.dragging {
+  opacity: 0.45;
+}
+
 .dir-row.drop-after {
   box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+/* 拖拽时跟随指针的浮标（Teleport 到 body，样式靠 scoped 传递） */
+.drag-ghost {
+  position: fixed;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-text);
+  background: var(--color-popup-bg, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  transform: translate(10px, 10px) rotate(-1.5deg);
+  opacity: 0.95;
+}
+
+.drag-ghost span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drag-ghost i {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--color-primary);
+}
+
+.drag-ghost.is-dir i {
+  color: #f59e0b;
 }
 
 .row-actions {
@@ -1673,6 +2015,12 @@ onBeforeUnmount(() => {
   height: 1px;
   margin: 4px 6px;
   background: var(--color-border);
+}
+
+/* 文件树颜色选择弹层 */
+.tree-color-pop {
+  position: fixed;
+  z-index: 320;
 }
 
 /* 回收站 */

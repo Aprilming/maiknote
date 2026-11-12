@@ -8,13 +8,14 @@
 export const EMPTY_LINE_MARK = '\u200b'
 export const EMPTY_LINE_CHAR = '\u200b'
 
-const ZERO_WIDTH_RE = /\u200b/g
 const ZERO_WIDTH_ENTITY_RE = /&#(?:8203|x200b);/gi
-// 只认零宽空格与 ASCII 空白；\u00A0（Tab 缩进标记）必须当作内容保留
-const PADDING_ONLY_RE = /^[\u0009\u000a\u000d\u0020]*$/
+// 只有零宽空格（空行标记）才算“没有内容”。
+// 真实空格 / 制表符是用户敲进去的缩进，必须当内容保留：
+// 旧实现把 ASCII 空白也算成空行标记，导致在空行行首按空格被当成标记清掉（空格键无效的 bug）。
+const MARKER_ONLY_RE = /^[\u200b]*$/
 
-/** 判断一段文本是否“只有空行标记/空白”，即不含任何实际内容（兼容旧文件里的 &#8203; 实体） */
-export function isBlankEmptyLineText(text?: string | null): boolean {
+/** 判断一段文本是否“只有空行标记”（零宽空格，兼容旧文件里的 &#8203; 实体）；空字符串也算 */
+export function isEmptyLineMarkerText(text?: string | null): boolean {
   if (!text) return true
-  return PADDING_ONLY_RE.test(text.replace(ZERO_WIDTH_ENTITY_RE, '').replace(ZERO_WIDTH_RE, ''))
+  return MARKER_ONLY_RE.test(text.replace(ZERO_WIDTH_ENTITY_RE, ''))
 }

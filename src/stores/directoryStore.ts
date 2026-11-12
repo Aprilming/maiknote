@@ -126,6 +126,15 @@ export const useDirectoryStore = defineStore('directory', () => {
     }
   }
 
+  /** 设置文件树里该目录的显示颜色（undefined = 恢复默认） */
+  async function setDirectoryColor(id: string, color: string | undefined): Promise<void> {
+    const dir = directories.value.find(d => d.id === id)
+    if (!dir) return
+    dir.color = color
+    dir.updatedAt = Date.now()
+    await saveDirectories()
+  }
+
   function isDescendantOf(id: string, possibleAncestorId: string): boolean {
     let dir = directories.value.find(d => d.id === id)
     while (dir?.parentId) {
@@ -231,6 +240,7 @@ export const useDirectoryStore = defineStore('directory', () => {
     restoreLastDirectory,
     createDirectory,
     renameDirectory,
+    setDirectoryColor,
     moveDirectory,
     deleteDirectory,
     selectDirectory,

@@ -37,7 +37,7 @@ import { TextSelection, AllSelection } from 'prosemirror-state'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useI18n } from 'vue-i18n'
 import { SOURCE_TAB_INSERT_TEXT, createRichTabInsertText } from './tabInsert'
-import { EMPTY_LINE_MARK, EMPTY_LINE_CHAR, isBlankEmptyLineText } from './emptyLine'
+import { EMPTY_LINE_MARK, EMPTY_LINE_CHAR, isEmptyLineMarkerText } from './emptyLine'
 import { EmptyLineNormalizer } from './extensions/EmptyLineNormalizer'
 import { readText } from '@tauri-apps/plugin-clipboard-manager'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -99,10 +99,22 @@ const isEmptyParagraph = (node: any): boolean => {
   let empty = true
   node.forEach((child: any) => {
     if (child.type.name === 'hardBreak') return
-    if (child.isText && isBlankEmptyLineText(child.text)) return
+    if (child.isText && isEmptyLineMarkerText(child.text)) return
     empty = false
   })
   return empty
+}
+
+// 用户敲在空行上的空格（整行只有空白）：Markdown 会把“只有空格的行”当空行吞掉，
+// 所以序列化时把空格换成 NBSP（随 normalizeMarkdown 写成 &nbsp;），这一行才能存下来、重开还在
+const isWhitespaceOnlyParagraph = (node: any): boolean => {
+  if (node.childCount === 0) return false
+  let only = true
+  node.forEach((child: any) => {
+    if (child.isText && /^[ \t]+$/.test(child.text ?? '')) return
+    only = false
+  })
+  return only
 }
 
 // 解析 Markdown 时直接清掉空行标记（零宽空格），让文档一加载就是真正的空段落。
@@ -137,6 +149,11 @@ const AlignedParagraph = Paragraph.extend({
         serialize(state: any, node: any) {
           if (isEmptyParagraph(node)) {
             state.write(EMPTY_LINE_MARK)
+            state.closeBlock(node)
+            return
+          }
+          if (isWhitespaceOnlyParagraph(node)) {
+            state.write(node.textContent.replace(/[ \t]/g, '\u00A0'))
             state.closeBlock(node)
             return
           }

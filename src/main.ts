@@ -1,12 +1,25 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App.vue";
+import EdgePanel from "./components/Edge/EdgePanel.vue";
 import i18n from "./i18n";
 import "uno.css";
 import "./styles/base.css";
 import { initTheme } from "./composables/useTheme";
 
-const app = createApp(App);
+// 边缘面板是同一份前端产物的第二个窗口（label = "edge"），按窗口分支挂载不同根组件
+function resolveRoot() {
+  try {
+    return getCurrentWindow().label === "edge" ? EdgePanel : App;
+  } catch {
+    return App;
+  }
+}
+
+const Root = resolveRoot();
+
+const app = createApp(Root);
 const pinia = createPinia();
 
 app.use(pinia);
@@ -16,3 +29,5 @@ app.use(i18n);
 initTheme().then(() => {
   app.mount("#app");
 });
+
+

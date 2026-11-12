@@ -1,14 +1,14 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { EditorState, Transaction } from '@tiptap/pm/state'
-import { isBlankEmptyLineText } from '../emptyLine'
+import { isEmptyLineMarkerText } from '../emptyLine'
 
 const emptyLineNormalizerKey = new PluginKey('emptyLineNormalizer')
 
 /**
  * 把 Markdown 里当作空行标记的 &#8203;（零宽空格）段落，还原成真正的空段落。
- * - 只删除“没有任何实际内容”的段落里的文本节点；
- * - 含 \u00A0（Tab 缩进）的内容一律保留；
+ * - 只删除“只有空行标记”的段落里的文本节点；
+ * - 用户敲的空格 / \u00A0（Tab 缩进）算实际内容，一律保留（否则空行行首按空格会被清掉）；
  * - 只含硬换行的段落保持原样（由 HardBreak 的 <br> 负责往返）。
  */
 function buildNormalizeTransaction(state: EditorState): Transaction | null {
@@ -20,13 +20,13 @@ function buildNormalizeTransaction(state: EditorState): Transaction | null {
     let hasContent = false
     node.forEach((child) => {
       if (child.type.name === 'hardBreak') return
-      if (child.isText && isBlankEmptyLineText(child.text)) return
+      if (child.isText && isEmptyLineMarkerText(child.text)) return
       hasContent = true
     })
     if (hasContent) return true
 
     node.forEach((child, offset) => {
-      if (!child.isText) return
+      if (!child.isText || !isEmptyLineMarkerText(child.text)) return
       const from = pos + 1 + offset
       ranges.push({ from, to: from + child.nodeSize })
     })

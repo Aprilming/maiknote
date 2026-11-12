@@ -353,16 +353,22 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 52px;
-  padding: 0 20px;
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  height: 40px;
+  padding: 0 14px;
+  /* 悬浮玻璃条：薄雾底色 + 细描边 + 阴影，不再铺白/灰实底 */
+  background: color-mix(in srgb, var(--color-background) 46%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  margin: 8px 10px 0;
+  box-shadow: var(--shadow-lg);
   user-select: none;
   cursor: pointer;
   gap: 20px;
-  /* 默认隐藏 */
+  /* 默认隐藏（多滑出顶部留白，避免残留一条边） */
   opacity: 0;
-  transform: translateY(-100%);
+  transform: translateY(calc(-100% - 8px));
   transition: opacity var(--duration-normal) var(--ease-out), transform var(--duration-normal) var(--ease-out);
   pointer-events: none;
 }
@@ -515,9 +521,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0 10px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -530,7 +536,7 @@ onUnmounted(() => {
 }
 
 .action-btn:hover {
-  background: var(--color-border);
+  background: color-mix(in srgb, var(--color-text) 9%, transparent);
 }
 
 .action-btn:active {

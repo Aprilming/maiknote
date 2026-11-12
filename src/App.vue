@@ -10,6 +10,7 @@ import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
 import { useEditorStyle } from '@/composables/useEditorStyle'
+import { useEdgePanel, isMainAutoHideSuppressed } from '@/composables/useEdgePanel'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
@@ -28,6 +29,7 @@ useShortcuts(openSettings)
 useGlobalShortcut()
 useTheme() // 初始化主题系统
 useEditorStyle() // 初始化编辑器样式预设
+useEdgePanel() // 把置顶笔记同步到屏幕边缘面板
 const { locale } = useI18n()
 
 // 同步语言设置到 vue-i18n
@@ -187,7 +189,12 @@ onMounted(async () => {
 
   // 窗口失去焦点时隐藏（置顶时不隐藏，对话框打开时不隐藏）
   unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused && !settingStore.settings.alwaysOnTop && !isNativeDialogCurrentlyOpen()) {
+    if (
+      !focused
+      && !settingStore.settings.alwaysOnTop
+      && !isNativeDialogCurrentlyOpen()
+      && !isMainAutoHideSuppressed()
+    ) {
       appWindow.hide()
     }
     if (focused) {

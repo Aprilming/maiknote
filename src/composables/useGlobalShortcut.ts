@@ -45,6 +45,16 @@ export function useGlobalShortcut() {
     }
   }
 
+  // 注册全局边缘面板快捷键；快捷键为空时后端只做注销
+  async function registerEdgeShortcut() {
+    const shortcut = settingStore.settings.shortcuts.edgePanel || ''
+    try {
+      await invoke('register_edge_shortcut', { shortcutStr: shortcut })
+    } catch (e) {
+      console.error('Failed to register edge panel shortcut:', e)
+    }
+  }
+
   // 监听 Rust 侧置顶状态变化（全局快捷键触发时），同步回前端设置
   async function listenAlwaysOnTop() {
     unlistenAlwaysOnTop = await listen<boolean>('on-always-on-top-changed', async (event) => {
@@ -79,10 +89,18 @@ export function useGlobalShortcut() {
     }
   )
 
+  watch(
+    () => settingStore.settings.shortcuts.edgePanel,
+    () => {
+      registerEdgeShortcut()
+    }
+  )
+
   onMounted(() => {
     registerGlobalShortcut()
     registerCenterShortcut()
     registerPinShortcut()
+    registerEdgeShortcut()
     listenAlwaysOnTop()
   })
 
@@ -94,5 +112,6 @@ export function useGlobalShortcut() {
     registerGlobalShortcut,
     registerCenterShortcut,
     registerPinShortcut,
+    registerEdgeShortcut,
   }
 }

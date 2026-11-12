@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Note, NoteMetadata, NoteFileEntry } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useDirectoryStore } from '@/stores/directoryStore'
+import { useSettingStore } from '@/stores/settingStore'
 import { directoryRelPath, directoryIdFromRelPath, fileNameForTitle, sanitizePathSegment } from '@/utils/notePath'
 import i18n from '@/i18n'
 
@@ -176,6 +177,14 @@ export const useNoteStore = defineStore('note', () => {
     activeNoteList.value.filter(n => !n.isPinned)
   )
 
+  /**
+   * 全部目录下的置顶笔记（不受 filterDirectoryId 影响）
+   * 侧栏固顶区用它：不管当前在哪个目录、目录有没有展开，置顶的笔记都固定显示在侧栏顶部
+   */
+  const allPinnedNotes = computed(() =>
+    activeNotes.value.filter(n => n.isPinned)
+  )
+
   // Helper: Check if note is empty
   function isNoteEmpty(note: Note | null): boolean {
     if (!note) return false
@@ -341,6 +350,7 @@ export const useNoteStore = defineStore('note', () => {
           isLocked: item.isLocked,
           directoryId: item.directoryId,
           backgroundColor: item.backgroundColor,
+          color: item.color,
           trashedAt: item.trashedAt,
           fileName,
         })
@@ -396,6 +406,7 @@ export const useNoteStore = defineStore('note', () => {
         isLocked: note.isLocked,
         directoryId: note.directoryId,
         backgroundColor: note.backgroundColor,
+        color: note.color,
         trashedAt: note.trashedAt,
         fileName: noteFile(note),
       })),
@@ -501,6 +512,12 @@ export const useNoteStore = defineStore('note', () => {
     return filterDirectoryId.value ?? undefined
   }
 
+  /** 设置里的「默认笔记背景色」，新建笔记时套用 */
+  function defaultNoteBackgroundColor(): string | undefined {
+    const color = useSettingStore().settings.defaultNoteBackgroundColor
+    return color || undefined
+  }
+
   async function createNoteAtHead(): Promise<Note> {
     const now = Date.now()
     const newNote: Note = {
@@ -512,6 +529,7 @@ export const useNoteStore = defineStore('note', () => {
       isPinned: false,
       isLocked: false,
       directoryId: currentDirectoryId(),
+      backgroundColor: defaultNoteBackgroundColor(),
     }
     notes.value.unshift(newNote)
     currentNoteId.value = newNote.id
@@ -533,6 +551,7 @@ export const useNoteStore = defineStore('note', () => {
       isPinned: false,
       isLocked: false,
       directoryId: currentDirectoryId(),
+      backgroundColor: defaultNoteBackgroundColor(),
     }
     notes.value.push(newNote)
     navDirection.value = 'right'
@@ -555,6 +574,7 @@ export const useNoteStore = defineStore('note', () => {
       isPinned: false,
       isLocked: false,
       directoryId: currentDirectoryId(),
+      backgroundColor: defaultNoteBackgroundColor(),
     }
 
     // Find current note index directly to ensure accuracy
@@ -587,6 +607,7 @@ export const useNoteStore = defineStore('note', () => {
       isPinned: false,
       isLocked: false,
       directoryId: currentDirectoryId(),
+      backgroundColor: defaultNoteBackgroundColor(),
     }
 
     // Find current note index directly to ensure accuracy
@@ -619,6 +640,7 @@ export const useNoteStore = defineStore('note', () => {
       isPinned: false,
       isLocked: false,
       directoryId: currentDirectoryId(),
+      backgroundColor: defaultNoteBackgroundColor(),
     }
 
     // Insert after current note
@@ -1091,6 +1113,8 @@ export const useNoteStore = defineStore('note', () => {
     const note = notes.value.find(n => n.id === noteId)
     if (note) {
       if (note.trashedAt) return
+      // 目标就是当前所在目录：什么都不用做（否则会平白给文件名加序号）
+      if ((note.directoryId ?? null) === (directoryId ?? null)) return
       const fromRel = dirRelPath(note.directoryId) ?? null
       const fileName = noteFile(note)
       note.directoryId = directoryId || undefined
@@ -1147,6 +1171,7 @@ export const useNoteStore = defineStore('note', () => {
     filteredNotes,
     pinnedNotes,
     unpinnedNotes,
+    allPinnedNotes,
     // Actions
     setNotes,
     selectNote,

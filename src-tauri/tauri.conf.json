@@ -27,6 +27,24 @@
         "backgroundColor": "#00000000",
         "visibleOnAllWorkspaces": false,
         "dragDropEnabled": false
+      },
+      {
+        "label": "edge",
+        "title": "MaikNote Edge",
+        "url": "index.html",
+        "width": 320,
+        "height": 800,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "visibleOnAllWorkspaces": true,
+        "backgroundColor": "#00000000",
+        "dragDropEnabled": false
       }
     ],
     "security": {
