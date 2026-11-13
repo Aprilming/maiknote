@@ -55,7 +55,7 @@ watch(rootExpanded, (value) => {
   localStorage.setItem(ROOT_EXPANDED_KEY, value ? 'true' : 'false')
 })
 
-// ---------- 置顶固顶区 ----------
+// ---------- 收藏区 ----------
 
 const PINNED_EXPANDED_KEY = 'fileTree.pinnedExpanded'
 const pinnedExpanded = ref(localStorage.getItem(PINNED_EXPANDED_KEY) !== 'false')
@@ -67,7 +67,7 @@ function togglePinned() {
   pinnedExpanded.value = !pinnedExpanded.value
 }
 
-/** 置顶区里显示笔记所在的目录路径，避免和目录里的同名笔记混淆 */
+/** 收藏区里显示笔记所在的目录路径，避免和目录里的同名笔记混淆 */
 function noteDirLabel(note: Note): string {
   const names: string[] = []
   let current = note.directoryId ?? null
@@ -265,7 +265,7 @@ function buildRows(parentId: string | null, depth: number): TreeRow[] {
       dirRows.push(...buildRows(dir.id, depth + 1))
     }
   }
-  // 置顶笔记排在同级最前面（其余保持原顺序）
+  // 收藏笔记排在同级最前面（其余保持原顺序）
   const dirNotes = noteStore.getNotesByDirectory(parentId)
     .slice()
     .sort((a, b) => Number(b.isPinned) - Number(a.isPinned))
@@ -864,7 +864,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="tree-body" @contextmenu="openBlankContextMenu">
-      <!-- 置顶固顶区：所有目录下的置顶笔记都固定显示在这里，不受目录展开/当前目录影响 -->
+      <!-- 收藏区：所有目录下的收藏笔记都固定显示在这里，不受目录展开/当前目录影响 -->
       <template v-if="settingStore.settings.fileTreePinnedSection !== false && noteStore.allPinnedNotes.length">
         <div
           class="tree-row pinned-head"
@@ -873,7 +873,7 @@ onBeforeUnmount(() => {
           <span class="row-toggle">
             <i class="i-mdi-chevron-right" :class="{ expanded: pinnedExpanded }"></i>
           </span>
-          <i class="i-mdi-pin row-icon"></i>
+          <i class="i-mdi-star row-icon"></i>
           <span class="row-label">{{ $t('fileTree.pinnedSection') }}</span>
           <span class="row-count">{{ noteStore.allPinnedNotes.length }}</span>
         </div>
@@ -892,7 +892,7 @@ onBeforeUnmount(() => {
             <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(note.color)"></i>
             <span class="row-label" :style="rowColorStyle(note.color)">{{ noteLabel(note) }}</span>
             <i
-              class="i-mdi-pin note-pin"
+              class="i-mdi-star note-pin"
               :title="$t('fileTree.unpin')"
               @click.stop="noteStore.togglePin(note.id)"
             ></i>
@@ -1007,7 +1007,7 @@ onBeforeUnmount(() => {
           <span class="row-label" :title="noteLabel(row.note)" :style="rowColorStyle(row.note.color)">{{ noteLabel(row.note) }}</span>
           <i
             v-if="row.note.isPinned"
-            class="i-mdi-pin note-pin"
+            class="i-mdi-star note-pin"
             :title="$t('fileTree.unpin')"
             @click.stop="noteStore.togglePin(row.note.id)"
           ></i>
@@ -1252,7 +1252,7 @@ onBeforeUnmount(() => {
 
       <template v-else-if="ctxNote">
         <button class="ctx-item" @click="ctxTogglePin">
-          <i :class="ctxNote.isPinned ? 'i-mdi-pin-off-outline' : 'i-mdi-pin-outline'"></i>
+          <i :class="ctxNote.isPinned ? 'i-mdi-star' : 'i-mdi-star-outline'"></i>
           <span>{{ ctxNote.isPinned ? $t('fileTree.unpin') : $t('fileTree.pin') }}</span>
         </button>
         <button v-if="ctxNote.directoryId" class="ctx-item" @click="ctxMoveToRoot">
@@ -1512,7 +1512,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--tree-orphan) 18%, transparent);
 }
 
-/* 置顶固顶区 */
+/* 收藏区 */
 .pinned-head .row-icon {
   color: var(--color-primary);
 }

@@ -96,7 +96,7 @@ export interface AppSettings {
   edgeStripWidth: number // 贴边小白条的粗细（px）
   edgeStripColor: string // 贴边小白条的颜色（#rrggbb）
   edgeCopyOnSelect: boolean // 边缘面板里选中文字后是否自动复制
-  fileTreePinnedSection: boolean // 文件树里是否显示「置顶笔记」大类
+  fileTreePinnedSection: boolean // 文件树里是否显示「收藏笔记」大类
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上

@@ -29,7 +29,7 @@ useShortcuts(openSettings)
 useGlobalShortcut()
 useTheme() // 初始化主题系统
 useEditorStyle() // 初始化编辑器样式预设
-useEdgePanel() // 把置顶笔记同步到屏幕边缘面板
+useEdgePanel() // 把收藏笔记同步到屏幕边缘面板
 const { locale } = useI18n()
 
 // 同步语言设置到 vue-i18n

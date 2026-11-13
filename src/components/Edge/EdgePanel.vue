@@ -359,7 +359,7 @@ function menuOpenInMain() {
   openNote(note)
 }
 
-/** 取消置顶（会从侧边栏移除） */
+/** 取消收藏（会从侧边栏移除） */
 function menuUnpin() {
   const note = menu.value?.note
   closeMenu()
@@ -507,7 +507,7 @@ onUnmounted(() => {
     <!-- 展开态卡片面板 -->
     <aside class="edge-panel" @contextmenu.prevent="closeMenu()">
       <header class="panel-head">
-        <span class="head-icon">📌</span>
+        <span class="head-icon">⭐</span>
         <span class="head-title">{{ t('fileTree.pinnedSection') }}</span>
         <span class="head-count">{{ notes.length }}</span>
         <button

@@ -9,6 +9,7 @@ export const useDirectoryStore = defineStore('directory', () => {
 
   // State
   const directories = ref<Directory[]>([])
+  const rootDirColor = ref<string | undefined>(undefined)
   const currentDirectoryId = ref<string | null>(null) // null = root
   const isLoading = ref(false)
 
@@ -80,6 +81,7 @@ export const useDirectoryStore = defineStore('directory', () => {
     try {
       const data = await fs.readDirectories()
       directories.value = data.directories
+      rootDirColor.value = data.rootDirColor
     } catch (e) {
       console.error('Failed to load directories:', e)
     } finally {
@@ -91,6 +93,7 @@ export const useDirectoryStore = defineStore('directory', () => {
     const data: DirectoryData = {
       version: 1,
       directories: directories.value,
+      rootDirColor: rootDirColor.value,
     }
     await fs.writeDirectories(data)
   }
@@ -132,6 +135,12 @@ export const useDirectoryStore = defineStore('directory', () => {
     if (!dir) return
     dir.color = color
     dir.updatedAt = Date.now()
+    await saveDirectories()
+  }
+
+  /** 设置主目录（根节点）在文件树里的显示颜色（undefined = 恢复默认） */
+  async function setRootDirColor(color: string | undefined): Promise<void> {
+    rootDirColor.value = color
     await saveDirectories()
   }
 

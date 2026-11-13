@@ -75,7 +75,7 @@ MaikNote is a native macOS floating note app with WYSIWYG Markdown editing, AI-a
 - ✅ Auto-save with debounce
 - ✅ Global shortcut to summon/hide
 - ✅ Note search
-- ✅ Pin notes to top
+- ✅ Favorite notes
 - ✅ Keyword system
 - ✅ AI writing assistant (right-click menu)
 - ✅ iCloud directory storage

@@ -890,6 +890,20 @@ function getPromptPreview(prompt: string): string {
             </div>
           </div>
 
+          <div class="setting-item setting-item-inline">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.fileTreePinnedSection') }}</span>
+              <span class="setting-desc">{{ $t('settings.fileTreePinnedSectionDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.fileTreePinnedSection !== false }"
+              @click="settingStore.updateSettings('fileTreePinnedSection', !settingStore.settings.fileTreePinnedSection)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
+
           <div class="setting-item">
             <div class="setting-label">
               <span class="setting-name">{{ $t('settings.defaultNoteBg') }}</span>
@@ -1174,20 +1188,6 @@ function getPromptPreview(prompt: string): string {
               class="toggle-btn"
               :class="{ active: settingStore.settings.edgeAutoHide }"
               @click="settingStore.updateSettings('edgeAutoHide', !settingStore.settings.edgeAutoHide)"
-            >
-              <span class="toggle-slider"></span>
-            </button>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.fileTreePinnedSection') }}</span>
-              <span class="setting-desc">{{ $t('settings.fileTreePinnedSectionDesc') }}</span>
-            </div>
-            <button
-              class="toggle-btn"
-              :class="{ active: settingStore.settings.fileTreePinnedSection !== false }"
-              @click="settingStore.updateSettings('fileTreePinnedSection', !settingStore.settings.fileTreePinnedSection)"
             >
               <span class="toggle-slider"></span>
             </button>

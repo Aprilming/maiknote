@@ -108,7 +108,7 @@ export function buildPreview(content: string): string {
   return plain.slice(0, 90)
 }
 
-/** 主窗口侧：把置顶笔记同步给边缘面板，并处理卡片点击 */
+/** 主窗口侧：把收藏笔记同步给边缘面板，并处理卡片点击 */
 export function useEdgePanel() {
   const noteStore = useNoteStore()
   const settingStore = useSettingStore()
@@ -158,7 +158,7 @@ export function useEdgePanel() {
       await emit(NOTES_EVENT, []).catch(() => {})
       return
     }
-    // 没有置顶笔记时直接把边缘条收起来（快捷键钉住时保持显示）
+    // 没有收藏笔记时直接把边缘条收起来（快捷键钉住时保持显示）
     if (payload.length === 0 && !edgePinned) {
       if (edgeVisible) {
         edgeVisible = false
@@ -182,7 +182,7 @@ export function useEdgePanel() {
     }, delay)
   }
 
-  // 快捷键钉住状态：钉住时即使没有置顶笔记也不收起边缘条
+  // 快捷键钉住状态：钉住时即使没有收藏笔记也不收起边缘条
   let edgePinned = false
 
   async function openFromEdge(id: string) {
@@ -242,7 +242,7 @@ export function useEdgePanel() {
         edgePinned = e.payload === true
         scheduleSync(0)
       }),
-      // 边缘面板右键菜单「取消置顶」
+      // 边缘面板右键菜单「取消收藏」
       await listen<{ id: string }>(UNPIN_EVENT, e => {
         void noteStore.togglePin(e.payload.id)
       }),
@@ -255,7 +255,7 @@ export function useEdgePanel() {
     scheduleSync(0)
   })()
 
-  // 置顶集合 / 标题 / 正文 / 目录 变化时增量同步
+  // 收藏集合 / 标题 / 正文 / 目录 变化时增量同步
   watch(
     () => noteStore.allPinnedNotes
       .map(n => `${n.id}|${n.title}|${n.updatedAt}|${n.content?.length ?? 0}|${n.directoryId ?? ''}|${n.color ?? ''}`)

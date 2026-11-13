@@ -2062,7 +2062,7 @@ fn set_edge_width(app: AppHandle, width: f64) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// 隐藏边缘面板窗口（没有任何置顶笔记时）
+/// 隐藏边缘面板窗口（没有任何收藏笔记时）
 #[tauri::command]
 fn hide_edge_window(app: AppHandle) -> Result<(), String> {
     let handle = app.clone();

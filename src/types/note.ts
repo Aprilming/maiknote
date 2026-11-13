@@ -55,6 +55,7 @@ export interface Directory {
 export interface DirectoryData {
   version: number
   directories: Directory[]
+  rootDirColor?: string
 }
 
 /**

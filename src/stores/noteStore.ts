@@ -147,7 +147,7 @@ export const useNoteStore = defineStore('note', () => {
     activeNotes.value.findIndex(n => n.id === currentNoteId.value)
   )
 
-  /** 按 filterDirectoryId 过滤后的笔记列表（置顶的排在最前，和文件树顺序一致） */
+  /** 按 filterDirectoryId 过滤后的笔记列表（收藏的排在最前，和文件树顺序一致） */
   const activeNoteList = computed(() => {
     const list = filterDirectoryId.value === null
       ? activeNotes.value.filter(n => !n.directoryId)
@@ -178,8 +178,8 @@ export const useNoteStore = defineStore('note', () => {
   )
 
   /**
-   * 全部目录下的置顶笔记（不受 filterDirectoryId 影响）
-   * 侧栏固顶区用它：不管当前在哪个目录、目录有没有展开，置顶的笔记都固定显示在侧栏顶部
+   * 全部目录下的收藏笔记（不受 filterDirectoryId 影响）
+   * 侧栏收藏区用它：不管当前在哪个目录、目录有没有展开，收藏的笔记都固定显示在侧栏顶部
    */
   const allPinnedNotes = computed(() =>
     activeNotes.value.filter(n => n.isPinned)
