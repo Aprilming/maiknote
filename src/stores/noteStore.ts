@@ -1064,6 +1064,34 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * 按给定的同级顺序重排笔记：只挪动这些笔记在数组里的槽位，其它笔记保持原位，
+   * 这样拖拽排序不会打乱其它目录的笔记顺序（也不会重排置顶区）。
+   */
+  function reorderNotesInDirectory(orderedIds: string[]) {
+    if (orderedIds.length < 2) return
+    const noteMap = new Map(notes.value.map(n => [n.id, n]))
+    const group = new Set(orderedIds)
+    const queue = orderedIds
+      .map(id => noteMap.get(id))
+      .filter((n): n is Note => n !== undefined)
+    if (!queue.length) return
+
+    let cursor = 0
+    const next: Note[] = []
+    for (const note of notes.value) {
+      if (!group.has(note.id)) {
+        next.push(note)
+        continue
+      }
+      const replacement = queue[cursor++]
+      if (replacement) next.push(replacement)
+    }
+
+    notes.value = next
+    scheduleSave()
+  }
+
+  /**
    * Get notes filtered by directory
    */
   function getNotesByDirectory(directoryId: string | null): Note[] {
@@ -1197,6 +1225,7 @@ export const useNoteStore = defineStore('note', () => {
     togglePin,
     toggleLock,
     reorderNotes,
+    reorderNotesInDirectory,
     getNotesByDirectory,
     moveNoteToDirectory,
     renameNoteFile,

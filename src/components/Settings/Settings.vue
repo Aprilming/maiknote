@@ -3,7 +3,7 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
-import { useSettingStore, DEFAULT_SHORTCUTS, type ShortcutSettings, type ShortcutScope, type PinOffBehavior, type CodeTheme, type EditorStylePreset, type DesktopNoteLevel } from '@/stores/settingStore'
+import { useSettingStore, DEFAULT_IP_API_URL, normalizeIpApiUrl, DEFAULT_SHORTCUTS, type ShortcutSettings, type ShortcutScope, type PinOffBehavior, type CodeTheme, type EditorStylePreset, type DesktopNoteLevel } from '@/stores/settingStore'
 import { editorStylePresets } from '@/composables/editorStylePresets'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
@@ -96,11 +96,16 @@ function showToast(message: string, duration = 2000) {
 const { currentVersion, latestVersion, downloadState, downloadProgress, updateAvailable, checkError, checkForUpdates, downloadAndInstall } = useVersionCheck()
 const checkLoading = computed(() => downloadState.value === 'checking')
 const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
+// IP 助手：查询地址在通用设置里可改（空值/非法值回落到 DEFAULT_IP_API_URL），项目地址是自建部署镜像
+const ipProjectUrl = 'https://hub.docker.com/r/aprilming/ipip'
 
 // ---- 关于页：隐私承诺（内容组件化，欢迎页 / 弹窗共用同一份文案） ----
 const privacyDialogVisible = ref(false)
 
 const settingStore = useSettingStore()
+
+/** 实际生效的 IP 查询地址：通用设置里填了合法地址就用它，否则用默认 */
+const ipApiUrlEffective = computed(() => normalizeIpApiUrl(settingStore.settings.ipApiUrl))
 const { currentTheme, isDark } = useTheme()
 const assistantsStore = useAssistantsStore()
 const { t, locale } = useI18n()
@@ -1187,6 +1192,24 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
           <div class="setting-item">
             <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.fileTreeFontSize') }}</span>
+              <span class="setting-value">{{ settingStore.settings.fileTreeFontSize }}px</span>
+              <span class="setting-desc">{{ $t('settings.fileTreeFontSizeDesc') }}</span>
+            </div>
+            <input
+              type="range"
+              min="11"
+              max="18"
+              step="0.5"
+              :value="settingStore.settings.fileTreeFontSize"
+              @input="settingStore.updateSettings('fileTreeFontSize', parseFloat(($event.target as HTMLInputElement).value))"
+              class="alpha-slider"
+              :style="{ '--fill': `${((settingStore.settings.fileTreeFontSize - 11) / 7) * 100}%` }"
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
               <span class="setting-name">{{ $t('settings.defaultNoteBg') }}</span>
               <span class="setting-value">{{ defaultNoteBgName }}</span>
             </div>
@@ -1219,6 +1242,32 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
                 />
               </label>
             </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.ipApiUrl') }}</span>
+              <span v-if="ipApiUrlEffective === DEFAULT_IP_API_URL" class="setting-value">{{ $t('settings.ipApiUrlDefault') }}</span>
+            </div>
+            <span class="setting-desc">{{ $t('settings.ipApiUrlDesc') }}</span>
+            <input
+              type="text"
+              class="text-input"
+              :value="settingStore.settings.ipApiUrl"
+              :placeholder="DEFAULT_IP_API_URL"
+              spellcheck="false"
+              @change="settingStore.updateSettings('ipApiUrl', ($event.target as HTMLInputElement).value)"
+              @keydown.enter="($event.target as HTMLInputElement).blur()"
+            />
+            <button
+              class="link-btn"
+              type="button"
+              :disabled="ipApiUrlEffective === DEFAULT_IP_API_URL"
+              @click="settingStore.updateSettings('ipApiUrl', DEFAULT_IP_API_URL)"
+            >
+              <i class="i-mdi-restore"></i>
+              <span>{{ $t('settings.ipApiUrlReset') }}</span>
+            </button>
           </div>
 
         </section>
@@ -1772,6 +1821,29 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
               <span>{{ $t('settings.versionTags') }}</span>
               <i class="i-mdi-open-in-new link-icon"></i>
             </a>
+          </div>
+
+          <!-- IP 助手：编辑器里 /ip 用到的出口 IP 查询来源 -->
+          <div class="ip-card">
+            <div class="ip-card-head">
+              <i class="i-mdi-web"></i>
+              <span>{{ $t('settings.ipAssistantTitle') }}</span>
+            </div>
+            <p class="ip-card-desc">{{ $t('settings.ipAssistantDesc') }}</p>
+            <div class="ip-card-links">
+              <a class="ip-card-link" :href="ipApiUrlEffective" target="_blank" rel="noreferrer">
+                <i class="i-mdi-link-variant"></i>
+                <span class="ip-card-label">{{ $t('settings.ipAssistantApi') }}</span>
+                <code class="ip-card-url">{{ ipApiUrlEffective }}</code>
+                <i class="i-mdi-open-in-new ip-card-open"></i>
+              </a>
+              <a class="ip-card-link" :href="ipProjectUrl" target="_blank" rel="noreferrer">
+                <i class="i-mdi-docker"></i>
+                <span class="ip-card-label">{{ $t('settings.ipAssistantProject') }}</span>
+                <code class="ip-card-url">{{ ipProjectUrl }}</code>
+                <i class="i-mdi-open-in-new ip-card-open"></i>
+              </a>
+            </div>
           </div>
 
           <!-- 隐私与承诺 -->
@@ -2657,6 +2729,12 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   text-decoration: underline;
 }
 
+.link-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+  text-decoration: none;
+}
+
 /* ============ AI 助手 ============ */
 .template-assistants {
   display: flex;
@@ -3446,6 +3524,93 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
 .link-item i.link-icon {
   margin-left: auto;
+  font-size: 13px;
+  opacity: 0.5;
+}
+
+/* ---- 关于页：IP 助手 ---- */
+.ip-card {
+  margin-top: 10px;
+  padding: 14px 14px 10px;
+  border-radius: 12px;
+  background: var(--st-panel);
+  border: 1px solid var(--st-panel-border);
+  box-shadow: var(--st-shadow);
+}
+
+.ip-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--st-text);
+}
+
+.ip-card-head > i {
+  font-size: 15px;
+  color: var(--st-accent);
+}
+
+.ip-card-desc {
+  margin: 7px 0 6px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--st-text-dim);
+}
+
+.ip-card-links {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -6px;
+}
+
+.ip-card-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 6px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--st-text);
+  text-decoration: none;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.ip-card-link:hover {
+  background: var(--st-sunken);
+  color: var(--st-accent);
+}
+
+.ip-card-link > i:first-child {
+  flex-shrink: 0;
+  font-size: 15px;
+  color: var(--st-text-dim);
+}
+
+.ip-card-link:hover > i:first-child {
+  color: var(--st-accent);
+}
+
+.ip-card-label {
+  flex-shrink: 0;
+}
+
+.ip-card-url {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11.5px;
+  color: var(--st-text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ip-card-open {
+  margin-left: auto;
+  flex-shrink: 0;
   font-size: 13px;
   opacity: 0.5;
 }

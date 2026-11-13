@@ -10,6 +10,12 @@
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(target_os = "macos")]
+use crate::{
+    NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES, NS_WINDOW_COLLECTION_BEHAVIOR_IGNORES_CYCLE,
+    NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY,
+};
+
 /// 桌面笔记窗口 label 前缀，前端靠它区分窗口类型
 pub const LABEL_PREFIX: &str = "note-widget-";
 
@@ -92,23 +98,62 @@ fn level_value(level: &str) -> i64 {
     }
 }
 
+/// 桌面层额外需要的窗口行为：所有 Space 都在、不随 Space 切换移动、不参与 Cmd+ 循环。
+/// 非桌面层要把这几位清掉，否则切回「普通图层」后卡片仍会跨 Space 常驻。
+fn set_desktop_collection_behavior(window: &tauri::WebviewWindow, desktop: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    const DESKTOP_BEHAVIOR_MASK: usize = NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES
+        | NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY
+        | NS_WINDOW_COLLECTION_BEHAVIOR_IGNORES_CYCLE;
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window = ptr as *mut AnyObject;
+        unsafe {
+            let current: usize = msg_send![ns_window, collectionBehavior];
+            let next = if desktop {
+                current | DESKTOP_BEHAVIOR_MASK
+            } else {
+                current & !DESKTOP_BEHAVIOR_MASK
+            };
+            let _: () = msg_send![ns_window, setCollectionBehavior: next];
+        }
+    }
+}
+
 /// 按设置决定卡片层级。
 /// 注意：`setLevel:` 只能在主线程调，tokio 工作线程上调用会被 AppKit 直接 SIGTRAP。
+///
+/// 关键坑：tao 0.34 的 `set_always_on_top(false)` 不是同步实现，它走
+/// `util::set_level_async` → `DispatchQueue::main().exec_async`，也就是「稍后把层级设成 0」。
+/// 之前这里先 `set_always_on_top(false)` 再同步 `setLevel(桌面层)`，同步那下先生效，
+/// 随后排队的那条异步消息把层级打回 0 —— 于是「贴桌面」和「普通图层」肉眼没区别。
+/// 现在：非 top 档完全不碰 `set_always_on_top`；真正的层级在主线程写一次，
+/// 再排到主队列队尾补写一次（FIFO 保证排在 tao 那条异步消息之后）。
 fn apply_level(app: &AppHandle, window: &tauri::WebviewWindow, level: &str) {
+    let app_for_defer = app.clone();
     let window = window.clone();
     let level = level.to_string();
     let _ = app.run_on_main_thread(move || {
         if level == "top" {
             // 浮窗模式：置顶 + 明确的 floating 层级（只靠 set_always_on_top 在部分系统版本上仍是 0 层）
             let _ = window.set_always_on_top(true);
-        } else {
-            let _ = window.set_always_on_top(false);
         }
-        set_window_level(&window, level_value(&level));
+        let value = level_value(&level);
+        let desktop = level == "desktop";
+        set_window_level(&window, value);
+        set_desktop_collection_behavior(&window, desktop);
+
+        let deferred_window = window.clone();
+        let _ = app_for_defer.run_on_main_thread(move || {
+            set_window_level(&deferred_window, value);
+            set_desktop_collection_behavior(&deferred_window, desktop);
+        });
     });
 }
 
-/// 窗口 show 出来后 AppKit 会把层级打回 0，所以在刚打开的两三秒里多压几次。
+/// 窗口刚 show 出来的头两秒里可能还有排队的异步 setLevel，多压几次兜底。
 fn apply_level_settling(app: &AppHandle, window: &tauri::WebviewWindow, level: &str) {
     let app_handle = app.clone();
     let target = window.clone();

@@ -97,6 +97,26 @@ export function clampNoteBorderWidth(width: unknown): number {
   return Math.min(10, Math.max(0, Math.round(value)))
 }
 
+/** 文件树字号：11–18px，0.5 一档；12.5 是原来的视觉基准 */
+const FILE_TREE_FONT_SIZE_MIN = 11
+const FILE_TREE_FONT_SIZE_MAX = 18
+const FILE_TREE_FONT_SIZE_DEFAULT = 12.5
+
+function clampFileTreeFontSize(size: unknown): number {
+  const value = Number(size)
+  if (!Number.isFinite(value)) return FILE_TREE_FONT_SIZE_DEFAULT
+  return Math.min(FILE_TREE_FONT_SIZE_MAX, Math.max(FILE_TREE_FONT_SIZE_MIN, Math.round(value * 2) / 2))
+}
+
+/** IP 助手默认的出口 IP 查询地址（通用设置里的「恢复默认」也回落到这里） */
+export const DEFAULT_IP_API_URL = 'https://ip.911505.xyz/ip/location'
+
+/** 只认 http/https 地址；空值或乱填一律回落到默认地址 */
+export function normalizeIpApiUrl(value: unknown): string {
+  const url = typeof value === 'string' ? value.trim() : ''
+  return /^https?:\/\/\S+$/i.test(url) ? url : DEFAULT_IP_API_URL
+}
+
 export interface AppSettings {
   language: 'zh-CN' | 'en-US'
   theme: Theme
@@ -121,6 +141,8 @@ export interface AppSettings {
   desktopNoteLevel: DesktopNoteLevel // 桌面卡片层级：top=浮在最上层 / normal=普通图层 / desktop=贴桌面
   desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
   fileTreePinnedSection: boolean // 文件树里是否显示「收藏笔记」大类
+  fileTreeFontSize: number // 文件树字号（px），11–18
+  ipApiUrl: string // IP 助手的出口 IP 查询地址，留空即用默认
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
@@ -175,6 +197,8 @@ export const useSettingStore = defineStore('setting', () => {
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
     fileTreePinnedSection: true,
+    fileTreeFontSize: 12.5,
+    ipApiUrl: DEFAULT_IP_API_URL,
     titleBarBehavior: 'auto-hide',
     pathClickAction: 'copy',
     treeOrder: 'folders',
@@ -241,6 +265,8 @@ export const useSettingStore = defineStore('setting', () => {
     const nextValue =
       key === 'tabSize' ? clampTabSize(value as number)
       : key === 'noteBorderWidth' ? clampNoteBorderWidth(value)
+      : key === 'fileTreeFontSize' ? clampFileTreeFontSize(value)
+      : key === 'ipApiUrl' ? String(value ?? '').trim()
       : value
     settings.value[key] = nextValue as AppSettings[K]
     // Save to localStorage
@@ -273,6 +299,8 @@ export const useSettingStore = defineStore('setting', () => {
           ...parsed,
           tabSize: clampTabSize(parsed.tabSize ?? settings.value.tabSize),
           noteBorderWidth: clampNoteBorderWidth(parsed.noteBorderWidth ?? settings.value.noteBorderWidth),
+          fileTreeFontSize: clampFileTreeFontSize(parsed.fileTreeFontSize ?? settings.value.fileTreeFontSize),
+          ipApiUrl: normalizeIpApiUrl(parsed.ipApiUrl ?? settings.value.ipApiUrl),
           edgeEnabled:
             typeof parsed.edgeEnabled === 'boolean' ? parsed.edgeEnabled : settings.value.edgeEnabled,
           edgeStripWidth:
@@ -338,6 +366,8 @@ export const useSettingStore = defineStore('setting', () => {
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
       fileTreePinnedSection: true,
+      fileTreeFontSize: 12.5,
+      ipApiUrl: DEFAULT_IP_API_URL,
       titleBarBehavior: 'auto-hide',
       pathClickAction: 'copy',
       treeOrder: 'folders',

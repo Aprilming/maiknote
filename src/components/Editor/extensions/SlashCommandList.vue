@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { Editor } from '@tiptap/vue-3'
 import { invoke } from '@tauri-apps/api/core'
 import { emojiCategories, filterEmojis, type EmojiItem } from './emojiData'
+import { useSettingStore, normalizeIpApiUrl } from '@/stores/settingStore'
 
 const props = defineProps<{
   command: (item: { title: string; command: string }) => void
@@ -210,7 +211,9 @@ async function handleIpInfo() {
   editor.chain().focus().insertContent(loadingHtml).run()
 
   try {
-    const info = await invoke<NetworkInfoResponse>('get_network_info')
+    // 通用设置里可改查询地址，空值/非法地址在 store 与后端各回落一次默认值
+    const ipApiUrl = normalizeIpApiUrl(useSettingStore().settings.ipApiUrl)
+    const info = await invoke<NetworkInfoResponse>('get_network_info', { ipApiUrl })
     const html = buildIpInfoHtml(info)
     // 删除 loading 占位，替换为实际内容
     const end = editor.state.selection.to

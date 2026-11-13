@@ -26,6 +26,12 @@ const noteStore = useNoteStore()
 const desktopNotes = useDesktopNotes()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
+
+// 文件树字号缩放系数：以 12.5px 为基准，行高与图标尺寸跟随缩放
+const treeFontScale = computed(() => {
+  const size = Number(settingStore.settings.fileTreeFontSize) || 12.5
+  return Math.min(18, Math.max(11, size)) / 12.5
+})
 const { t } = useI18n()
 
 const { isDark } = useTheme()
@@ -712,6 +718,7 @@ async function removeNote(note: Note) {
 const dragDirId = ref<string | null>(null)
 const dragNoteId = ref<string | null>(null)
 const dragOverDirId = ref<string | null>(null)
+const dragOverNoteId = ref<string | null>(null)
 const dragOverRoot = ref(false)
 const dragOverPos = ref<'before' | 'after' | 'into'>('before')
 const dragGhost = ref<{ x: number; y: number; label: string; isDir: boolean } | null>(null)
@@ -725,6 +732,7 @@ function resetDrag() {
   dragDirId.value = null
   dragNoteId.value = null
   dragOverDirId.value = null
+  dragOverNoteId.value = null
   dragOverRoot.value = false
   dragOverPos.value = 'before'
   dragGhost.value = null
@@ -768,6 +776,7 @@ function onDragMove(e: PointerEvent) {
   // 用坐标反查指针下面的行
   dragOverRoot.value = false
   dragOverDirId.value = null
+  dragOverNoteId.value = null
   const under = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
 
   if (under?.closest('[data-root-drop]')) {
@@ -776,15 +785,28 @@ function onDragMove(e: PointerEvent) {
     return
   }
 
+  if (origin.mode === 'note') {
+    // 落在别的笔记行上 = 同级排序（上下半区决定插在前还是插在后）
+    const noteEl = under?.closest('[data-note-id]') as HTMLElement | null
+    const overNoteId = noteEl?.dataset.noteId
+    if (noteEl && overNoteId && overNoteId !== origin.id) {
+      const rect = noteEl.getBoundingClientRect()
+      dragOverNoteId.value = overNoteId
+      dragOverPos.value = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+      return
+    }
+    const dirElForNote = under?.closest('[data-dir-id]') as HTMLElement | null
+    const dirIdForNote = dirElForNote?.dataset.dirId
+    if (dirIdForNote) {
+      dragOverDirId.value = dirIdForNote
+      dragOverPos.value = 'into'
+    }
+    return
+  }
+
   const dirEl = under?.closest('[data-dir-id]') as HTMLElement | null
   const dirId = dirEl?.dataset.dirId
   if (!dirEl || !dirId) return
-
-  if (origin.mode === 'note') {
-    dragOverDirId.value = dirId
-    dragOverPos.value = 'into'
-    return
-  }
 
   const source = directoryStore.getDirectory(origin.id)
   const target = directoryStore.getDirectory(dirId)
@@ -799,6 +821,7 @@ async function onDragEnd() {
   const origin = dragOrigin
   const moved = dragging
   const overDirId = dragOverDirId.value
+  const overNoteId = dragOverNoteId.value
   const overRoot = dragOverRoot.value
   const position = dragOverPos.value
   const targetParent = overDirId ? directoryStore.getDirectory(overDirId) : null
@@ -815,6 +838,10 @@ async function onDragEnd() {
   }, 0)
 
   if (origin.mode === 'note') {
+    if (overNoteId && position !== 'into') {
+      await reorderNoteNextTo(origin.id, overNoteId, position)
+      return
+    }
     if (overRoot) {
       await noteStore.moveNoteToDirectory(origin.id, null)
       return
@@ -828,6 +855,38 @@ async function onDragEnd() {
 
   if (!overDirId || !targetParent || position === 'into') return
   await directoryStore.moveDirectory(origin.id, targetParent.parentId, position, overDirId)
+}
+
+/** 同级可见顺序（收藏的排在同级最前，和模板里的排序保持一致） */
+function siblingNoteIds(dirId: string | null): string[] {
+  return noteStore.getNotesByDirectory(dirId)
+    .slice()
+    .sort((a, b) => Number(b.isPinned) - Number(a.isPinned))
+    .map(n => n.id)
+}
+
+/** 把笔记插到目标笔记的前/后：跨目录时先搬进目标目录，再按同级顺序落位 */
+async function reorderNoteNextTo(noteId: string, targetId: string, position: 'before' | 'after') {
+  const moving = noteStore.notes.find(n => n.id === noteId)
+  const target = noteStore.notes.find(n => n.id === targetId)
+  if (!moving || !target) return
+
+  const targetDir = target.directoryId ?? null
+  if ((moving.directoryId ?? null) !== targetDir) {
+    await noteStore.moveNoteToDirectory(noteId, targetDir)
+    expandChain(targetDir)
+  }
+
+  const ids = siblingNoteIds(targetDir).filter(id => id !== noteId)
+  const index = ids.indexOf(targetId)
+  if (index === -1) return
+  ids.splice(position === 'before' ? index : index + 1, 0, noteId)
+
+  // 收藏笔记永远排同级最前：插到收藏上方时落成"最靠上的非收藏笔记"，位置稳定不打滑
+  const byId = new Map(noteStore.notes.map(n => [n.id, n]))
+  const pinnedIds = ids.filter(id => byId.get(id)?.isPinned)
+  const plainIds = ids.filter(id => !byId.get(id)?.isPinned)
+  noteStore.reorderNotesInDirectory([...pinnedIds, ...plainIds])
 }
 
 // ---------- 拖拽调宽 ----------
@@ -878,7 +937,7 @@ onBeforeUnmount(() => {
     class="file-tree"
     data-filetree
     :class="{ resizing }"
-    :style="{ width: `${props.width}px` }"
+    :style="{ width: `${props.width}px`, '--tree-fs-scale': treeFontScale }"
     @contextmenu.prevent
   >
     <header class="tree-head">
@@ -904,11 +963,12 @@ onBeforeUnmount(() => {
             v-for="note in noteStore.allPinnedNotes"
             :key="`pinned:${note.id}`"
             class="tree-row note-row pinned-note-row"
-            :class="{ active: note.id === noteStore.currentNoteId }"
+            :class="{ active: note.id === noteStore.currentNoteId, dragging: dragNoteId === note.id }"
             :data-pinned-note-id="note.id"
             :title="`${noteLabel(note)}\n${noteDirLabel(note)}`"
             @click="openNote(note)"
             @contextmenu="openContextMenu($event, { type: 'note', note })"
+            @pointerdown="beginDrag($event, 'note', note.id, noteLabel(note))"
           >
             <span class="row-toggle placeholder"></span>
             <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(note.color)"></i>
@@ -1023,6 +1083,8 @@ onBeforeUnmount(() => {
           :class="{
             active: row.note.id === noteStore.currentNoteId,
             dragging: dragNoteId === row.note.id,
+            'drop-before': dragOverNoteId === row.note.id && dragOverPos === 'before',
+            'drop-after': dragOverNoteId === row.note.id && dragOverPos === 'after',
           }"
           :style="{ paddingLeft: indent(row.depth) }"
           :data-note-id="row.note.id"
@@ -1377,7 +1439,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--tree-fs-scale, 1));
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1404,7 +1466,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   width: 24px;
-  height: 24px;
+  height: calc(24px * var(--tree-fs-scale, 1));
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1414,7 +1476,7 @@ onBeforeUnmount(() => {
 }
 
 .icon-btn i {
-  font-size: 15px;
+  font-size: calc(15px * var(--tree-fs-scale, 1));
 }
 
 .icon-btn:hover {
@@ -1451,12 +1513,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 24px;
+  min-height: calc(24px * var(--tree-fs-scale, 1));
   padding-right: 6px;
   border-radius: 5px;
   cursor: pointer;
-  font-size: 12.5px;
-  line-height: 24px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
+  line-height: calc(24px * var(--tree-fs-scale, 1));
   color: var(--color-text);
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
@@ -1518,7 +1580,7 @@ onBeforeUnmount(() => {
 
 .note-pin {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   color: var(--color-primary);
   cursor: pointer;
   opacity: 0.9;
@@ -1532,7 +1594,7 @@ onBeforeUnmount(() => {
 /* 钉到桌面：只有已经在桌面上的笔记才显示这个图标（点一下收起） */
 .note-desktop-icon {
   flex-shrink: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
   cursor: pointer;
   opacity: 1;
   transition: opacity 0.14s ease, color 0.14s ease, transform 0.14s ease;
@@ -1552,8 +1614,8 @@ onBeforeUnmount(() => {
 .row-count {
   flex-shrink: 0;
   padding: 0 5px;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: calc(10px * var(--tree-fs-scale, 1));
+  line-height: calc(14px * var(--tree-fs-scale, 1));
   border-radius: 999px;
   color: var(--color-text-secondary);
   background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
@@ -1612,7 +1674,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   width: 14px;
-  height: 14px;
+  height: calc(14px * var(--tree-fs-scale, 1));
   flex-shrink: 0;
 }
 
@@ -1621,7 +1683,7 @@ onBeforeUnmount(() => {
 }
 
 .row-toggle i {
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -1639,7 +1701,7 @@ onBeforeUnmount(() => {
 }
 
 .row-icon {
-  font-size: 14px;
+  font-size: calc(14px * var(--tree-fs-scale, 1));
   flex-shrink: 0;
   color: var(--color-text-secondary);
 }
@@ -1656,7 +1718,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* 目录拖拽排序 */
+/* 拖拽排序：目录同级排序 + 笔记同级排序 / 拖进目录 */
 .dir-row.dragging {
   opacity: 0.45;
 }
@@ -1685,6 +1747,14 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 -2px 0 var(--color-primary);
 }
 
+.note-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--color-primary);
+}
+
+.note-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
 /* 拖拽时跟随指针的浮标（Teleport 到 body，样式靠 scoped 传递） */
 .drag-ghost {
   position: fixed;
@@ -1695,7 +1765,7 @@ onBeforeUnmount(() => {
   max-width: 220px;
   padding: 5px 10px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   line-height: 1.3;
   color: var(--color-text);
   background: var(--color-popup-bg, var(--color-surface));
@@ -1714,7 +1784,7 @@ onBeforeUnmount(() => {
 
 .drag-ghost i {
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   color: var(--color-primary);
 }
 
@@ -1734,7 +1804,7 @@ onBeforeUnmount(() => {
 }
 
 .row-actions i {
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   padding: 1px;
   border-radius: 4px;
   color: var(--color-text-secondary);
@@ -1748,7 +1818,7 @@ onBeforeUnmount(() => {
 }
 
 .note-lock {
-  font-size: 11px;
+  font-size: calc(11px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
   flex-shrink: 0;
 }
@@ -1760,19 +1830,19 @@ onBeforeUnmount(() => {
 .row-input {
   flex: 1;
   min-width: 0;
-  height: 20px;
+  height: calc(20px * var(--tree-fs-scale, 1));
   padding: 0 4px;
   border: 1px solid var(--color-primary);
   border-radius: 4px;
   background: var(--color-background);
   color: var(--color-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
   outline: none;
 }
 
 .tree-empty {
   padding: 16px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
   text-align: center;
 }
@@ -1794,18 +1864,18 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
   gap: 4px;
-  height: 26px;
+  height: calc(26px * var(--tree-fs-scale, 1));
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .foot-btn i {
-  font-size: 14px;
+  font-size: calc(14px * var(--tree-fs-scale, 1));
 }
 
 .foot-btn:hover {
@@ -1839,12 +1909,12 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   padding: 7px 8px 6px 10px;
   border-bottom: 1px solid var(--color-border);
-  font-size: 11px;
+  font-size: calc(11px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
 }
 
 .trash-pop-head i {
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   color: var(--tree-trash);
 }
 
@@ -1854,7 +1924,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   width: 20px;
-  height: 20px;
+  height: calc(20px * var(--tree-fs-scale, 1));
   margin-left: -2px;
   padding: 0;
   border: none;
@@ -1886,8 +1956,8 @@ onBeforeUnmount(() => {
 
 .trash-pop-count {
   padding: 0 5px;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: calc(10px * var(--tree-fs-scale, 1));
+  line-height: calc(14px * var(--tree-fs-scale, 1));
   border-radius: 999px;
   color: var(--tree-trash);
   background: color-mix(in srgb, var(--tree-trash) 16%, transparent);
@@ -1899,19 +1969,19 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  height: 18px;
+  height: calc(18px * var(--tree-fs-scale, 1));
   padding: 0 6px 0 4px;
   border: none;
   border-radius: 999px;
   background: color-mix(in srgb, var(--tree-trash) 12%, transparent);
   color: var(--tree-trash);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--tree-fs-scale, 1));
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .trash-pop-close i {
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
 }
 
 .trash-pop-close:hover {
@@ -1931,13 +2001,13 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding: 4px 7px;
   border-radius: 5px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
   cursor: pointer;
 }
 
 .trash-pop-row i {
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   flex-shrink: 0;
   color: var(--tree-trash);
 }
@@ -1984,8 +2054,8 @@ onBeforeUnmount(() => {
 .foot-count {
   margin-left: auto;
   padding: 0 5px;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: calc(10px * var(--tree-fs-scale, 1));
+  line-height: calc(14px * var(--tree-fs-scale, 1));
   border-radius: 999px;
   color: var(--tree-trash);
   background: color-mix(in srgb, var(--tree-trash) 16%, transparent);
@@ -1993,7 +2063,7 @@ onBeforeUnmount(() => {
 }
 
 .foot-btn .foot-chevron {
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   opacity: 0.55;
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -2036,19 +2106,19 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 26px;
+  height: calc(26px * var(--tree-fs-scale, 1));
   padding: 0 8px;
   border: none;
   border-radius: 5px;
   background: transparent;
   color: var(--color-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
   text-align: left;
   cursor: pointer;
 }
 
 .ctx-item i {
-  font-size: 14px;
+  font-size: calc(14px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
 }
 
@@ -2098,7 +2168,7 @@ onBeforeUnmount(() => {
 .orphan-row .row-label {
   color: var(--color-text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--tree-fs-scale, 1));
 }
 
 .orphan-action {
@@ -2107,13 +2177,13 @@ onBeforeUnmount(() => {
   justify-content: center;
   flex: 0 0 auto;
   width: 20px;
-  height: 20px;
+  height: calc(20px * var(--tree-fs-scale, 1));
   padding: 0;
   border: none;
   border-radius: 5px;
   background: transparent;
   color: var(--color-text-tertiary, var(--color-text-secondary));
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -2133,7 +2203,7 @@ onBeforeUnmount(() => {
 
 .tree-empty.small {
   padding: 8px 12px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--tree-fs-scale, 1));
 }
 
 /* 回收站内容预览 */
@@ -2176,7 +2246,7 @@ onBeforeUnmount(() => {
 }
 
 .tp-title {
-  font-size: 13px;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
   font-weight: 600;
   color: var(--color-text);
   overflow: hidden;
@@ -2185,7 +2255,7 @@ onBeforeUnmount(() => {
 }
 
 .tp-meta {
-  font-size: 11px;
+  font-size: calc(11px * var(--tree-fs-scale, 1));
   color: var(--color-text-secondary);
 }
 
@@ -2195,7 +2265,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   flex-shrink: 0;
   width: 22px;
-  height: 22px;
+  height: calc(22px * var(--tree-fs-scale, 1));
   border: none;
   border-radius: 5px;
   background: transparent;
@@ -2215,7 +2285,7 @@ onBeforeUnmount(() => {
   padding: 12px 14px;
   overflow: auto;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--tree-fs-scale, 1));
   line-height: 1.7;
   color: var(--color-text);
   white-space: pre-wrap;
@@ -2236,18 +2306,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: calc(26px * var(--tree-fs-scale, 1));
   padding: 0 12px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: transparent;
   color: var(--color-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--tree-fs-scale, 1));
   cursor: pointer;
 }
 
 .tp-btn i {
-  font-size: 14px;
+  font-size: calc(14px * var(--tree-fs-scale, 1));
 }
 
 .tp-btn:hover {

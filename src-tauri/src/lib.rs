@@ -1569,8 +1569,8 @@ unsafe extern "C" fn display_reconfiguration_callback(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// 获取网络信息（出口IP + 本地网卡）
 #[tauri::command]
-async fn get_network_info() -> Result<NetworkInfo, String> {
-    let public_ip = fetch_public_ip().await.ok();
+async fn get_network_info(ip_api_url: Option<String>) -> Result<NetworkInfo, String> {
+    let public_ip = fetch_public_ip(ip_api_url.as_deref()).await.ok();
     let local_interfaces = list_local_interfaces().unwrap_or_default();
     Ok(NetworkInfo {
         public_ip,
@@ -1578,15 +1578,23 @@ async fn get_network_info() -> Result<NetworkInfo, String> {
     })
 }
 
-/// 请求远程 API 获取出口 IP 信息
-async fn fetch_public_ip() -> Result<PublicIpInfo, String> {
+/// IP 助手默认出口 IP 查询地址（前端可在通用设置里改，留空即用这个）
+const DEFAULT_IP_API_URL: &str = "https://ip.911505.xyz/ip/location";
+
+/// 请求远程 API 获取出口 IP 信息；endpoint 只接受 http/https，其余回落默认地址
+async fn fetch_public_ip(endpoint: Option<&str>) -> Result<PublicIpInfo, String> {
+    let url = endpoint
+        .map(str::trim)
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .unwrap_or(DEFAULT_IP_API_URL);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
 
     let resp = client
-        .get("https://ip.911505.xyz/ip/location")
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("请求失败: {e}"))?;

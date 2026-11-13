@@ -11,10 +11,12 @@ withDefaults(
   defineProps<{
     /** 是否显示末尾的作者行 */
     showAuthor?: boolean
+    /** 是否显示末尾的致谢名单（设置 → 关于、首次引导、隐私弹窗共用一份） */
+    showThanks?: boolean
     /** 宽松排版（弹窗 / 欢迎页里字号大一点） */
     loose?: boolean
   }>(),
-  { showAuthor: true, loose: false },
+  { showAuthor: true, showThanks: true, loose: false },
 )
 
 const { t } = useI18n()
@@ -29,6 +31,7 @@ const pledgeKeys = [
 ] as const
 
 const authorEmail = '7w0v0w7@gmail.com'
+const authorHome = 'https://www.91kfc.vip/'
 const copied = ref(false)
 let copiedTimer: number | undefined
 
@@ -47,6 +50,17 @@ async function copyEmail() {
 
 function openMail() {
   void openUrl(`mailto:${authorEmail}`).catch(() => {})
+}
+
+function openHome() {
+  void openUrl(authorHome).catch(() => {})
+}
+
+/** 致谢名单：点名字直接开 GitHub 主页 */
+const thanksUsers = ['cat-clever', 'kinzun', 'zhanggang807'] as const
+
+function openProfile(name: string) {
+  void openUrl(`https://github.com/${name}`).catch(() => {})
 }
 </script>
 
@@ -70,6 +84,27 @@ function openMail() {
         <i :class="copied ? 'i-mdi-check' : 'i-mdi-content-copy'"></i>
         <span>{{ copied ? t('settings.authorEmailCopied') : t('settings.authorEmailCopy') }}</span>
       </button>
+      <a class="pp-home" :href="authorHome" target="_blank" rel="noreferrer" @click.prevent="openHome">
+        <i class="i-mdi-home-variant-outline"></i>
+        <span>{{ t('settings.authorHome') }}</span>
+      </a>
+    </div>
+
+    <div v-if="showThanks" class="pp-thanks">
+      <i class="i-mdi-heart-outline"></i>
+      <span class="pp-thanks-text">
+        {{ t('welcome.thanksLead') }}
+        <template v-for="(name, index) in thanksUsers" :key="name">
+          <span v-if="index > 0" class="pp-thanks-sep">{{ t('welcome.thanksSep') }}</span>
+          <a
+            class="pp-thanks-link"
+            :href="`https://github.com/${name}`"
+            @click.prevent="openProfile(name)"
+            >{{ name }}</a
+          >
+        </template>
+        {{ t('welcome.thanksTail') }}
+      </span>
     </div>
   </div>
 </template>
@@ -181,5 +216,57 @@ function openMail() {
 
 .pp-copy i {
   font-size: 12px;
+}
+
+.pp-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 2px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--pp-border);
+  background: transparent;
+  color: var(--pp-dim);
+  font-size: calc(var(--pp-size) - 0.5px);
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.pp-home:hover {
+  background: var(--pp-hover);
+  color: var(--pp-accent);
+}
+
+.pp-home i {
+  font-size: 12px;
+}
+
+.pp-thanks {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: calc(var(--pp-size) - 0.5px);
+  line-height: var(--pp-line-height);
+  color: var(--pp-dim);
+}
+
+.pp-thanks i {
+  flex-shrink: 0;
+  margin-top: 0.32em;
+  font-size: 12px;
+  color: var(--pp-accent);
+}
+
+.pp-thanks-link {
+  color: var(--pp-accent);
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--pp-accent) 45%, transparent);
+  cursor: pointer;
+}
+
+.pp-thanks-link:hover {
+  border-bottom-style: solid;
 }
 </style>
