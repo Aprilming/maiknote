@@ -101,6 +101,8 @@ const { t, locale } = useI18n()
 
 // 默认笔记背景色（和编辑器右下角的笔记底色共用同一套色板）
 const noteBgColors = computed(() => (isDark() ? DARK_NOTE_COLORS : LIGHT_NOTE_COLORS))
+/** 贴边小白条的预设颜色（白 / 浅灰 / 蓝 / 深灰），其余走自定义取色器 */
+const edgeStripPresets = ['#ffffff', '#c8ccd4', '#3b82f6', '#1f2329']
 const defaultNoteBgName = computed(() => {
   const color = settingStore.settings.defaultNoteBackgroundColor
   if (!color) return t('colorPicker.default')
@@ -129,6 +131,11 @@ const categories = computed(() => [
   { key: 'about' as const, icon: 'i-mdi-information-outline', label: t('settings.about') },
 ])
 
+/** 当前分类名（顶部标题居中显示） */
+const currentCategoryLabel = computed(
+  () => categories.value.find(cat => cat.key === activeCategory.value)?.label ?? t('settings.title'),
+)
+
 /** 边缘面板贴边方向选项 */
 const edgePositionOptions = computed(() => [
   { value: 'right' as const, label: t('settings.edgePosRight') },
@@ -136,6 +143,11 @@ const edgePositionOptions = computed(() => [
   { value: 'top' as const, label: t('settings.edgePosTop') },
   { value: 'bottom' as const, label: t('settings.edgePosBottom') },
 ])
+
+/** 当前贴边方向的名字，显示在位置选择器标题后面 */
+const currentEdgePositionLabel = computed(
+  () => edgePositionOptions.value.find(p => p.value === settingStore.settings.edgePosition)?.label ?? '',
+)
 
 // 同步语言设置到 i18n locale
 watch(() => settingStore.settings.language, (newLang) => {
@@ -535,7 +547,7 @@ function getPromptPreview(prompt: string): string {
       <button class="back-btn" @click="goBack">
         <i class="i-mdi-arrow-left"></i>
       </button>
-      <h1 class="settings-title">{{ $t('settings.title') }}</h1>
+      <h1 class="settings-title">{{ currentCategoryLabel }}</h1>
     </div>
 
     <div class="settings-body">
@@ -1037,19 +1049,36 @@ function getPromptPreview(prompt: string): string {
         <section v-if="activeCategory === 'sidebar'" class="settings-section">
           <div class="setting-item">
             <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.edgeEnabled') }}</span>
+              <span class="setting-desc">{{ $t('settings.edgeEnabledDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.edgeEnabled }"
+              @click="settingStore.updateSettings('edgeEnabled', !settingStore.settings.edgeEnabled)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
+
+          <div class="setting-item" :class="{ 'is-muted-item': !settingStore.settings.edgeEnabled }">
+            <div class="setting-label">
               <span class="setting-name">{{ $t('settings.edgePosition') }}</span>
+              <span class="setting-value">{{ currentEdgePositionLabel }}</span>
               <span class="setting-desc">{{ $t('settings.edgePositionDesc') }}</span>
             </div>
-            <div class="scope-switch">
+            <div class="edge-side-picker">
+              <div class="edge-side-screen"></div>
               <button
                 v-for="pos in edgePositionOptions"
                 :key="pos.value"
-                class="scope-option"
-                :class="{ active: settingStore.settings.edgePosition === pos.value }"
                 type="button"
+                class="edge-side-hit"
+                :class="[`hit-${pos.value}`, { active: settingStore.settings.edgePosition === pos.value }]"
+                :title="pos.label"
                 @click="settingStore.updateSettings('edgePosition', pos.value)"
               >
-                {{ pos.label }}
+                <span class="edge-side-bar"></span>
               </button>
             </div>
           </div>
@@ -1074,20 +1103,66 @@ function getPromptPreview(prompt: string): string {
 
           <div class="setting-item">
             <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.edgeTriggerWidth') }}</span>
-              <span class="setting-value">{{ settingStore.settings.edgeTriggerWidth }}px</span>
-              <span class="setting-desc">{{ $t('settings.edgeTriggerWidthDesc') }}</span>
+              <span class="setting-name">{{ $t('settings.edgeTriggerSpan') }}</span>
+              <span class="setting-value">{{ settingStore.settings.edgeTriggerSpan }}%</span>
+              <span class="setting-desc">{{ $t('settings.edgeTriggerSpanDesc') }}</span>
             </div>
             <input
               type="range"
-              min="4"
-              max="40"
-              step="1"
-              :value="settingStore.settings.edgeTriggerWidth"
-              @input="settingStore.updateSettings('edgeTriggerWidth', parseInt(($event.target as HTMLInputElement).value))"
+              min="10"
+              max="100"
+              step="5"
+              :value="settingStore.settings.edgeTriggerSpan"
+              @input="settingStore.updateSettings('edgeTriggerSpan', parseInt(($event.target as HTMLInputElement).value))"
               class="alpha-slider"
-              :style="{ '--fill': `${((settingStore.settings.edgeTriggerWidth - 4) / 36) * 100}%` }"
+              :style="{ '--fill': `${((settingStore.settings.edgeTriggerSpan - 10) / 90) * 100}%` }"
             />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.edgeStripWidth') }}</span>
+              <span class="setting-value">{{ settingStore.settings.edgeStripWidth }}px</span>
+              <span class="setting-desc">{{ $t('settings.edgeStripWidthDesc') }}</span>
+            </div>
+            <input
+              type="range"
+              min="3"
+              max="16"
+              step="1"
+              :value="settingStore.settings.edgeStripWidth"
+              @input="settingStore.updateSettings('edgeStripWidth', parseInt(($event.target as HTMLInputElement).value))"
+              class="alpha-slider"
+              :style="{ '--fill': `${((settingStore.settings.edgeStripWidth - 3) / 13) * 100}%` }"
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.edgeStripColor') }}</span>
+              <span class="setting-value">{{ settingStore.settings.edgeStripColor.toUpperCase() }}</span>
+              <span class="setting-desc">{{ $t('settings.edgeStripColorDesc') }}</span>
+            </div>
+            <div class="note-bg-grid">
+              <button
+                v-for="color in edgeStripPresets"
+                :key="color"
+                class="note-bg-chip"
+                :class="{ active: settingStore.settings.edgeStripColor.toLowerCase() === color.toLowerCase() }"
+                :style="{ background: color }"
+                :title="color"
+                @click="settingStore.updateSettings('edgeStripColor', color)"
+              ></button>
+              <label class="note-bg-chip note-bg-chip-custom" :title="$t('colorPicker.customColor')">
+                <i class="i-mdi-palette-outline"></i>
+                <input
+                  type="color"
+                  class="note-bg-input"
+                  :value="settingStore.settings.edgeStripColor"
+                  @change="settingStore.updateSettings('edgeStripColor', ($event.target as HTMLInputElement).value)"
+                />
+              </label>
+            </div>
           </div>
 
           <div class="setting-item">
@@ -1099,6 +1174,34 @@ function getPromptPreview(prompt: string): string {
               class="toggle-btn"
               :class="{ active: settingStore.settings.edgeAutoHide }"
               @click="settingStore.updateSettings('edgeAutoHide', !settingStore.settings.edgeAutoHide)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.fileTreePinnedSection') }}</span>
+              <span class="setting-desc">{{ $t('settings.fileTreePinnedSectionDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.fileTreePinnedSection !== false }"
+              @click="settingStore.updateSettings('fileTreePinnedSection', !settingStore.settings.fileTreePinnedSection)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.edgeCopyOnSelect') }}</span>
+              <span class="setting-desc">{{ $t('settings.edgeCopyOnSelectDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.edgeCopyOnSelect }"
+              @click="settingStore.updateSettings('edgeCopyOnSelect', !settingStore.settings.edgeCopyOnSelect)"
             >
               <span class="toggle-slider"></span>
             </button>
@@ -1313,24 +1416,27 @@ function getPromptPreview(prompt: string): string {
 
 .settings-page {
   /* ---- 页面级令牌（浅色） ---- */
-  --st-text: #1b2334;
-  --st-text-dim: rgba(27, 35, 52, 0.55);
-  --st-text-soft: rgba(27, 35, 52, 0.36);
-  --st-accent: #4b6bfb;
-  --st-accent-2: #7c7cf9;
-  --st-accent-soft: rgba(75, 107, 251, 0.11);
-  --st-accent-line: rgba(75, 107, 251, 0.26);
-  --st-panel: rgba(255, 255, 255, 0.64);
-  --st-chip: rgba(255, 255, 255, 0.94);
-  --st-panel-border: rgba(19, 27, 44, 0.075);
-  --st-row-line: rgba(19, 27, 44, 0.06);
-  --st-sunken: rgba(19, 27, 44, 0.045);
-  --st-track: rgba(19, 27, 44, 0.11);
-  --st-danger: #ef4444;
-  --st-success: #22c55e;
-  --st-warning: #f59e0b;
-  --st-inner-light: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --st-shadow: 0 1px 1px rgba(16, 24, 40, 0.03), 0 14px 30px -22px rgba(16, 24, 40, 0.5);
+  --st-text: #1d1d1f;
+  --st-text-dim: rgba(60, 60, 67, 0.62);
+  --st-text-soft: rgba(60, 60, 67, 0.42);
+  --st-accent: #007aff;
+  --st-accent-2: #0a84ff;
+  --st-accent-soft: rgba(0, 122, 255, 0.12);
+  --st-accent-line: rgba(0, 122, 255, 0.28);
+  --st-panel: #ffffff;
+  --st-chip: #ffffff;
+  --st-panel-border: rgba(0, 0, 0, 0.055);
+  --st-row-line: rgba(0, 0, 0, 0.07);
+  --st-sunken: rgba(120, 120, 128, 0.12);
+  --st-track: rgba(120, 120, 128, 0.2);
+  --st-danger: #ff3b30;
+  --st-success: #34c759;
+  --st-warning: #ff9500;
+  --st-inner-light: none;
+  --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --st-page-bg: #f2f2f7;
+  --st-nav-bg: rgba(120, 120, 128, 0.1);
+  --st-nav-active: #ffffff;
 
   position: relative;
   display: flex;
@@ -1341,33 +1447,30 @@ function getPromptPreview(prompt: string): string {
   overflow: hidden;
   outline: none;
   color: var(--st-text);
-  background:
-    radial-gradient(120% 92% at 100% 0%, rgba(99, 102, 241, 0.11), transparent 62%),
-    radial-gradient(110% 92% at 0% 100%, rgba(56, 189, 248, 0.10), transparent 58%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(246, 247, 251, 0.4));
+  background: var(--st-page-bg);
 }
 
 /* ---- 页面级令牌（深色） ---- */
 .settings-page.is-dark {
-  --st-text: #e9ecf5;
-  --st-text-dim: rgba(233, 236, 245, 0.56);
-  --st-text-soft: rgba(233, 236, 245, 0.34);
-  --st-accent: #8296ff;
-  --st-accent-2: #a78bfa;
-  --st-accent-soft: rgba(130, 150, 255, 0.16);
-  --st-accent-line: rgba(130, 150, 255, 0.32);
-  --st-panel: rgba(255, 255, 255, 0.05);
-  --st-chip: rgba(255, 255, 255, 0.11);
-  --st-panel-border: rgba(255, 255, 255, 0.075);
-  --st-row-line: rgba(255, 255, 255, 0.06);
-  --st-sunken: rgba(255, 255, 255, 0.055);
-  --st-track: rgba(255, 255, 255, 0.15);
-  --st-inner-light: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --st-shadow: 0 1px 1px rgba(0, 0, 0, 0.22), 0 16px 34px -24px rgba(0, 0, 0, 0.95);
-  background:
-    radial-gradient(120% 92% at 100% 0%, rgba(99, 102, 241, 0.22), transparent 62%),
-    radial-gradient(110% 92% at 0% 100%, rgba(56, 189, 248, 0.12), transparent 58%),
-    linear-gradient(180deg, rgba(23, 25, 33, 0.55), rgba(13, 15, 21, 0.45));
+  --st-text: #f2f2f7;
+  --st-text-dim: rgba(235, 235, 245, 0.62);
+  --st-text-soft: rgba(235, 235, 245, 0.4);
+  --st-accent: #0a84ff;
+  --st-accent-2: #409cff;
+  --st-accent-soft: rgba(10, 132, 255, 0.18);
+  --st-accent-line: rgba(10, 132, 255, 0.34);
+  --st-panel: #2c2c2e;
+  --st-chip: #3a3a3c;
+  --st-panel-border: rgba(255, 255, 255, 0.07);
+  --st-row-line: rgba(255, 255, 255, 0.08);
+  --st-sunken: rgba(120, 120, 128, 0.24);
+  --st-track: rgba(120, 120, 128, 0.36);
+  --st-inner-light: none;
+  --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --st-page-bg: #1e1e1e;
+  --st-nav-bg: rgba(120, 120, 128, 0.24);
+  --st-nav-active: rgba(255, 255, 255, 0.14);
+  background: var(--st-page-bg);
 }
 
 /* ============ 顶部 ============ */
@@ -1960,6 +2063,102 @@ function getPromptPreview(prompt: string): string {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
+}
+
+/* ---------- 侧边栏贴边位置：屏幕示意框，四条边就是四个可点方位 ---------- */
+.edge-side-picker {
+  position: relative;
+  width: 178px;
+  height: 112px;
+  margin-top: 4px;
+  border-radius: 12px;
+  background: var(--st-sunken);
+  border: 1px solid var(--st-row-line);
+}
+
+.edge-side-screen {
+  position: absolute;
+  inset: 17px;
+  border-radius: 7px;
+  border: 1px dashed var(--st-row-line);
+  background: var(--st-panel);
+  pointer-events: none;
+}
+
+.edge-side-hit {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.edge-side-bar {
+  display: block;
+  border-radius: 999px;
+  background: var(--st-row-line);
+  transition: background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.edge-side-hit:hover .edge-side-bar {
+  background: var(--st-text-dim);
+}
+
+.edge-side-hit.active .edge-side-bar {
+  background: var(--st-accent);
+  box-shadow: 0 0 0 1px var(--st-accent), 0 0 10px -2px var(--st-accent);
+}
+
+.edge-side-hit.hit-top,
+.edge-side-hit.hit-bottom {
+  left: 16px;
+  right: 16px;
+  height: 16px;
+}
+
+.edge-side-hit.hit-top {
+  top: 2px;
+}
+
+.edge-side-hit.hit-bottom {
+  bottom: 2px;
+}
+
+.edge-side-hit.hit-top .edge-side-bar,
+.edge-side-hit.hit-bottom .edge-side-bar {
+  width: 100%;
+  height: 4px;
+}
+
+.edge-side-hit.hit-left,
+.edge-side-hit.hit-right {
+  top: 16px;
+  bottom: 16px;
+  width: 16px;
+}
+
+.edge-side-hit.hit-left {
+  left: 2px;
+}
+
+.edge-side-hit.hit-right {
+  right: 2px;
+}
+
+.edge-side-hit.hit-left .edge-side-bar,
+.edge-side-hit.hit-right .edge-side-bar {
+  width: 4px;
+  height: 100%;
+}
+
+/* 侧边栏总开关关掉时，下面这些外观项淡出显示 */
+.is-muted-item {
+  opacity: 0.55;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
 .note-bg-chip {
@@ -2599,5 +2798,117 @@ function getPromptPreview(prompt: string): string {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ============================================
+   系统设置风格（macOS 设置面板口径）
+   背景纯灰、白色圆角卡片、行内左标签右控件、
+   顶部图标+文字的横排标签
+   ============================================ */
+.settings-header {
+  position: relative;
+  justify-content: center;
+  padding: 10px 14px 6px;
+}
+
+.settings-header .back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+}
+
+.settings-header .back-btn:hover {
+  background: var(--st-sunken);
+  color: var(--st-text);
+}
+
+.settings-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--st-text);
+}
+
+.settings-body {
+  gap: 12px;
+  padding: 0 12px 14px;
+}
+
+.settings-nav {
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--st-nav-bg);
+  border: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.settings-nav .nav-item {
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-nav .nav-item i {
+  width: auto;
+  height: auto;
+  font-size: 18px;
+  margin: 0;
+}
+
+.settings-nav .nav-item span {
+  font-size: 11px;
+  line-height: 1.1;
+  font-weight: 500;
+}
+
+.settings-nav .nav-item:hover {
+  background: rgba(120, 120, 128, 0.12);
+}
+
+.settings-nav .nav-item.active {
+  background: var(--st-nav-active);
+  color: var(--st-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+.settings-nav .nav-item.active::before {
+  display: none;
+}
+
+.settings-section {
+  border-radius: 10px;
+  background: var(--st-panel);
+  border: 1px solid var(--st-panel-border);
+  box-shadow: var(--st-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.setting-item {
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.setting-name {
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.setting-item-inline {
+  min-height: 41px;
+}
+
+/* 标签页容器里的说明文字收敛一点，贴近系统设置的密度 */
+.setting-desc {
+  font-size: 11px;
+  line-height: 1.45;
 }
 </style>

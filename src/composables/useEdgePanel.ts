@@ -43,9 +43,13 @@ const PREFS_EVENT = 'maiknote:edge-prefs'
 
 /** 边缘面板外观偏好（设置页 → 主窗口 → Rust + 边缘窗口） */
 export interface EdgePrefsPayload {
+  enabled: boolean
   side: 'right' | 'left' | 'top' | 'bottom'
   panelWidth: number
-  triggerWidth: number
+  triggerSpan: number
+  stripWidth: number
+  stripColor: string
+  copyOnSelect: boolean
 }
 
 interface EdgeEditPayload {
@@ -144,6 +148,16 @@ export function useEdgePanel() {
 
   async function syncEdge() {
     const payload = buildPayload()
+    // 侧边栏总开关关掉：贴边条直接隐藏，快捷键钉住也不再生效
+    if (!settingStore.settings.edgeEnabled) {
+      if (edgeVisible) {
+        edgeVisible = false
+        edgePinned = false
+        await invoke('hide_edge_window').catch(() => {})
+      }
+      await emit(NOTES_EVENT, []).catch(() => {})
+      return
+    }
     // 没有置顶笔记时直接把边缘条收起来（快捷键钉住时保持显示）
     if (payload.length === 0 && !edgePinned) {
       if (edgeVisible) {
@@ -188,20 +202,30 @@ export function useEdgePanel() {
   /** 把贴边方向 / 展开宽度 / 触发厚度同步给 Rust 与边缘窗口 */
   async function pushPrefs() {
     const prefs: EdgePrefsPayload = {
+      enabled: settingStore.settings.edgeEnabled,
       side: settingStore.settings.edgePosition,
       panelWidth: settingStore.settings.edgeWidth,
-      triggerWidth: settingStore.settings.edgeTriggerWidth,
+      triggerSpan: settingStore.settings.edgeTriggerSpan,
+      stripWidth: settingStore.settings.edgeStripWidth,
+      stripColor: settingStore.settings.edgeStripColor,
+      copyOnSelect: settingStore.settings.edgeCopyOnSelect,
     }
     await invoke('set_edge_prefs', { ...prefs }).catch(() => {})
     await emit(PREFS_EVENT, prefs).catch(() => {})
   }
 
   void pushPrefs()
+  // 总开关一改就立刻显隐贴边条（外观类改动走 pushPrefs 就够了）
+  watch(() => settingStore.settings.edgeEnabled, () => scheduleSync(0))
   watch(
     () => [
+      settingStore.settings.edgeEnabled,
       settingStore.settings.edgePosition,
       settingStore.settings.edgeWidth,
-      settingStore.settings.edgeTriggerWidth,
+      settingStore.settings.edgeTriggerSpan,
+      settingStore.settings.edgeStripWidth,
+      settingStore.settings.edgeStripColor,
+      settingStore.settings.edgeCopyOnSelect,
     ].join('|'),
     () => {
       void pushPrefs()

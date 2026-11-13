@@ -1,4 +1,4 @@
-// rebuild trigger 1794493368
+// rebuild trigger 1794532729
 pub mod autostart;
 
 use std::collections::HashMap;
@@ -1621,22 +1621,30 @@ fn list_local_interfaces() -> Result<Vec<LocalInterface>, String> {
     Ok(interfaces)
 }
 
-/// 边缘面板折叠态厚度默认值（逻辑像素）
-const EDGE_STRIP_WIDTH: f64 = 12.0;
+/// 折叠态窗口在小活条两边各留的余量（逻辑像素），与前端 STRIP_PADDING 保持一致
+const EDGE_STRIP_PADDING: f64 = 3.0;
+/// 小白条粗细默认值（逻辑像素，与前端 DEFAULT_STRIP_W 保持一致）
+const EDGE_STRIP_WIDTH_DEFAULT: f64 = 5.0;
 /// 边缘面板展开态宽度默认值（逻辑像素，与前端默认值保持一致）
 const EDGE_EXPANDED_WIDTH: f64 = 320.0;
+/// 触发段占可用长边的默认比例（%）
+const EDGE_TRIGGER_SPAN_DEFAULT: f64 = 33.0;
 
 /// 贴边方向：0=右 1=左 2=上 3=下
 static EDGE_SIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 /// 展开态厚度（逻辑像素，可在设置里调）
 static EDGE_PANEL_THICKNESS: Mutex<f64> = Mutex::new(EDGE_EXPANDED_WIDTH);
-/// 折叠态厚度 / 触发带厚度（逻辑像素，可在设置里调）
-static EDGE_TRIGGER: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH);
+/// 小白条粗细（逻辑像素，设置里可调）；折叠态窗口厚度 = 这个值 + 两边余量
+static EDGE_STRIP_WIDTH: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH_DEFAULT);
+/// 触发段长度占可用长边的比例（%，10-100，可在设置里调，沿边居中）
+static EDGE_TRIGGER_SPAN_PERCENT: Mutex<f64> = Mutex::new(EDGE_TRIGGER_SPAN_DEFAULT);
 
+/// 侧边栏总开关：关掉后贴边条隐藏，热区与快捷键一律失效
+static EDGE_ENABLED: AtomicBool = AtomicBool::new(true);
 /// 快捷键钉住的展开态：钉住后鼠标移开也不再收起
 static EDGE_PINNED: AtomicBool = AtomicBool::new(false);
 /// 边缘窗口当前厚度（逻辑像素）：用于区分展开/折叠态，避免收起动画中被热区误判重新展开
-static EDGE_CURRENT_WIDTH: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH);
+static EDGE_CURRENT_WIDTH: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH_DEFAULT + EDGE_STRIP_PADDING);
 /// 上次实际下发的窗口几何 (x, y, w, h)：完全相同时不再重复设置，避免窗口反复重排导致闪烁
 static EDGE_LAST_GEOM: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
 /// 主动收起后的静默期（毫秒时间戳）：期间一律视为「不展开」，
@@ -1651,8 +1659,12 @@ static EDGE_TOGGLE_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static EDGE_VISIBLE: AtomicBool = AtomicBool::new(false);
 /// 光标当前是否落在边缘热区内（用于去重 emit）
 static EDGE_HOVERED: AtomicBool = AtomicBool::new(false);
-/// 热区矩形（逻辑坐标，CGEvent 的左上原点）：[x0, x1, y0, y1]
+/// 热区矩形（逻辑坐标，CGEvent 的左上原点）：[x0, x1, y0, y1] = 窗口当前实际占位
 static EDGE_HOTZONE: Mutex<[f64; 4]> = Mutex::new([0.0, 0.0, 0.0, 0.0]);
+/// 触发带矩形（逻辑坐标）：永远按设置里的「触发宽度」算，不随面板展开变宽。
+/// 展开态下它只用于「保持」，不再把整块面板当成触发范围，
+/// 否则只要光标停在展开区域里就等同于一直在触发，设置里的触发宽度形同虚设
+static EDGE_TRIGGER_ZONE: Mutex<[f64; 4]> = Mutex::new([0.0, 0.0, 0.0, 0.0]);
 /// 热区轮询线程是否已启动
 static EDGE_TRACKER_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -1679,14 +1691,21 @@ fn start_edge_hover_tracker(app: AppHandle) {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(60));
             ticks = ticks.wrapping_add(1);
+            let trigger = edge_trigger_thickness();
+            let mut current = trigger;
             let mut inside = false;
-            if EDGE_VISIBLE.load(Ordering::Relaxed) {
-                let zone = *EDGE_HOTZONE.lock().unwrap_or_else(|e| e.into_inner());
-                if zone[2] > zone[3] || zone[1] <= zone[0] {
-                    inside = false;
-                } else if let Some((x, y)) = edge_cursor_location() {
-                    // 热区始终等于窗口当前实际占位，四个方向通用
-                    inside = x >= zone[0] && x <= zone[1] && y >= zone[2] && y <= zone[3];
+            let cursor = edge_cursor_location();
+            if EDGE_ENABLED.load(Ordering::Relaxed) && EDGE_VISIBLE.load(Ordering::Relaxed) {
+                current = *EDGE_CURRENT_WIDTH.lock().unwrap_or_else(|e| e.into_inner());
+                let band = *EDGE_TRIGGER_ZONE.lock().unwrap_or_else(|e| e.into_inner());
+                let body = *EDGE_HOTZONE.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((x, y)) = cursor {
+                    let hit = |z: [f64; 4]| z[3] > z[2] && z[1] > z[0]
+                        && x >= z[0] && x <= z[1] && y >= z[2] && y <= z[3];
+                    // 触发只认设置的触发带宽；已经展开时，落在面板本身上也算停留
+                    let in_band = hit(band);
+                    let in_body = current > trigger + 0.5 && hit(body);
+                    inside = in_band || in_body;
                 }
             }
             // 钉住时始终视为「需要展开」，鼠标移开也不收起
@@ -1700,6 +1719,17 @@ fn start_edge_hover_tracker(app: AppHandle) {
             } else {
                 EDGE_PINNED.load(Ordering::Relaxed) || inside
             };
+            // 兜底收起：不依赖前端的 setTimeout + invoke。
+            // 边缘窗口没有焦点，webview 的定时器会被系统节流，一旦收起那次调用被吞掉，
+            // 窗口就会一直停在面板宽度，那块透明区域全都算热区——表现就是「触发宽度调到最小也没用」。
+            if !effective && !suppressed && EDGE_VISIBLE.load(Ordering::Relaxed) && current > trigger + 0.5 {
+                if let Some(win) = app.get_webview_window("edge") {
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let _ = apply_edge_layout(&handle, &win, trigger);
+                    });
+                }
+            }
             let changed = EDGE_HOVERED.swap(effective, Ordering::Relaxed) != effective;
             // 状态变化时立即通知；此外每 20 拍补一次心跳，
             // 避免前端热更新重挂载后错过一次状态、面板卡在折叠宽度
@@ -1732,8 +1762,18 @@ fn edge_panel_thickness() -> f64 {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+/// 折叠态厚度：固定 1px 细条，不再跟着设置走
 fn edge_trigger_thickness() -> f64 {
-    *EDGE_TRIGGER.lock().unwrap_or_else(|e| e.into_inner())
+    let strip = *EDGE_STRIP_WIDTH.lock().unwrap_or_else(|e| e.into_inner());
+    (strip + EDGE_STRIP_PADDING).clamp(6.0, 24.0)
+}
+
+/// 触发段占比（%，10-100）
+fn edge_trigger_span_percent() -> f64 {
+    (*EDGE_TRIGGER_SPAN_PERCENT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()))
+    .clamp(10.0, 100.0)
 }
 
 /// 按贴边方向算窗口矩形（物理像素）：0=右 1=左 2=上 3=下
@@ -1745,6 +1785,25 @@ fn edge_rect(side: u8, work: (i32, i32, i32, i32), thickness_px: u32) -> (i32, i
         1 => (wx, wy, t, wh as u32),
         2 => (wx, wy, ww as u32, t),
         _ => (wx, wy + wh - t as i32, ww as u32, t),
+    }
+}
+
+/// 沿边居中截出的触发段（逻辑坐标）：左右贴边取竖直中段，上下贴边取水平中段。
+/// 段长按设置里的「触发高度」百分比算，两端留空不触发。
+fn edge_trigger_span(side: u8, area: [f64; 4]) -> [f64; 4] {
+    let [lx, ly, lw, lh] = area;
+    let pct = edge_trigger_span_percent();
+    match side {
+        0 | 1 => {
+            let len = (lh * pct / 100.0).clamp(1.0_f64.min(lh), lh);
+            let y0 = ly + (lh - len) / 2.0;
+            [lx, y0, lw, len]
+        }
+        _ => {
+            let len = (lw * pct / 100.0).clamp(1.0_f64.min(lw), lw);
+            let x0 = lx + (lw - len) / 2.0;
+            [x0, ly, len, lh]
+        }
     }
 }
 
@@ -1798,7 +1857,7 @@ fn apply_edge_layout<R: tauri::Runtime>(
             .map_err(|e| e.to_string())?;
     }
 
-    // 同步热区（逻辑坐标）：严格等于窗口当前厚度，即折叠态只有那条细条本身能触发
+    // 同步热区（逻辑坐标）：窗口占位 + 固定触发带
     let lx = work.position.x as f64 / scale;
     let ly = work.position.y as f64 / scale;
     let lw = work.size.width as f64 / scale;
@@ -1806,6 +1865,13 @@ fn apply_edge_layout<R: tauri::Runtime>(
     let zone = edge_zone(side, [lx, ly, lw, lh], thickness);
     if let Ok(mut z) = EDGE_HOTZONE.lock() {
         *z = zone;
+    }
+    // 触发带：法线方向固定贴边 3pt，长度取设置里的「触发高度」百分比、沿边居中，
+    // 面板展开（thickness = 面板宽度）也不会把触发范围撑大。
+    let span = edge_trigger_span(side, [lx, ly, lw, lh]);
+    let band = edge_zone(side, span, edge_trigger_thickness());
+    if let Ok(mut z) = EDGE_TRIGGER_ZONE.lock() {
+        *z = band;
     }
     if let Ok(mut current) = EDGE_CURRENT_WIDTH.lock() {
         *current = thickness;
@@ -1906,6 +1972,9 @@ static EDGE_WINDOW_STYLED: AtomicBool = AtomicBool::new(false);
 fn init_edge_window(app: AppHandle) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
+        if !EDGE_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
         let Some(win) = handle.get_webview_window("edge") else {
             return;
         };
@@ -1928,7 +1997,9 @@ fn set_edge_prefs(
     app: AppHandle,
     side: String,
     panel_width: f64,
-    trigger_width: f64,
+    trigger_span: f64,
+    strip_width: f64,
+    enabled: bool,
 ) -> Result<(), String> {
     let side_id = match side.as_str() {
         "left" => 1u8,
@@ -1940,9 +2011,13 @@ fn set_edge_prefs(
     if let Ok(mut v) = EDGE_PANEL_THICKNESS.lock() {
         *v = panel_width.clamp(120.0, 1200.0);
     }
-    if let Ok(mut v) = EDGE_TRIGGER.lock() {
-        *v = trigger_width.clamp(4.0, 64.0);
+    if let Ok(mut v) = EDGE_TRIGGER_SPAN_PERCENT.lock() {
+        *v = trigger_span.clamp(10.0, 100.0);
     }
+    if let Ok(mut v) = EDGE_STRIP_WIDTH.lock() {
+        *v = strip_width.clamp(3.0, 16.0);
+    }
+    EDGE_ENABLED.store(enabled, Ordering::Relaxed);
     // 几何变了就强制重排一次
     if let Ok(mut last) = EDGE_LAST_GEOM.lock() {
         *last = None;
@@ -1950,8 +2025,20 @@ fn set_edge_prefs(
     let handle = app.clone();
     app.run_on_main_thread(move || {
         if let Some(win) = handle.get_webview_window("edge") {
-            let expanded = EDGE_PINNED.load(Ordering::Relaxed) || EDGE_HOVERED.load(Ordering::Relaxed);
-            let thickness = if expanded {
+            // 总开关关掉：窗口直接收起来，状态一并复位
+            if !enabled {
+                EDGE_VISIBLE.store(false, Ordering::Relaxed);
+                EDGE_HOVERED.store(false, Ordering::Relaxed);
+                EDGE_PINNED.store(false, Ordering::Relaxed);
+                let _ = win.hide();
+                return;
+            }
+            // 只看窗口此刻到底有多厚，不看 hover 状态：
+            // hover 只是个瞬时信号，拿它决定厚度会在拖设置滑块时把窗口撑成面板宽度并留在那儿
+            let current = *EDGE_CURRENT_WIDTH.lock().unwrap_or_else(|e| e.into_inner());
+            let open = EDGE_PINNED.load(Ordering::Relaxed)
+                || current > edge_trigger_thickness() + 0.5;
+            let thickness = if open {
                 edge_panel_thickness()
             } else {
                 edge_trigger_thickness()
@@ -1965,7 +2052,7 @@ fn set_edge_prefs(
 /// 设置边缘面板宽度（展开 / 折叠动画逐帧调用）
 #[tauri::command]
 fn set_edge_width(app: AppHandle, width: f64) -> Result<(), String> {
-    let clamped = width.clamp(4.0, 1400.0);
+    let clamped = width.clamp(1.0, 1400.0);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         if let Some(win) = handle.get_webview_window("edge") {
@@ -1998,6 +2085,9 @@ fn toggle_edge_panel_impl(app: &AppHandle) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    if !EDGE_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let last = EDGE_TOGGLE_AT.swap(now, Ordering::SeqCst);
     if now.saturating_sub(last) < 120 {
         return;

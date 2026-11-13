@@ -15,14 +15,34 @@ locale.value = settingStore.settings.language || locale.value
 
 type EdgeSide = 'right' | 'left' | 'top' | 'bottom'
 
-/** 折叠态厚度默认值，实际值来自设置（edgeTriggerWidth） */
-const DEFAULT_TRIGGER = 12
+/** 折叠条比小白条两边各留的余量（px），与后端 EDGE_STRIP_PADDING 保持一致 */
+const STRIP_PADDING = 3
+/** 小白条粗细默认值（px），实际值来自设置（edgeStripWidth） */
+const DEFAULT_STRIP_W = 5
+/** 小白条颜色默认值，实际值来自设置（edgeStripColor） */
+const DEFAULT_STRIP_COLOR = '#ffffff'
 /** 展开态厚度默认值，实际值来自设置（edgeWidth） */
 const DEFAULT_PANEL = 320
+/** 触发段占比默认值（%，与后端 EDGE_TRIGGER_SPAN_DEFAULT 一致） */
+const DEFAULT_SPAN = 33
 
 const side = ref<EdgeSide>('right')
-const triggerWidth = ref(DEFAULT_TRIGGER)
+/** 选中文字后自动复制（设置里可关，默认开） */
+const copyOnSelect = ref(true)
+/** 小白条粗细（px，设置里可调） */
+const stripW = ref(DEFAULT_STRIP_W)
+/** 小白条颜色（设置里可调） */
+const stripColor = ref(DEFAULT_STRIP_COLOR)
+/** 折叠态窗口厚度：小白条 + 两边余量，让白条完整露在窗口里 */
+const stripWidth = ref(DEFAULT_STRIP_W + STRIP_PADDING)
 const panelWidth = ref(DEFAULT_PANEL)
+/** 触发高度（%）：贴边小白条的长度，也就是真正能触发面板的段落 */
+const triggerSpan = ref(DEFAULT_SPAN)
+
+/** 小白条粗细变了，折叠态窗口厚度跟着变 */
+function syncStripThickness() {
+  stripWidth.value = stripW.value + STRIP_PADDING
+}
 
 /** 从本地设置里读一次外观偏好（边缘窗口独立上下文，等主窗推送前先有个正确初值） */
 function readPrefsFromStorage() {
@@ -32,11 +52,18 @@ function readPrefsFromStorage() {
     const parsed = JSON.parse(raw) as {
       edgePosition?: EdgeSide
       edgeWidth?: number
-      edgeTriggerWidth?: number
+      edgeTriggerSpan?: number
+      edgeStripWidth?: number
+      edgeStripColor?: string
+      edgeCopyOnSelect?: boolean
     }
     if (parsed.edgePosition) side.value = parsed.edgePosition
     if (typeof parsed.edgeWidth === 'number') panelWidth.value = parsed.edgeWidth
-    if (typeof parsed.edgeTriggerWidth === 'number') triggerWidth.value = parsed.edgeTriggerWidth
+    if (typeof parsed.edgeTriggerSpan === 'number') triggerSpan.value = parsed.edgeTriggerSpan
+    if (typeof parsed.edgeStripWidth === 'number') stripW.value = parsed.edgeStripWidth
+    if (typeof parsed.edgeStripColor === 'string' && parsed.edgeStripColor) stripColor.value = parsed.edgeStripColor
+    if (typeof parsed.edgeCopyOnSelect === 'boolean') copyOnSelect.value = parsed.edgeCopyOnSelect
+    syncStripThickness()
   } catch {
     /* 设置读不出来就用默认值 */
   }
@@ -45,11 +72,12 @@ function readPrefsFromStorage() {
 readPrefsFromStorage()
 
 const notes = ref<EdgeNotePayload[]>([])
+
 const expanded = ref(false)
 const flash = ref<{ id: string; label: string } | null>(null)
 let flashTimer: ReturnType<typeof setTimeout> | null = null
 
-let currentWidth = DEFAULT_TRIGGER
+let currentWidth = stripWidth.value
 let animFrame = 0
 let collapseTimer: ReturnType<typeof setTimeout> | null = null
 const unlisteners: UnlistenFn[] = []
@@ -88,7 +116,7 @@ function collapse(delay = 240) {
     collapseTimer = null
     if (!expanded.value) return
     expanded.value = false
-    animateTo(triggerWidth.value)
+    animateTo(stripWidth.value)
   }, delay)
 }
 
@@ -100,7 +128,7 @@ async function hidePanel() {
     collapseTimer = null
   }
   expanded.value = false
-  currentWidth = triggerWidth.value
+  currentWidth = stripWidth.value
   closeMenu()
   await invoke('collapse_edge_panel').catch(() => {})
 }
@@ -226,6 +254,28 @@ function cancelEdit(note: EdgeNotePayload, event: KeyboardEvent) {
     el.innerText = note.content || ''
     el.blur()
   }
+}
+
+/** 选中即复制：拖选松开后把选中的文字写进剪贴板 */
+async function copySelectionOnSelect(event: MouseEvent) {
+  if (!copyOnSelect.value) return
+  if (event.button !== 0) return
+  if (editingId.value) return
+  // 菜单/按钮上的点击不处理
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.ctx-menu, button')) return
+  // 等浏览器把选区定下来
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed) return
+  const text = selection.toString().trim()
+  if (!text) return
+  const anchor = selection.anchorNode
+  const element = anchor instanceof Element ? anchor : anchor?.parentElement
+  const card = element?.closest<HTMLElement>('.note-card')
+  const ok = await writeClipboard(text)
+  const noteId = card?.dataset.noteId
+  if (ok && noteId) flashNote(noteId, t('edge.selectionCopied'))
 }
 
 async function copyNote(note: EdgeNotePayload) {
@@ -362,24 +412,37 @@ onMounted(async () => {
       notes.value = Array.isArray(event.payload) ? event.payload : []
       if (notes.value.length === 0) {
         expanded.value = false
-        currentWidth = triggerWidth.value
+        currentWidth = stripWidth.value
       }
     }),
   )
   // 设置页改了贴边方向 / 尺寸
   unlisteners.push(
-    await listen<{ side: EdgeSide; panelWidth: number; triggerWidth: number }>(
+    await listen<{
+      side: EdgeSide
+      panelWidth: number
+      triggerSpan?: number
+      stripWidth?: number
+      stripColor?: string
+      copyOnSelect?: boolean
+    }>(
       'maiknote:edge-prefs',
       event => {
         const prefs = event.payload
         if (!prefs) return
+        if (typeof prefs.copyOnSelect === 'boolean') copyOnSelect.value = prefs.copyOnSelect
         if (prefs.side) side.value = prefs.side
         if (typeof prefs.panelWidth === 'number') panelWidth.value = prefs.panelWidth
-        if (typeof prefs.triggerWidth === 'number') triggerWidth.value = prefs.triggerWidth
+        // 触发高度变了，小白条跟着变长/变短
+        if (typeof prefs.triggerSpan === 'number') triggerSpan.value = prefs.triggerSpan
+        // 小白条粗细 / 颜色变了，折叠条厚度跟着算
+        if (typeof prefs.stripWidth === 'number') stripW.value = prefs.stripWidth
+        if (typeof prefs.stripColor === 'string' && prefs.stripColor) stripColor.value = prefs.stripColor
+        syncStripThickness()
         // 折叠态下厚度变了要按新厚度归位
         if (!expanded.value) {
-          currentWidth = triggerWidth.value
-          void applyWidth(triggerWidth.value)
+          currentWidth = stripWidth.value
+          void applyWidth(stripWidth.value)
         } else {
           currentWidth = panelWidth.value
           void applyWidth(panelWidth.value)
@@ -399,9 +462,10 @@ onMounted(async () => {
     }),
   )
   // 组件重挂载（含热更新）后把窗口宽度归位到折叠态，避免残留展开宽度
-  currentWidth = triggerWidth.value
-  void applyWidth(triggerWidth.value)
+  currentWidth = stripWidth.value
+  void applyWidth(stripWidth.value)
   // 菜单点外面 / Esc 关闭
+  window.addEventListener('mouseup', copySelectionOnSelect)
   window.addEventListener('mousedown', onDocumentPointerDown, true)
   window.addEventListener('keydown', onDocumentKeydown)
   window.addEventListener('scroll', closeMenu, true)
@@ -416,6 +480,7 @@ onUnmounted(() => {
   if (flashTimer) clearTimeout(flashTimer)
   unlisteners.forEach(fn => fn())
   unlisteners.length = 0
+  window.removeEventListener('mouseup', copySelectionOnSelect)
   window.removeEventListener('mousedown', onDocumentPointerDown, true)
   window.removeEventListener('keydown', onDocumentKeydown)
   window.removeEventListener('scroll', closeMenu, true)
@@ -426,12 +491,17 @@ onUnmounted(() => {
   <div
     class="edge-root"
     :class="[`side-${side}`, { 'is-expanded': expanded }]"
-    :style="{ '--edge-trigger': triggerWidth + 'px', '--edge-panel': panelWidth + 'px' }"
+    :style="{
+      '--edge-trigger': stripWidth + 'px',
+      '--edge-panel': panelWidth + 'px',
+      '--edge-span': triggerSpan + '%',
+      '--strip-w': stripW + 'px',
+      '--strip-color': stripColor,
+    }"
   >
-    <!-- 折叠态触发条 -->
+    <!-- 折叠态触发条：贴边的一根小白条，长度 = 触发高度，居中 -->
     <div class="edge-strip" @click="expand">
       <span class="strip-handle" />
-      <span class="strip-icon">📌</span>
     </div>
 
     <!-- 展开态卡片面板 -->
@@ -573,79 +643,47 @@ onUnmounted(() => {
   user-select: none;
 }
 
-/* ---------- 触发条 ---------- */
+/* ---------- 触发条（贴边小白条） ---------- */
 
 .edge-strip {
   position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   cursor: pointer;
-  transition: background 0.2s ease, opacity 0.18s ease;
+  background: transparent;
 }
 
 .side-right .edge-strip {
   top: 0;
   right: 0;
-  width: var(--edge-trigger, 12px);
+  width: 100%;
   height: 100%;
   flex-direction: column;
-  background: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.18));
-}
-
-.side-right .edge-strip:hover {
-  background: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.28));
 }
 
 .side-left .edge-strip {
   top: 0;
   left: 0;
-  width: var(--edge-trigger, 12px);
+  width: 100%;
   height: 100%;
   flex-direction: column;
-  background: linear-gradient(to left, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.18));
-}
-
-.side-left .edge-strip:hover {
-  background: linear-gradient(to left, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.28));
 }
 
 .side-top .edge-strip {
   top: 0;
   left: 0;
-  height: var(--edge-trigger, 12px);
   width: 100%;
+  height: 100%;
   flex-direction: row;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.18));
-}
-
-.side-top .edge-strip:hover {
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.28));
 }
 
 .side-bottom .edge-strip {
   bottom: 0;
   left: 0;
-  height: var(--edge-trigger, 12px);
   width: 100%;
+  height: 100%;
   flex-direction: row;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.18));
-}
-
-.side-bottom .edge-strip:hover {
-  background: linear-gradient(to top, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.28));
-}
-
-.side-top .strip-handle,
-.side-bottom .strip-handle {
-  width: 64px;
-  height: 4px;
-}
-
-.side-top .strip-icon,
-.side-bottom .strip-icon {
-  writing-mode: horizontal-tb;
 }
 
 .is-expanded .edge-strip {
@@ -653,19 +691,42 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
+/* 小白条：长度 = 触发高度（居中），白色实心 + 深色描边 + 双向柔光，浅色背景上也一眼能看见 */
 .strip-handle {
-  width: 4px;
-  height: 64px;
+  display: block;
+  width: var(--strip-w, 5px);
+  height: var(--edge-span, 33%);
+  min-height: 48px;
+  max-height: 100%;
   border-radius: 999px;
-  background: rgba(120, 130, 150, 0.65);
+  background: var(--strip-color, #ffffff);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.42),
+    0 0 8px rgba(0, 0, 0, 0.3),
+    0 0 14px rgba(255, 255, 255, 0.9);
+  transition: background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 
-.strip-icon {
-  font-size: 9px;
-  line-height: 1;
-  writing-mode: vertical-rl;
-  opacity: 0.75;
-  filter: grayscale(0.2);
+.side-top .strip-handle,
+.side-bottom .strip-handle {
+  width: var(--edge-span, 33%);
+  height: var(--strip-w, 5px);
+  min-width: 48px;
+  max-width: 100%;
+}
+
+.edge-strip:hover .strip-handle {
+  background: var(--strip-color, #ffffff);
+  filter: brightness(1.12);
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.5),
+    0 0 12px rgba(0, 0, 0, 0.34),
+    0 0 20px rgba(255, 255, 255, 1);
+}
+
+.edge-strip:active .strip-handle {
+  transform: scale(0.96);
 }
 
 /* ---------- 面板 ---------- */

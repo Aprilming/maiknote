@@ -865,7 +865,7 @@ onBeforeUnmount(() => {
 
     <div class="tree-body" @contextmenu="openBlankContextMenu">
       <!-- 置顶固顶区：所有目录下的置顶笔记都固定显示在这里，不受目录展开/当前目录影响 -->
-      <template v-if="noteStore.allPinnedNotes.length">
+      <template v-if="settingStore.settings.fileTreePinnedSection !== false && noteStore.allPinnedNotes.length">
         <div
           class="tree-row pinned-head"
           @click="togglePinned"

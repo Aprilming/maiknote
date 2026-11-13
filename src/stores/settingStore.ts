@@ -89,9 +89,14 @@ export interface AppSettings {
   windowAlpha: number // 窗口透明度 0.1 - 1.0
   alwaysOnTop: boolean
   edgeAutoHide: boolean // 边缘面板：鼠标移开是否自动收起
+  edgeEnabled: boolean // 侧边栏总开关：关掉后贴边条与快捷键都不再弹出
   edgePosition: EdgePosition // 边缘面板贴哪一边
   edgeWidth: number // 边缘面板展开宽度（px）
-  edgeTriggerWidth: number // 边缘面板触发/收起时的厚度（px）
+  edgeTriggerSpan: number // 沿边可触发长度占比（%，10-100，沿边居中；也就是贴边小白条的长度）
+  edgeStripWidth: number // 贴边小白条的粗细（px）
+  edgeStripColor: string // 贴边小白条的颜色（#rrggbb）
+  edgeCopyOnSelect: boolean // 边缘面板里选中文字后是否自动复制
+  fileTreePinnedSection: boolean // 文件树里是否显示「置顶笔记」大类
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
@@ -132,9 +137,14 @@ export const useSettingStore = defineStore('setting', () => {
     windowAlpha: 1.0,
     alwaysOnTop: false,
     edgeAutoHide: true,
+    edgeEnabled: true,
     edgePosition: 'right',
     edgeWidth: 320,
-    edgeTriggerWidth: 12,
+    edgeTriggerSpan: 33,
+    edgeStripWidth: 5,
+    edgeStripColor: '#ffffff',
+    edgeCopyOnSelect: true,
+    fileTreePinnedSection: true,
     titleBarBehavior: 'auto-hide',
     pathClickAction: 'copy',
     treeOrder: 'folders',
@@ -227,6 +237,14 @@ export const useSettingStore = defineStore('setting', () => {
           ...settings.value,
           ...parsed,
           tabSize: clampTabSize(parsed.tabSize ?? settings.value.tabSize),
+          edgeEnabled:
+            typeof parsed.edgeEnabled === 'boolean' ? parsed.edgeEnabled : settings.value.edgeEnabled,
+          edgeStripWidth:
+            typeof parsed.edgeStripWidth === 'number' ? parsed.edgeStripWidth : settings.value.edgeStripWidth,
+          edgeStripColor:
+            typeof parsed.edgeStripColor === 'string' && parsed.edgeStripColor
+              ? parsed.edgeStripColor
+              : settings.value.edgeStripColor,
           shortcuts: { ...settings.value.shortcuts, ...(parsed.shortcuts || {}) },
           customEditorStyle: {
             light: { ...(settings.value.customEditorStyle?.light || {}), ...(parsed.customEditorStyle?.light || {}) },
@@ -259,9 +277,14 @@ export const useSettingStore = defineStore('setting', () => {
       windowAlpha: 1.0,
       alwaysOnTop: false,
       edgeAutoHide: true,
+      edgeEnabled: true,
       edgePosition: 'right',
       edgeWidth: 320,
-      edgeTriggerWidth: 12,
+      edgeTriggerSpan: 33,
+      edgeStripWidth: 5,
+      edgeStripColor: '#ffffff',
+      edgeCopyOnSelect: true,
+      fileTreePinnedSection: true,
       titleBarBehavior: 'auto-hide',
       pathClickAction: 'copy',
       treeOrder: 'folders',
