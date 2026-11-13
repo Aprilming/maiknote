@@ -1,0 +1,12 @@
+services:
+  site:
+    build: .
+    image: maiknote-site:latest
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:\${PORT}/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

@@ -131,11 +131,12 @@ function onDefaultNoteBgInput(e: Event) {
 }
 
 // 分类导航
-type CategoryKey = 'general' | 'ai' | 'sidebar' | 'shortcuts' | 'about'
+type CategoryKey = 'general' | 'fileTree' | 'ai' | 'sidebar' | 'shortcuts' | 'about'
 const activeCategory = ref<CategoryKey>('general')
 
 const categories = computed(() => [
   { key: 'general' as const, icon: 'i-mdi-tune', label: t('settings.general') },
+  { key: 'fileTree' as const, icon: 'i-mdi-file-tree-outline', label: t('settings.fileTree') },
   { key: 'ai' as const, icon: 'i-mdi-robot', label: t('settings.ai') },
   { key: 'sidebar' as const, icon: 'i-mdi-dock-right', label: t('settings.sidebar') },
   { key: 'shortcuts' as const, icon: 'i-mdi-keyboard', label: t('settings.shortcuts') },
@@ -1128,6 +1129,72 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
           <div class="setting-item">
             <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.defaultNoteBg') }}</span>
+              <span class="setting-value">{{ defaultNoteBgName }}</span>
+            </div>
+            <span class="setting-desc">{{ $t('settings.defaultNoteBgDesc') }}</span>
+            <div class="note-bg-grid">
+              <button
+                class="note-bg-chip note-bg-chip-none"
+                :class="{ active: !settingStore.settings.defaultNoteBackgroundColor }"
+                :title="$t('colorPicker.default')"
+                @click="setDefaultNoteBg(undefined)"
+              >
+                <i class="i-mdi-close"></i>
+              </button>
+              <button
+                v-for="color in noteBgColors"
+                :key="color.value"
+                class="note-bg-chip"
+                :class="{ active: settingStore.settings.defaultNoteBackgroundColor.toLowerCase() === color.value.toLowerCase() }"
+                :style="{ background: color.value }"
+                :title="$t(color.nameKey)"
+                @click="setDefaultNoteBg(color.value)"
+              ></button>
+              <label class="note-bg-chip note-bg-chip-custom" :title="$t('colorPicker.customColor')">
+                <i class="i-mdi-palette-outline"></i>
+                <input
+                  type="color"
+                  class="note-bg-input"
+                  :value="settingStore.settings.defaultNoteBackgroundColor || '#fff9e6'"
+                  @change="onDefaultNoteBgInput"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.ipApiUrl') }}</span>
+              <span v-if="ipApiUrlEffective === DEFAULT_IP_API_URL" class="setting-value">{{ $t('settings.ipApiUrlDefault') }}</span>
+            </div>
+            <span class="setting-desc">{{ $t('settings.ipApiUrlDesc') }}</span>
+            <input
+              type="text"
+              class="text-input"
+              :value="settingStore.settings.ipApiUrl"
+              :placeholder="DEFAULT_IP_API_URL"
+              spellcheck="false"
+              @change="settingStore.updateSettings('ipApiUrl', ($event.target as HTMLInputElement).value)"
+              @keydown.enter="($event.target as HTMLInputElement).blur()"
+            />
+            <button
+              class="link-btn"
+              type="button"
+              :disabled="ipApiUrlEffective === DEFAULT_IP_API_URL"
+              @click="settingStore.updateSettings('ipApiUrl', DEFAULT_IP_API_URL)"
+            >
+              <i class="i-mdi-restore"></i>
+              <span>{{ $t('settings.ipApiUrlReset') }}</span>
+            </button>
+          </div>
+
+        </section>
+
+        <!-- 文件树（左侧导航栏） -->
+        <section v-if="activeCategory === 'fileTree'" class="settings-section">
+          <div class="setting-item">
+            <div class="setting-label">
               <span class="setting-name">{{ $t('settings.pathClickAction') }}</span>
               <span class="setting-desc">{{ $t('settings.pathClickActionDesc') }}</span>
             </div>
@@ -1206,68 +1273,6 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
               class="alpha-slider"
               :style="{ '--fill': `${((settingStore.settings.fileTreeFontSize - 11) / 7) * 100}%` }"
             />
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.defaultNoteBg') }}</span>
-              <span class="setting-value">{{ defaultNoteBgName }}</span>
-            </div>
-            <span class="setting-desc">{{ $t('settings.defaultNoteBgDesc') }}</span>
-            <div class="note-bg-grid">
-              <button
-                class="note-bg-chip note-bg-chip-none"
-                :class="{ active: !settingStore.settings.defaultNoteBackgroundColor }"
-                :title="$t('colorPicker.default')"
-                @click="setDefaultNoteBg(undefined)"
-              >
-                <i class="i-mdi-close"></i>
-              </button>
-              <button
-                v-for="color in noteBgColors"
-                :key="color.value"
-                class="note-bg-chip"
-                :class="{ active: settingStore.settings.defaultNoteBackgroundColor.toLowerCase() === color.value.toLowerCase() }"
-                :style="{ background: color.value }"
-                :title="$t(color.nameKey)"
-                @click="setDefaultNoteBg(color.value)"
-              ></button>
-              <label class="note-bg-chip note-bg-chip-custom" :title="$t('colorPicker.customColor')">
-                <i class="i-mdi-palette-outline"></i>
-                <input
-                  type="color"
-                  class="note-bg-input"
-                  :value="settingStore.settings.defaultNoteBackgroundColor || '#fff9e6'"
-                  @change="onDefaultNoteBgInput"
-                />
-              </label>
-            </div>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.ipApiUrl') }}</span>
-              <span v-if="ipApiUrlEffective === DEFAULT_IP_API_URL" class="setting-value">{{ $t('settings.ipApiUrlDefault') }}</span>
-            </div>
-            <span class="setting-desc">{{ $t('settings.ipApiUrlDesc') }}</span>
-            <input
-              type="text"
-              class="text-input"
-              :value="settingStore.settings.ipApiUrl"
-              :placeholder="DEFAULT_IP_API_URL"
-              spellcheck="false"
-              @change="settingStore.updateSettings('ipApiUrl', ($event.target as HTMLInputElement).value)"
-              @keydown.enter="($event.target as HTMLInputElement).blur()"
-            />
-            <button
-              class="link-btn"
-              type="button"
-              :disabled="ipApiUrlEffective === DEFAULT_IP_API_URL"
-              @click="settingStore.updateSettings('ipApiUrl', DEFAULT_IP_API_URL)"
-            >
-              <i class="i-mdi-restore"></i>
-              <span>{{ $t('settings.ipApiUrlReset') }}</span>
-            </button>
           </div>
 
         </section>

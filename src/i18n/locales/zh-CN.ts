@@ -6,6 +6,7 @@ export default {
 
   'settings.title': '设置',
   'settings.general': '通用设置',
+  'settings.fileTree': '文件树',
   'settings.sidebar': '侧边栏',
   'settings.edgePosition': '屏幕位置',
   'settings.edgePositionDesc': '边缘面板贴靠哪一边，鼠标移到这一边就滑出',

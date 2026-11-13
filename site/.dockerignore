@@ -1,0 +1,6 @@
+README.md
+Dockerfile
+.dockerignore
+docker-compose.yml
+**/.DS_Store
+**/*.md

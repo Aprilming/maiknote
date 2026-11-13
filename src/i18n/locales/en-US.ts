@@ -6,6 +6,7 @@ export default {
 
   'settings.title': 'Settings',
   'settings.general': 'General',
+  'settings.fileTree': 'File tree',
   'settings.sidebar': 'Sidebar',
   'settings.edgePosition': 'Screen edge',
   'settings.edgePositionDesc': 'Which edge the panel sticks to; hover that edge to slide it out',
