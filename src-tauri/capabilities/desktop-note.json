@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-note",
+  "description": "Capability for the desktop note card windows (label: note-widget-<noteId>)",
+  "windows": ["note-widget-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-set-focus",
+    "clipboard-manager:allow-write-text",
+    "core:webview:allow-internal-toggle-devtools"
+  ]
+}
