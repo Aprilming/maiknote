@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { confirmAction } from '@/composables/useConfirm'
 import { useNoteStore } from '@/stores/noteStore'
+import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import type { Directory, Note, NoteFileEntry } from '@/types/note'
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const noteStore = useNoteStore()
+const desktopNotes = useDesktopNotes()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
 const { t } = useI18n()
@@ -491,6 +493,13 @@ function ctxDeleteDir() {
   if (dir) deleteDir(dir)
 }
 
+function ctxToggleDesktop() {
+  const note = ctxNote.value
+  if (!note) return
+  closeContextMenu()
+  void desktopNotes.toggle(note.id)
+}
+
 function ctxTogglePin() {
   const note = ctxNote.value
   closeContextMenu()
@@ -565,15 +574,18 @@ function purgePreviewing() {
 
 // ---------- 文件树颜色 ----------
 
-type ColorTarget = { type: 'dir'; id: string } | { type: 'note'; id: string }
+type ColorTarget = { type: 'dir'; id: string } | { type: 'note'; id: string } | { type: 'root' }
 
 const colorPop = ref<{ x: number; y: number; target: ColorTarget } | null>(null)
 
 const colorPopValue = computed<string | undefined>(() => {
   const pop = colorPop.value
   if (!pop) return undefined
-  if (pop.target.type === 'dir') return directoryStore.getDirectory(pop.target.id)?.color
-  return noteStore.notes.find(n => n.id === pop.target.id)?.color
+  const target = pop.target
+  if (target.type === 'root') return directoryStore.rootDirColor
+  if (target.type === 'dir') return directoryStore.getDirectory(target.id)?.color
+  if (target.type === 'note') return noteStore.notes.find(n => n.id === target.id)?.color
+  return undefined
 })
 
 function openColorPopAt(x: number, y: number, target: ColorTarget) {
@@ -584,6 +596,13 @@ function openColorPopAt(x: number, y: number, target: ColorTarget) {
     y: Math.max(6, Math.min(y, window.innerHeight - height - 8)),
     target,
   }
+}
+
+function ctxRootDirColor() {
+  const pos = ctxMenu.value
+  closeContextMenu()
+  if (!pos) return
+  openColorPopAt(pos.x, pos.y, { type: 'root' })
 }
 
 function ctxDirColor() {
@@ -610,10 +629,13 @@ function applyTreeColor(color: string | undefined) {
   const pop = colorPop.value
   colorPop.value = null
   if (!pop) return
-  if (pop.target.type === 'dir') {
-    void directoryStore.setDirectoryColor(pop.target.id, color)
-  } else {
-    noteStore.updateNote(pop.target.id, { color })
+  const target = pop.target
+  if (target.type === 'root') {
+    void directoryStore.setRootDirColor(color)
+  } else if (target.type === 'dir') {
+    void directoryStore.setDirectoryColor(target.id, color)
+  } else if (target.type === 'note') {
+    noteStore.updateNote(target.id, { color })
   }
 }
 
@@ -720,7 +742,7 @@ function beginDrag(e: PointerEvent, mode: 'note' | 'dir', id: string, label: str
   if (mode === 'dir' && renamingId.value === id) return
   const target = e.target as HTMLElement | null
   // 行内按钮/输入框上按下时不算拖拽
-  if (target && target.closest('input, .row-actions, .orphan-action, .note-pin')) return
+  if (target && target.closest('input, .row-actions, .orphan-action, .note-pin, .note-desktop-icon')) return
   dragOrigin = { mode, id, label, x: e.clientX, y: e.clientY }
   dragging = false
   window.addEventListener('pointermove', onDragMove)
@@ -892,6 +914,12 @@ onBeforeUnmount(() => {
             <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(note.color)"></i>
             <span class="row-label" :style="rowColorStyle(note.color)">{{ noteLabel(note) }}</span>
             <i
+              v-if="desktopNotes.isOnDesktop(note.id)"
+              class="i-mdi-pin note-desktop-icon active"
+              :title="$t('titlebar.desktopNoteOn')"
+              @click.stop="desktopNotes.toggle(note.id)"
+            ></i>
+            <i
               class="i-mdi-star note-pin"
               :title="$t('fileTree.unpin')"
               @click.stop="noteStore.togglePin(note.id)"
@@ -913,8 +941,8 @@ onBeforeUnmount(() => {
         <span class="row-toggle">
           <i class="i-mdi-chevron-right" :class="{ expanded: rootExpanded }"></i>
         </span>
-        <i class="i-mdi-notebook-outline row-icon"></i>
-        <span class="row-label">{{ $t('dirTree.rootDir') }}</span>
+        <i class="i-mdi-notebook-outline row-icon" :style="rowColorStyle(directoryStore.rootDirColor)"></i>
+        <span class="row-label" :style="rowColorStyle(directoryStore.rootDirColor)">{{ $t('dirTree.rootDir') }}</span>
         <span class="row-count">{{ rootNoteCount || '' }}</span>
         <span class="row-actions" @click.stop>
           <i class="i-mdi-plus" :title="$t('fileTree.newNote')" @click.stop="createNoteIn(null)"></i>
@@ -1005,6 +1033,12 @@ onBeforeUnmount(() => {
           <span class="row-toggle placeholder"></span>
           <i class="i-mdi-file-document-outline row-icon" :style="rowColorStyle(row.note.color)"></i>
           <span class="row-label" :title="noteLabel(row.note)" :style="rowColorStyle(row.note.color)">{{ noteLabel(row.note) }}</span>
+          <i
+            v-if="desktopNotes.isOnDesktop(row.note.id)"
+            class="i-mdi-pin note-desktop-icon active"
+            :title="$t('titlebar.desktopNoteOn')"
+            @click.stop="desktopNotes.toggle(row.note.id)"
+          ></i>
           <i
             v-if="row.note.isPinned"
             class="i-mdi-star note-pin"
@@ -1161,6 +1195,10 @@ onBeforeUnmount(() => {
           <i class="i-mdi-folder-plus-outline"></i>
           <span>{{ $t('dirTree.newDir') }}</span>
         </button>
+        <button class="ctx-item" @click="ctxRootDirColor">
+          <i class="i-mdi-palette-outline"></i>
+          <span>{{ $t('fileTree.color') }}</span>
+        </button>
       </template>
 
       <template v-else-if="ctxTarget?.type === 'blank'">
@@ -1254,6 +1292,10 @@ onBeforeUnmount(() => {
         <button class="ctx-item" @click="ctxTogglePin">
           <i :class="ctxNote.isPinned ? 'i-mdi-star' : 'i-mdi-star-outline'"></i>
           <span>{{ ctxNote.isPinned ? $t('fileTree.unpin') : $t('fileTree.pin') }}</span>
+        </button>
+        <button class="ctx-item" @click="ctxToggleDesktop">
+          <i :class="desktopNotes.isOnDesktop(ctxNote.id) ? 'i-mdi-pin' : 'i-mdi-pin-outline'"></i>
+          <span>{{ desktopNotes.isOnDesktop(ctxNote.id) ? $t('titlebar.desktopNoteOn') : $t('notelist.desktop') }}</span>
         </button>
         <button v-if="ctxNote.directoryId" class="ctx-item" @click="ctxMoveToRoot">
           <i class="i-mdi-folder-move-outline"></i>
@@ -1485,6 +1527,26 @@ onBeforeUnmount(() => {
 .note-pin:hover {
   opacity: 1;
   transform: scale(1.08);
+}
+
+/* 钉到桌面：只有已经在桌面上的笔记才显示这个图标（点一下收起） */
+.note-desktop-icon {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.14s ease, color 0.14s ease, transform 0.14s ease;
+}
+
+.note-desktop-icon:hover {
+  opacity: 1;
+  color: var(--color-primary);
+  transform: scale(1.08);
+}
+
+.note-desktop-icon.active {
+  opacity: 1;
+  color: var(--color-primary);
 }
 
 .row-count {

@@ -12,6 +12,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "build:mac": "npm run tauri build -- --target aarch64-apple-darwin",
     "sync-version": "node scripts/sync-version.js",
     "pretauri": "npm run sync-version",
     "postinstall": "patch-package"

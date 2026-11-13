@@ -3,12 +3,15 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
-import { useSettingStore, DEFAULT_SHORTCUTS, type ShortcutSettings, type ShortcutScope, type PinOffBehavior, type CodeTheme, type EditorStylePreset } from '@/stores/settingStore'
+import { useSettingStore, DEFAULT_SHORTCUTS, type ShortcutSettings, type ShortcutScope, type PinOffBehavior, type CodeTheme, type EditorStylePreset, type DesktopNoteLevel } from '@/stores/settingStore'
 import { editorStylePresets } from '@/composables/editorStylePresets'
 import { useAssistantsStore, defaultAssistants, type Assistant } from '@/stores/assistantsStore'
 import { useVersionCheck } from '@/composables/useVersionCheck'
+import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
+import PrivacyPledge from '@/components/common/PrivacyPledge.vue'
+import PrivacyDialog from '@/components/common/PrivacyDialog.vue'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
 import { LIGHT_NOTE_COLORS, DARK_NOTE_COLORS } from '@/utils/noteColors'
@@ -94,6 +97,9 @@ const { currentVersion, latestVersion, downloadState, downloadProgress, updateAv
 const checkLoading = computed(() => downloadState.value === 'checking')
 const tagsUrl = 'https://github.com/Aprilming/maiknote/tags'
 
+// ---- 关于页：隐私承诺（内容组件化，欢迎页 / 弹窗共用同一份文案） ----
+const privacyDialogVisible = ref(false)
+
 const settingStore = useSettingStore()
 const { currentTheme, isDark } = useTheme()
 const assistantsStore = useAssistantsStore()
@@ -145,9 +151,29 @@ const edgePositionOptions = computed(() => [
 ])
 
 /** 当前贴边方向的名字，显示在位置选择器标题后面 */
+// ---------------- 钉在桌面的笔记卡片 ----------------
+const desktopNotes = useDesktopNotes()
+
+function setDesktopNoteLevel(level: DesktopNoteLevel) {
+  settingStore.updateSettings('desktopNoteLevel', level)
+  // 已经开着的卡片也立刻换层级
+  void desktopNotes.applyLevel()
+}
+
 const currentEdgePositionLabel = computed(
   () => edgePositionOptions.value.find(p => p.value === settingStore.settings.edgePosition)?.label ?? '',
 )
+
+watch(activeCategory, (category) => {
+  // 只读探测：权限状态 + 各落点状态，不会自动创建链接
+  if (category === 'ai') {
+    void checkFullDiskAccess()
+    void loadSkillSync()
+  }
+  if (category !== 'ai') {
+    stopFdaPolling()
+  }
+})
 
 // 同步语言设置到 i18n locale
 watch(() => settingStore.settings.language, (newLang) => {
@@ -246,6 +272,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', blockNoteShortcuts, true)
   document.removeEventListener('mousemove', onDragMove)
   document.removeEventListener('mouseup', onDragEnd)
+  stopFdaPolling()
 })
 
 // 切换自启动
@@ -539,6 +566,184 @@ function getPromptPreview(prompt: string): string {
   const chars = [...prompt]
   return chars.length > 50 ? chars.slice(0, 50).join('') + '...' : prompt
 }
+
+// ==================== 完全磁盘访问 ====================
+// 系统不给程序自己授权的口子，这里只做：检测 → 跳系统设置 → 轮询等待用户勾选
+interface FdaProbe {
+  path: string
+  result: 'ok' | 'denied' | 'missing'
+}
+
+interface FullDiskAccessInfo {
+  granted: boolean
+  detectable: boolean
+  probes: FdaProbe[]
+  appPath: string
+  exePath: string
+  bundled: boolean
+  parentApp: string | null
+}
+
+const fdaInfo = ref<FullDiskAccessInfo | null>(null)
+const fdaPolling = ref(false)
+let fdaTimer: number | undefined
+
+async function checkFullDiskAccess() {
+  if (!isTauri) return
+  try {
+    fdaInfo.value = await invoke<FullDiskAccessInfo>('full_disk_access_status')
+  } catch (e) {
+    console.error('Failed to check full disk access:', e)
+    fdaInfo.value = null
+  }
+}
+
+function stopFdaPolling() {
+  if (fdaTimer !== undefined) {
+    window.clearInterval(fdaTimer)
+    fdaTimer = undefined
+  }
+  fdaPolling.value = false
+}
+
+function startFdaPolling() {
+  stopFdaPolling()
+  fdaPolling.value = true
+  let ticks = 0
+  fdaTimer = window.setInterval(async () => {
+    ticks += 1
+    await checkFullDiskAccess()
+    // 勾上之后系统不用重启进程就能生效，最多等 60 秒
+    if (fdaInfo.value?.granted || ticks >= 40) stopFdaPolling()
+  }, 1500)
+}
+
+async function openFdaSettings() {
+  try {
+    await invoke('open_full_disk_access_settings')
+    startFdaPolling()
+  } catch (e) {
+    showToast(String(e), 3000)
+  }
+}
+
+async function revealAppInFinder() {
+  try {
+    await invoke('reveal_app_in_finder')
+  } catch (e) {
+    showToast(String(e), 3000)
+  }
+}
+
+function fdaStateText(): string {
+  if (!fdaInfo.value) return t('settings.fdaUnknown')
+  if (fdaInfo.value.granted) return t('settings.fdaGranted')
+  return fdaPolling.value ? t('settings.fdaWaiting') : t('settings.fdaDenied')
+}
+
+// 开发态由 WebStorm / 终端拉起，TCC 会把权限记到那个 App 名下
+// 正式包里只有 fdaHint；开发态才提示「权限记在宿主程序名下」
+const fdaHintText = computed(() => {
+  const info = fdaInfo.value
+  if (info && !info.bundled) {
+    return info.parentApp
+      ? t('settings.fdaHintDev', { app: info.parentApp })
+      : t('settings.fdaHintDevGeneric')
+  }
+  return t('settings.fdaHint')
+})
+
+const fdaPathText = computed(() =>
+  fdaInfo.value ? prettyPath(fdaInfo.value.bundled ? fdaInfo.value.appPath : fdaInfo.value.exePath) : '',
+)
+
+async function restartApp() {
+  try {
+    await invoke('restart_app')
+  } catch (e) {
+    showToast(String(e), 3000)
+  }
+}
+
+// ==================== Skill 软链接同步 ====================
+// 只读状态 + 手动点击建链，不在启动或切换分类时写入任何目录
+interface SkillTargetInfo {
+  key: string
+  label: string
+  path: string
+  state: 'linked' | 'missing' | 'foreign' | 'occupied'
+  detail?: string | null
+}
+
+interface SkillSyncInfo {
+  skillName: string
+  source: string
+  sourceExists: boolean
+  targets: SkillTargetInfo[]
+}
+
+const skillSync = ref<SkillSyncInfo | null>(null)
+const skillBusyKey = ref('')
+const skillLoadError = ref('')
+
+function prettyPath(path: string): string {
+  if (!path) return '—'
+  return path.replace(/^\/Users\/[^/]+/, '~')
+}
+
+function skillStateLabel(state: string): string {
+  switch (state) {
+    case 'linked':
+      return t('settings.skillStateLinked')
+    case 'foreign':
+      return t('settings.skillStateForeign')
+    case 'occupied':
+      return t('settings.skillStateOccupied')
+    default:
+      return t('settings.skillStateMissing')
+  }
+}
+
+async function loadSkillSync() {
+  if (!isTauri) return
+  try {
+    skillSync.value = await invoke<SkillSyncInfo>('skill_sync_status')
+    skillLoadError.value = ''
+  } catch (e) {
+    console.error('Failed to read skill sync status:', e)
+    skillSync.value = null
+    skillLoadError.value = String(e)
+  }
+}
+
+async function handleSkillLink(target: SkillTargetInfo) {
+  if (skillBusyKey.value) return
+  skillBusyKey.value = target.key
+  try {
+    skillSync.value = await invoke<SkillSyncInfo>('skill_sync_link', { key: target.key })
+    showToast(t('settings.skillLinked', { name: target.label }))
+  } catch (e) {
+    console.error('Failed to link skill:', e)
+    showToast(String(e), 3000)
+    void loadSkillSync()
+  } finally {
+    skillBusyKey.value = ''
+  }
+}
+
+async function handleSkillUnlink(target: SkillTargetInfo) {
+  if (skillBusyKey.value) return
+  skillBusyKey.value = target.key
+  try {
+    skillSync.value = await invoke<SkillSyncInfo>('skill_sync_unlink', { key: target.key })
+    showToast(t('settings.skillUnlinked'))
+  } catch (e) {
+    console.error('Failed to unlink skill:', e)
+    showToast(String(e), 3000)
+  } finally {
+    skillBusyKey.value = ''
+  }
+}
 </script>
 
 <template>
@@ -619,6 +824,53 @@ function getPromptPreview(prompt: string): string {
                 @click="settingStore.updateSettings('language', 'en-US')"
               >
                 <span>English</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-item setting-item-inline">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.linkPreview') }}</span>
+              <span class="setting-desc">{{ $t('settings.linkPreviewDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.linkPreviewEnabled }"
+              @click="settingStore.updateSettings('linkPreviewEnabled', !settingStore.settings.linkPreviewEnabled)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.desktopNoteLevel') }}</span>
+              <span class="setting-desc">{{ $t('settings.desktopNoteLevelDesc') }}</span>
+            </div>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.desktopNoteLevel === 'top' }"
+                @click="setDesktopNoteLevel('top')"
+              >
+                <i class="i-mdi-arrow-up-bold-box"></i>
+                <span>{{ $t('settings.levelTop') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.desktopNoteLevel === 'normal' }"
+                @click="setDesktopNoteLevel('normal')"
+              >
+                <i class="i-mdi-window-restore"></i>
+                <span>{{ $t('settings.levelNormal') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.desktopNoteLevel === 'desktop' }"
+                @click="setDesktopNoteLevel('desktop')"
+              >
+                <i class="i-mdi-monitor"></i>
+                <span>{{ $t('settings.levelDesktop') }}</span>
               </button>
             </div>
           </div>
@@ -1057,6 +1309,104 @@ function getPromptPreview(prompt: string): string {
               </button>
             </div>
           </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.fdaTitle') }}</span>
+              <span class="setting-desc">{{ $t('settings.fdaDesc') }}</span>
+            </div>
+            <div class="fda-row">
+              <span
+                class="fda-badge"
+                :class="{
+                  'is-granted': fdaInfo?.granted,
+                  'is-waiting': fdaPolling && !fdaInfo?.granted,
+                }"
+              >
+                <i :class="fdaInfo?.granted ? 'i-mdi-shield-check' : 'i-mdi-shield-alert-outline'"></i>
+                {{ fdaStateText() }}
+              </span>
+              <button class="fda-btn" @click="openFdaSettings">
+                <i class="i-mdi-cog-outline"></i>
+                <span>{{ $t('settings.fdaOpenSettings') }}</span>
+              </button>
+              <button class="fda-btn fda-btn-primary" @click="restartApp">
+                <i class="i-mdi-restart"></i>
+                <span>{{ $t('settings.fdaRestart') }}</span>
+              </button>
+              <button class="fda-btn" @click="checkFullDiskAccess" :title="$t('settings.fdaRecheck')">
+                <i class="i-mdi-refresh"></i>
+              </button>
+              <button class="fda-btn" @click="revealAppInFinder" :title="fdaPathText">
+                <i class="i-mdi-apple-finder"></i>
+                <span>{{ $t('settings.fdaReveal') }}</span>
+              </button>
+            </div>
+            <div class="fda-hint">{{ fdaHintText }}</div>
+            <div v-if="fdaInfo" class="fda-path">
+              {{ fdaPathText }}
+              <span class="fda-probes">
+                <span
+                  v-for="p in fdaInfo.probes"
+                  :key="p.path"
+                  class="fda-probe"
+                  :class="`is-${p.result}`"
+                  :title="p.path"
+                ></span>
+              </span>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.skillSync') }}</span>
+              <span class="setting-desc">{{ $t('settings.skillSyncDesc') }}</span>
+            </div>
+
+            <div v-if="skillSync" class="skill-sync-list">
+              <div v-for="target in skillSync.targets" :key="target.key" class="skill-sync-row">
+                <div class="skill-sync-main">
+                  <div class="skill-sync-name">
+                    <span>{{ target.label }}</span>
+                    <span class="skill-sync-state" :class="`is-${target.state}`">
+                      {{ skillStateLabel(target.state) }}
+                    </span>
+                  </div>
+                  <div class="skill-sync-path" :title="target.path">{{ prettyPath(target.path) }}</div>
+                  <div v-if="target.state === 'foreign' && target.detail" class="skill-sync-hint">
+                    → {{ prettyPath(target.detail) }}
+                  </div>
+                </div>
+                <button
+                  v-if="target.state === 'linked'"
+                  class="skill-sync-btn is-linked"
+                  :disabled="!!skillBusyKey"
+                  @click="handleSkillUnlink(target)"
+                >
+                  <i class="i-mdi-link-off"></i>
+                  <span>{{ skillBusyKey === target.key ? '…' : $t('settings.skillUnlink') }}</span>
+                </button>
+                <button
+                  v-else
+                  class="skill-sync-btn"
+                  :disabled="!!skillBusyKey || !skillSync.sourceExists"
+                  @click="handleSkillLink(target)"
+                >
+                  <i class="i-mdi-link-variant"></i>
+                  <span>{{ skillBusyKey === target.key ? '…' : $t('settings.skillLink') }}</span>
+                </button>
+              </div>
+            </div>
+            <div v-else class="skill-sync-empty">
+              {{ skillLoadError || $t('settings.skillSyncLoading') }}
+            </div>
+
+            <div class="skill-sync-source" :class="{ 'is-missing': skillSync && !skillSync.sourceExists }">
+              <i class="i-mdi-file-document-outline"></i>
+              <span>{{ skillSync && !skillSync.sourceExists ? $t('settings.skillSourceMissing') : $t('settings.skillSource') }}</span>
+              <span class="skill-sync-source-path">{{ prettyPath(skillSync?.source || '') }}</span>
+            </div>
+          </div>
         </section>
 
         <!-- 侧边栏（屏幕边缘面板） -->
@@ -1394,9 +1744,25 @@ function getPromptPreview(prompt: string): string {
               <i class="i-mdi-open-in-new link-icon"></i>
             </a>
           </div>
+
+          <!-- 隐私与承诺 -->
+          <div class="privacy-card">
+            <div class="privacy-head">
+              <i class="i-mdi-shield-check-outline"></i>
+              <span>{{ $t('settings.privacyTitle') }}</span>
+              <button class="privacy-more" type="button" @click="privacyDialogVisible = true">
+                <span>{{ $t('settings.privacyReadMore') }}</span>
+                <i class="i-mdi-chevron-right"></i>
+              </button>
+            </div>
+            <PrivacyPledge />
+          </div>
         </section>
       </div>
     </div>
+
+    <!-- 隐私说明：关于页里摊开看的完整版 -->
+    <PrivacyDialog v-model="privacyDialogVisible" />
 
     <AssistantEditor
       v-model="assistantEditorVisible"
@@ -1430,6 +1796,9 @@ function getPromptPreview(prompt: string): string {
   --st-sunken: rgba(120, 120, 128, 0.12);
   --st-track: rgba(120, 120, 128, 0.2);
   --st-danger: #ff3b30;
+  --st-danger-soft: rgba(255, 59, 48, 0.12);
+  --st-danger-line: rgba(255, 59, 48, 0.32);
+  --st-hover: rgba(120, 120, 128, 0.16);
   --st-success: #34c759;
   --st-warning: #ff9500;
   --st-inner-light: none;
@@ -1465,6 +1834,9 @@ function getPromptPreview(prompt: string): string {
   --st-row-line: rgba(255, 255, 255, 0.08);
   --st-sunken: rgba(120, 120, 128, 0.24);
   --st-track: rgba(120, 120, 128, 0.36);
+  --st-danger-soft: rgba(255, 69, 58, 0.18);
+  --st-danger-line: rgba(255, 69, 58, 0.38);
+  --st-hover: rgba(120, 120, 128, 0.3);
   --st-inner-light: none;
   --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   --st-page-bg: #1e1e1e;
@@ -2420,6 +2792,264 @@ function getPromptPreview(prompt: string): string {
   font-size: 15px;
 }
 
+/* ============ 完全磁盘访问 ============ */
+.fda-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fda-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--st-row-line);
+  background: var(--st-sunken);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--st-text-soft);
+}
+
+.fda-badge.is-granted {
+  color: var(--st-success);
+  border-color: rgba(52, 199, 89, 0.35);
+  background: rgba(52, 199, 89, 0.12);
+}
+
+.fda-badge.is-waiting {
+  color: var(--st-warning);
+  border-color: rgba(255, 149, 0, 0.35);
+  background: rgba(255, 149, 0, 0.12);
+}
+
+.fda-badge i {
+  font-size: 13px;
+}
+
+.fda-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--st-row-line);
+  background: transparent;
+  font-size: 11px;
+  color: var(--st-text);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.fda-btn:hover {
+  background: var(--st-accent-soft);
+  border-color: var(--st-accent-line);
+  color: var(--st-accent);
+}
+
+.fda-btn i {
+  font-size: 12px;
+}
+
+.fda-btn-primary {
+  color: var(--st-accent);
+  border-color: var(--st-accent-line);
+  background: var(--st-accent-soft);
+}
+
+.fda-btn-primary:hover {
+  background: var(--st-accent);
+  color: #fff;
+  border-color: var(--st-accent);
+}
+
+.fda-probes {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.fda-probe {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--st-row-line);
+}
+
+.fda-probe.is-ok {
+  background: var(--st-success);
+}
+
+.fda-probe.is-denied {
+  background: var(--st-danger);
+}
+
+.fda-hint {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--st-text-soft);
+}
+
+.fda-path {
+  margin-top: 3px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--st-text-soft);
+  word-break: break-all;
+}
+
+/* ============ Skill 同步 ============ */
+.skill-sync-list {
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--st-sunken);
+  border: 1px solid var(--st-row-line);
+  overflow: hidden;
+}
+
+.skill-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--st-row-line);
+}
+
+.skill-sync-row:last-child {
+  border-bottom: none;
+}
+
+.skill-sync-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-sync-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--st-text);
+}
+
+.skill-sync-state {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--st-row-line);
+  color: var(--st-text-soft);
+}
+
+.skill-sync-state.is-linked {
+  color: var(--st-accent);
+  border-color: var(--st-accent-line);
+  background: var(--st-accent-soft);
+}
+
+.skill-sync-state.is-foreign,
+.skill-sync-state.is-occupied {
+  color: var(--st-text);
+  border-color: var(--st-row-line);
+  background: var(--st-hover);
+}
+
+.skill-sync-path,
+.skill-sync-hint {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--st-text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-sync-hint {
+  color: var(--st-text);
+  opacity: 0.7;
+}
+
+.skill-sync-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--st-row-line);
+  background: transparent;
+  color: var(--st-text);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.skill-sync-btn:hover:not(:disabled) {
+  background: var(--st-accent-soft);
+  border-color: var(--st-accent-line);
+  color: var(--st-accent);
+}
+
+.skill-sync-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.skill-sync-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.skill-sync-btn.is-linked:hover:not(:disabled) {
+  background: var(--st-danger-soft, rgba(255, 90, 90, 0.12));
+  border-color: var(--st-danger-line, rgba(255, 90, 90, 0.4));
+  color: var(--st-danger, #e05555);
+}
+
+.skill-sync-btn i {
+  font-size: 12px;
+}
+
+.skill-sync-empty {
+  padding: 10px 11px;
+  font-size: 11px;
+  color: var(--st-text-soft);
+}
+
+.skill-sync-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--st-text-soft);
+  min-width: 0;
+}
+
+.skill-sync-source.is-missing {
+  color: var(--st-danger);
+}
+
+.skill-sync-source-path {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ============ 快捷键 ============ */
 .shortcut-list {
   display: flex;
@@ -2789,6 +3419,56 @@ function getPromptPreview(prompt: string): string {
   margin-left: auto;
   font-size: 13px;
   opacity: 0.5;
+}
+
+/* ---- 关于页：隐私与承诺 ---- */
+.privacy-card {
+  margin-top: 10px;
+  padding: 14px 14px 13px;
+  border-radius: 12px;
+  background: var(--st-panel);
+  border: 1px solid var(--st-panel-border);
+  box-shadow: var(--st-shadow);
+}
+
+.privacy-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--st-text);
+}
+
+.privacy-head > i {
+  font-size: 15px;
+  color: var(--st-accent);
+}
+
+/* 「完整说明 ›」：进弹窗看大字号版本 */
+.privacy-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--st-text-soft);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.privacy-more:hover {
+  background: var(--st-sunken);
+  color: var(--st-accent);
+}
+
+.privacy-more i {
+  font-size: 13px;
 }
 
 .spin {

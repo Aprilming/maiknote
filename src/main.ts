@@ -3,15 +3,21 @@ import { createPinia } from "pinia";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App.vue";
 import EdgePanel from "./components/Edge/EdgePanel.vue";
+import DesktopNote from "./components/Desktop/DesktopNote.vue";
 import i18n from "./i18n";
 import "uno.css";
 import "./styles/base.css";
 import { initTheme } from "./composables/useTheme";
 
-// 边缘面板是同一份前端产物的第二个窗口（label = "edge"），按窗口分支挂载不同根组件
+// 同一份前端产物被多个窗口复用，按窗口 label 挂不同的根组件：
+//   main            → 主界面
+//   edge            → 贴边面板
+//   note-widget-<id>→ 钉在桌面上的笔记卡片
 function resolveRoot() {
   try {
-    return getCurrentWindow().label === "edge" ? EdgePanel : App;
+    const label = getCurrentWindow().label;
+    if (label.startsWith("note-widget-")) return DesktopNote;
+    return label === "edge" ? EdgePanel : App;
   } catch {
     return App;
   }

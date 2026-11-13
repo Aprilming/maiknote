@@ -4,5 +4,10 @@
 <dict>
     <key>com.apple.security.network.client</key>
     <true/>
+    <!-- 与桌面小组件共享笔记快照：两边必须声明同一个 App Group -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.april.maiknote</string>
+    </array>
 </dict>
 </plist>

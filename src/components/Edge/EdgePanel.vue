@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import MarkdownIt from 'markdown-it'
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/settingStore'
 import type { EdgeNotePayload } from '@/composables/useEdgePanel'
+import { createPreviewMarkdown, toggleTaskLine } from '@/utils/markdownTasks'
 
 const { t, locale } = useI18n()
 const settingStore = useSettingStore()
@@ -186,7 +186,7 @@ function markCopied(id: string) {
 }
 
 /** 复制整条笔记正文 */
-const md = new MarkdownIt({ html: true, linkify: true, breaks: false })
+const md = createPreviewMarkdown()
 const mdCache = new Map<string, string>()
 
 function renderMarkdown(content: string | undefined | null): string {
@@ -194,7 +194,13 @@ function renderMarkdown(content: string | undefined | null): string {
   const cached = mdCache.get(source)
   if (cached !== undefined) return cached
   if (mdCache.size > 80) mdCache.clear()
-  const html = md.render(source)
+  let html: string
+  try {
+    html = md.render(source)
+  } catch {
+    // 渲染炸了也别让整个面板空白，退化成纯文本
+    html = `<pre>${source.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string)}</pre>`
+  }
   mdCache.set(source, html)
   return html
 }
@@ -203,12 +209,39 @@ const editingId = ref<string | null>(null)
 /// 主动隐藏后的一小段时间内不接受「展开」信号
 let suppressExpandUntil = 0
 
-function onContentClick(event: MouseEvent) {
-  const anchor = (event.target as HTMLElement | null)?.closest('a')
-  if (anchor) event.preventDefault()
+function onContentClick(note: EdgeNotePayload, event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  const anchor = target.closest('a')
+  if (anchor) {
+    event.preventDefault()
+    return
+  }
+  const checkbox = target.closest<HTMLInputElement>('input.md-task')
+  if (checkbox) void toggleTask(note, checkbox, event)
+}
+
+/** 点卡片里的任务复选框：直接把正文里对应的 `- [ ]` 改掉并回写 */
+async function toggleTask(note: EdgeNotePayload, checkbox: HTMLInputElement, event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (editingId.value === note.id) return
+  const line = Number(checkbox.dataset.taskLine)
+  const current = note.content || ''
+  const next = Number.isFinite(line) ? toggleTaskLine(current, line, checkbox.checked) : current
+  if (next === current) {
+    // 正文已经变了（对不上号），把勾选状态退回去，等主窗口推新内容
+    checkbox.checked = !checkbox.checked
+    return
+  }
+  // 先本地更一遍，界面立刻有反馈；主窗口改完会把最新内容回推过来
+  note.content = next
+  await emit('maiknote:edit-note', { id: note.id, op: 'replace', text: next })
 }
 
 async function beginEdit(note: EdgeNotePayload, event?: MouseEvent) {
+  // 双击任务复选框不算「进入编辑」，否则勾一下就把卡片变成编辑态
+  if ((event?.target as HTMLElement | null)?.closest('input.md-task')) return
   event?.preventDefault()
   contentDirty = false
   editingId.value = note.id
@@ -410,6 +443,8 @@ onMounted(async () => {
   unlisteners.push(
     await listen<EdgeNotePayload[]>('maiknote:pinned-notes', event => {
       notes.value = Array.isArray(event.payload) ? event.payload : []
+      // 回执：告诉主窗口「贴边面板还活着」，主窗口收不到就重载这个窗口
+      void emit('maiknote:edge-ack', { at: Date.now(), count: notes.value.length }).catch(() => {})
       if (notes.value.length === 0) {
         expanded.value = false
         currentWidth = stripWidth.value
@@ -587,7 +622,7 @@ onUnmounted(() => {
               v-else
               class="card-content md"
               @dblclick="beginEdit(note, $event)"
-              @click="onContentClick"
+              @click="onContentClick(note, $event)"
               v-html="renderMarkdown(note.content)"
             ></div>
             <div class="card-meta">
@@ -1028,6 +1063,69 @@ onUnmounted(() => {
 
 .card-content.md :deep(li > p) {
   margin: 0;
+}
+
+/* ---------- 任务列表：真复选框，可点 ---------- */
+
+.card-content.md :deep(.md-task-list) {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.card-content.md :deep(li.md-task-item) {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding-left: 0;
+  list-style: none;
+}
+
+.card-content.md :deep(li.md-task-item)::marker {
+  content: '';
+}
+
+.card-content.md :deep(input.md-task) {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 2px 0 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1.4px solid var(--color-border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.card-content.md :deep(input.md-task:hover) {
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.card-content.md :deep(input.md-task:checked) {
+  border-color: var(--color-primary, #3b82f6);
+  background: var(--color-primary, #3b82f6);
+}
+
+.card-content.md :deep(input.md-task:checked)::after {
+  content: '';
+  position: absolute;
+  left: 3.4px;
+  top: 0.6px;
+  width: 3.4px;
+  height: 6.6px;
+  border: solid #fff;
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(42deg);
+}
+
+/* 勾掉的任务整条灰掉 + 删除线，跟编辑器里一致 */
+.card-content.md :deep(li.md-task-item[data-checked='true']) {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+  text-decoration-color: currentColor;
+  opacity: 0.72;
 }
 
 .card-content.md :deep(del) {

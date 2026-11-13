@@ -29,6 +29,8 @@ import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
 import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
 import { CodeBlockLowlightImeSafe, refreshLowlightAfterImeMeta } from './extensions/CodeBlockLowlightImeSafe'
 import { InlineSearchExtension, searchPluginKey } from './extensions/InlineSearchExtension'
+import { LinkPreviewExtension, refreshLinkPreview } from './extensions/LinkPreviewExtension'
+import './linkPreview.css'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
@@ -1131,6 +1133,13 @@ const editor = useEditor({
     CodeBlockCopyExtension,
     CodeBlockLanguageExtension,
     InlineSearchExtension,
+    LinkPreviewExtension.configure({
+      // 通用设置里的「链接卡片预览」：关掉就只显示文字链接
+      enabled: () => settingStore.settings.linkPreviewEnabled,
+      openUrl: (url: string) => {
+        void openExternalLink(url)
+      },
+    }),
     // 表格扩展
     Table.configure({
       resizable: true,
@@ -1630,6 +1639,11 @@ watch(() => props.isLocked, (locked) => {
 // 监听代码主题变化
 watch(() => settingStore.settings.codeTheme, (newTheme) => {
   loadHighlightCss(newTheme)
+})
+
+// 链接卡片预览开关：切换后立刻重算，关掉就回退成纯文字链接
+watch(() => settingStore.settings.linkPreviewEnabled, () => {
+  refreshLinkPreview(editor.value?.view)
 })
 
 onMounted(async () => {
@@ -2597,6 +2611,8 @@ defineExpose({
 .tiptap a:hover {
   text-decoration-thickness: 2px;
 }
+
+
 
 /* Placeholder 样式 */
 .tiptap p.is-editor-empty:first-child::before {

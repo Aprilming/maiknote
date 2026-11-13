@@ -53,3 +53,4 @@ npm run tauri build -- --target x86_64-apple-darwin
 - Cmd+Opt+A global shortcut toggles visibility
 - Auto-hide on focus loss (unless always-on-top is enabled)
 - Borderless window with custom TitleBar component
+

@@ -32,6 +32,7 @@ jobs:
           target: aarch64-apple-darwin
       - run: npm ci
       - run: npm run tauri build -- --target aarch64-apple-darwin
+      # 小组件是独立的 WidgetKit 扩展，打包后编译注入并重打 dmg
       - uses: actions/upload-artifact@v4
         with:
           name: MaikNote-aarch64
@@ -63,6 +64,7 @@ jobs:
           target: ${{ matrix.target }}
       - run: npm ci
       - run: APP_VERSION="${GITHUB_REF_NAME#v}" npm run tauri build -- --target ${{ matrix.target }}
+      # 注入小组件扩展、重签、重打 dmg 与 updater 包
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

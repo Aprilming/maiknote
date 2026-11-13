@@ -25,7 +25,9 @@
       "identifier": "http:allow-fetch",
       "allow": [
         { "url": "https://github.com/**" },
-        { "url": "https://qianfan.baidubce.com/**" }
+        { "url": "https://qianfan.baidubce.com/**" },
+        { "url": "https://*" },
+        { "url": "http://*" }
       ]
     },
     "global-shortcut:allow-register",

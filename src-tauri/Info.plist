@@ -4,5 +4,19 @@
 <dict>
 	<key>LSUIElement</key>
 	<true/>
+	<!-- 桌面小组件点开笔记时靠这个 scheme 回到主应用 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.april.maiknote.link</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>maiknote</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

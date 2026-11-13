@@ -1,5 +1,8 @@
 // rebuild trigger 1794532729
 pub mod autostart;
+pub mod desktop_note;
+pub mod permissions;
+pub mod skills_sync;
 
 use std::collections::HashMap;
 use std::fs;
@@ -474,7 +477,7 @@ async fn toggle_window(app: AppHandle) -> Result<(), String> {
 /// 在当前空间显示窗口（macOS专用）
 
 #[cfg(target_os = "macos")]
-fn show_window_current_space_impl(app: &AppHandle) {
+pub(crate) fn show_window_current_space_impl(app: &AppHandle) {
     use cocoa::base::id;
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
@@ -586,7 +589,7 @@ fn show_window_current_space_impl(app: &AppHandle) {
 
 
 #[cfg(not(target_os = "macos"))]
-async fn show_window_current_space_impl(app: &AppHandle) {
+pub(crate) fn show_window_current_space_impl(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -1966,6 +1969,20 @@ fn style_edge_window(win: &tauri::WebviewWindow) {
 
 static EDGE_WINDOW_STYLED: AtomicBool = AtomicBool::new(false);
 
+/// 重新载入边缘面板的页面。
+/// 开发时 HMR 半路失败会让贴边窗口的前端整块挂掉（不渲染、不响应事件、也不吃后续 HMR），
+/// 从外面只有重载 webview 能救回来，所以主窗口发现「推了消息却收不到回执」就调它。
+#[tauri::command]
+fn reload_edge_window(app: AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("edge") {
+            let _ = win.eval("window.location.reload()");
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// 初始化边缘面板窗口：样式 + 贴右边缘布局 + 显示
 /// AppKit 调用必须在主线程，所以这里统一 dispatch 回主线程执行
 #[tauri::command]
@@ -2234,7 +2251,7 @@ pub fn run() {
     // 检测是否是开机自启启动
     let is_autolaunch = autostart::is_autolaunch();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
@@ -2290,6 +2307,39 @@ pub fn run() {
                 unsafe {
                     let ns_app = NSApp();
                     NSApplication::setActivationPolicy_(ns_app, NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory);
+                }
+            }
+
+            // 本地联调用：MN_DESKTOP_SELFTEST=<noteId> 时自动弹一张桌面笔记卡片（生产环境不设该变量）
+            if let Ok(note_id) = std::env::var("MN_DESKTOP_SELFTEST") {
+                if !note_id.is_empty() {
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        tauri::async_runtime::spawn(async move {
+                            let id_for_close = note_id.clone();
+                            let selftest_level = std::env::var("MN_DESKTOP_SELFTEST_LEVEL").ok();
+                            let open_level = selftest_level.clone();
+                            match desktop_note::desktop_note_open(handle.clone(), note_id, None, open_level).await {
+                                Ok(label) => println!("[selftest] desktop note opened: {label}"),
+                                Err(err) => eprintln!("[selftest] failed: {err}"),
+                            }
+                            if std::env::var("MN_DESKTOP_SELFTEST_CLOSE").is_ok() {
+                                std::thread::sleep(std::time::Duration::from_secs(3));
+                                match desktop_note::desktop_note_close(handle.clone(), id_for_close).await {
+                                    Ok(()) => println!("[selftest] card closed"),
+                                    Err(err) => eprintln!("[selftest] close failed: {err}"),
+                                }
+                            }
+                            if let Some(level) = selftest_level {
+                                std::thread::sleep(std::time::Duration::from_secs(3));
+                                match desktop_note::desktop_note_apply_level(handle, level.clone()).await {
+                                    Ok(n) => println!("[selftest] level={level} applied to {n} card(s)"),
+                                    Err(err) => eprintln!("[selftest] apply level failed: {err}"),
+                                }
+                            }
+                        });
+                    });
                 }
             }
 
@@ -2361,6 +2411,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_note::desktop_note_open,
+            desktop_note::desktop_note_close,
+            desktop_note::desktop_note_list,
+            desktop_note::desktop_note_apply_level,
+            desktop_note::desktop_note_open_in_main,
             get_icloud_path,
             read_metadata,
             write_metadata,
@@ -2393,6 +2448,7 @@ pub fn run() {
             exit_app,
             set_window_alpha,
             init_edge_window,
+            reload_edge_window,
             set_edge_width,
             set_edge_prefs,
             hide_edge_window,
@@ -2401,9 +2457,18 @@ pub fn run() {
             autostart::disable_autostart,
             autostart::is_autostart_enabled,
             get_network_info,
+            permissions::full_disk_access_status,
+            permissions::open_full_disk_access_settings,
+            permissions::reveal_app_in_finder,
+            permissions::restart_app,
+            skills_sync::skill_sync_status,
+            skills_sync::skill_sync_link,
+            skills_sync::skill_sync_unlink,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, _event| {});
 }
 
 #[cfg(test)]

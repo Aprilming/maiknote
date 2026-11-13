@@ -250,6 +250,8 @@ export const useDirectoryStore = defineStore('directory', () => {
     createDirectory,
     renameDirectory,
     setDirectoryColor,
+    rootDirColor,
+    setRootDirColor,
     moveDirectory,
     deleteDirectory,
     selectDirectory,

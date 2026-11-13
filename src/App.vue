@@ -11,6 +11,7 @@ import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
 import { useEditorStyle } from '@/composables/useEditorStyle'
 import { useEdgePanel, isMainAutoHideSuppressed } from '@/composables/useEdgePanel'
+import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { useVersionCheck } from '@/composables/useVersionCheck'
 import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
@@ -20,6 +21,7 @@ import Settings from '@/components/Settings/Settings.vue'
 import SearchPage from '@/components/Search/SearchPage.vue'
 import FileTree from '@/components/Sidebar/FileTree.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import PrivacyWelcome from '@/components/common/PrivacyWelcome.vue'
 
 // Initialize stores and composables
 const noteStore = useNoteStore()
@@ -50,9 +52,17 @@ function clampSidebarWidth(width: number): number {
   return Math.min(360, Math.max(160, width))
 }
 
+// 桌面笔记卡片（note-widget-<id> 那批窗口）的调度中心
+const desktopNotes = useDesktopNotes()
+
 function toggleSidebar() {
   sidebarVisible.value = !sidebarVisible.value
   localStorage.setItem('sidebar.visible', sidebarVisible.value ? 'true' : 'false')
+}
+
+/** 首次启动的隐私承诺页：确认后写进设置，以后不再弹 */
+function acknowledgePrivacy() {
+  settingStore.updateSettings('privacyAcknowledged', true)
 }
 
 function handleSidebarResize(width: number) {
@@ -176,6 +186,9 @@ onMounted(async () => {
   // Load notes from iCloud (will create initial note if none exists)
   await noteStore.initialize()
 
+  // 按设置把钉在桌面上的笔记卡片还原出来（要笔记数据在手才行）
+  void desktopNotes.start()
+
   // 如果启用了"记忆上次文件夹"，恢复上次选择的目录
   if (settingStore.settings.rememberLastDirectory) {
     const lastDirId = directoryStore.restoreLastDirectory()
@@ -212,6 +225,13 @@ onMounted(async () => {
       event.preventDefault()
       openSettings()
     }
+    // Cmd+Shift+D：把当前笔记钉到桌面 / 从桌面收起
+    if (event.metaKey && event.shiftKey && event.code === 'KeyD') {
+      event.preventDefault()
+      const noteId = noteStore.currentNoteId
+      if (noteId) void desktopNotes.toggle(noteId)
+      return
+    }
     if (event.metaKey && event.code === 'KeyW') {
       event.preventDefault()
       if (settingStore.settings.closeBehavior === 'quit') {
@@ -232,6 +252,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  desktopNotes.stop()
   if (unlistenFocus) {
     unlistenFocus()
   }
@@ -293,6 +314,12 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
+
+    <!-- 首次启动：先把隐私承诺摊在面前，点「我知道了」才进主界面（只弹一次） -->
+    <PrivacyWelcome
+      v-if="!settingStore.settings.privacyAcknowledged"
+      @acknowledge="acknowledgePrivacy"
+    />
 
     <!-- 应用内确认框：WKWebView 不支持 window.confirm，统一走这里 -->
     <ConfirmDialog />

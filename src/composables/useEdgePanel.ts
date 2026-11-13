@@ -54,17 +54,28 @@ export interface EdgePrefsPayload {
 
 interface EdgeEditPayload {
   id: string
-  op: 'cut' | 'paste'
+  /** replace = 整段正文替换（任务勾选框回写走这条） */
+  op: 'cut' | 'paste' | 'replace'
   selection?: string
   text?: string
 }
 
-/** 边缘面板的剪切 / 粘贴落到笔记正文上 */
+/** 边缘面板的剪切 / 粘贴 / 勾选任务落到笔记正文上 */
 function applyEdgeEdit(payload: EdgeEditPayload) {
   const noteStore = useNoteStore()
   const note = noteStore.notes.find(n => n.id === payload.id)
   if (!note) return
   const content = note.content || ''
+
+  // 勾选任务：面板已经算好新正文，直接整段替换
+  if (payload.op === 'replace') {
+    const next = payload.text
+    if (typeof next !== 'string' || next === content) return
+    if (note.isLocked) return
+    noteStore.updateNote(note.id, { content: next })
+    return
+  }
+
   const selection = payload.selection || ''
 
   if (payload.op === 'cut') {
@@ -172,6 +183,7 @@ export function useEdgePanel() {
       await invoke('init_edge_window').catch(() => {})
     }
     await emit(NOTES_EVENT, payload).catch(() => {})
+    armEdgeWatchdog()
   }
 
   function scheduleSync(delay = 300) {
@@ -184,6 +196,27 @@ export function useEdgePanel() {
 
   // 快捷键钉住状态：钉住时即使没有收藏笔记也不收起边缘条
   let edgePinned = false
+
+  // 贴边窗口的「活着」回执：收到就刷新时间戳
+  let lastEdgeAckAt = 0
+  let lastEdgeReloadAt = 0
+
+  /**
+   * 贴边窗口看门狗：推完消息 1.5s 收不到回执，说明那个 webview 的前端已经挂了
+   * （开发时 HMR 更新到一半失败就会出现：窗口还在、但内容空白、事件全无响应，
+   * 后续 HMR 也进不去）。这种状态只有重载 webview 能救，所以这里主动 reload 一次。
+   * 重载后前端会重新挂载并发 ready，主窗口随即再同步一次，不会形成重载风暴。
+   */
+  function armEdgeWatchdog() {
+    const sentAt = Date.now()
+    window.setTimeout(() => {
+      if (lastEdgeAckAt >= sentAt) return
+      const now = Date.now()
+      if (now - lastEdgeReloadAt < 5000) return
+      lastEdgeReloadAt = now
+      void invoke('reload_edge_window').catch(() => {})
+    }, 1500)
+  }
 
   async function openFromEdge(id: string) {
     const note = noteStore.notes.find(n => n.id === id)
@@ -235,6 +268,10 @@ export function useEdgePanel() {
   void (async () => {
     unlisteners.push(
       await listen(READY_EVENT, () => scheduleSync(0)),
+      // 贴边窗口收到笔记后的回执（看门狗用）
+      await listen('maiknote:edge-ack', () => {
+        lastEdgeAckAt = Date.now()
+      }),
       await listen<{ id: string }>(OPEN_EVENT, e => {
         void openFromEdge(e.payload.id)
       }),

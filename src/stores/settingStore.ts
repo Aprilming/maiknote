@@ -77,6 +77,18 @@ export type PathClickAction = 'copy' | 'reveal'
 /** 文件树同级排序：folders=文件夹在上，files=文件在上 */
 export type TreeOrder = 'folders' | 'files'
 
+/** 桌面笔记卡片的窗口层级：浮在最上层 / 普通图层 / 贴在桌面（桌面图标之上、应用窗口之下） */
+export type DesktopNoteLevel = 'top' | 'normal' | 'desktop'
+
+
+/** 兼容老版本 localStorage：曾经是 boolean（浮在最上层），也可能是缺失/脏值 */
+function normalizeDesktopNoteLevel(parsed: Partial<AppSettings> & { desktopNoteOnTop?: unknown }): DesktopNoteLevel {
+  const level = (parsed as { desktopNoteLevel?: unknown }).desktopNoteLevel
+  if (level === 'top' || level === 'normal' || level === 'desktop') return level
+  if (parsed.desktopNoteOnTop === true) return 'top'
+  if (parsed.desktopNoteOnTop === false) return 'desktop'
+  return 'desktop'
+}
 
 export interface AppSettings {
   language: 'zh-CN' | 'en-US'
@@ -96,10 +108,15 @@ export interface AppSettings {
   edgeStripWidth: number // 贴边小白条的粗细（px）
   edgeStripColor: string // 贴边小白条的颜色（#rrggbb）
   edgeCopyOnSelect: boolean // 边缘面板里选中文字后是否自动复制
+  privacyAcknowledged: boolean // 首次启动的隐私承诺页是否已确认（只用于判断要不要再弹一次）
+  desktopNotes: string[] // 钉在桌面上的笔记 id（每篇一个常驻桌面卡片窗口）
+  desktopNoteLevel: DesktopNoteLevel // 桌面卡片层级：top=浮在最上层 / normal=普通图层 / desktop=贴桌面
+  desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
   fileTreePinnedSection: boolean // 文件树里是否显示「收藏笔记」大类
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
+  linkPreviewEnabled: boolean // 链接卡片预览：开=抓网页信息显示卡片，预览失败自动回退文字链接
   defaultNoteBackgroundColor: string // 新建笔记的默认背景色，空字符串=不设默认
   autoLaunch: boolean // 开机自启动
   closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
@@ -144,10 +161,15 @@ export const useSettingStore = defineStore('setting', () => {
     edgeStripWidth: 5,
     edgeStripColor: '#ffffff',
     edgeCopyOnSelect: true,
+    privacyAcknowledged: false,
+    desktopNotes: [],
+    desktopNoteLevel: 'desktop',
+    desktopNoteBounds: {},
     fileTreePinnedSection: true,
     titleBarBehavior: 'auto-hide',
     pathClickAction: 'copy',
     treeOrder: 'folders',
+    linkPreviewEnabled: true,
     defaultNoteBackgroundColor: '',
     autoLaunch: false,
     closeBehavior: 'hide',
@@ -245,6 +267,18 @@ export const useSettingStore = defineStore('setting', () => {
             typeof parsed.edgeStripColor === 'string' && parsed.edgeStripColor
               ? parsed.edgeStripColor
               : settings.value.edgeStripColor,
+          desktopNoteLevel: normalizeDesktopNoteLevel(parsed),
+          desktopNotes: Array.isArray(parsed.desktopNotes)
+            ? parsed.desktopNotes.filter((id: unknown): id is string => typeof id === 'string')
+            : settings.value.desktopNotes,
+          desktopNoteBounds:
+            parsed.desktopNoteBounds && typeof parsed.desktopNoteBounds === 'object'
+              ? parsed.desktopNoteBounds
+              : settings.value.desktopNoteBounds,
+          linkPreviewEnabled:
+            typeof parsed.linkPreviewEnabled === 'boolean'
+              ? parsed.linkPreviewEnabled
+              : settings.value.linkPreviewEnabled,
           shortcuts: { ...settings.value.shortcuts, ...(parsed.shortcuts || {}) },
           customEditorStyle: {
             light: { ...(settings.value.customEditorStyle?.light || {}), ...(parsed.customEditorStyle?.light || {}) },
@@ -284,10 +318,15 @@ export const useSettingStore = defineStore('setting', () => {
       edgeStripWidth: 5,
       edgeStripColor: '#ffffff',
       edgeCopyOnSelect: true,
+    privacyAcknowledged: false,
+      desktopNotes: [],
+    desktopNoteLevel: 'desktop',
+    desktopNoteBounds: {},
       fileTreePinnedSection: true,
       titleBarBehavior: 'auto-hide',
       pathClickAction: 'copy',
       treeOrder: 'folders',
+      linkPreviewEnabled: true,
       defaultNoteBackgroundColor: '',
       autoLaunch: false,
       closeBehavior: 'hide',

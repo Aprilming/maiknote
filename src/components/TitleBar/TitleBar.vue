@@ -8,11 +8,21 @@ import { useNoteStore, extractTitle } from '@/stores/noteStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { setNativeDialogOpen } from '@/stores/dialogStore'
 import { usePinWindow } from '@/composables/usePinWindow'
+import { useDesktopNotes } from '@/composables/useDesktopNotes'
 
 const noteStore = useNoteStore()
 const settingStore = useSettingStore()
 // 置顶开关：取消置顶时按设置决定窗口显示/隐藏
 const { togglePin: applyTogglePin } = usePinWindow()
+// 钉到桌面：每一篇打开一个常驻卡片窗口
+const desktopNotes = useDesktopNotes()
+const onDesktop = computed(() => desktopNotes.isOnDesktop(noteStore.currentNoteId))
+
+async function toggleDesktop() {
+  const noteId = noteStore.currentNoteId
+  if (!noteId) return
+  await desktopNotes.toggle(noteId)
+}
 
 // 安全获取 Tauri 窗口，非 Tauri 环境下返回 null
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
@@ -307,7 +317,15 @@ onUnmounted(() => {
         @click.stop="togglePin"
         :title="isPinned ? $t('titlebar.unpin') : $t('titlebar.pin')"
       >
-        <i :class="isPinned ? 'i-mdi-pin' : 'i-mdi-pin-outline'"></i>
+        <i :class="isPinned ? 'i-mdi-arrow-up-bold-box' : 'i-mdi-arrow-up-bold-box-outline'"></i>
+      </button>
+      <button
+        class="action-btn desktop-btn"
+        :class="{ active: onDesktop }"
+        @click.stop="toggleDesktop"
+        :title="onDesktop ? $t('titlebar.desktopNoteOn') : $t('titlebar.desktopNote')"
+      >
+        <i :class="onDesktop ? 'i-mdi-pin' : 'i-mdi-pin-outline'"></i>
       </button>
       <button
         class="action-btn"

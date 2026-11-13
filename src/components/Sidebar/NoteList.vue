@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { useNoteStore } from '@/stores/noteStore'
+import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { useI18n } from 'vue-i18n'
 
 const noteStore = useNoteStore()
+const desktopNotes = useDesktopNotes()
 const { t } = useI18n()
 
 async function createNewNote() {
@@ -54,6 +56,14 @@ function extractPreview(content: string): string {
             <div class="note-preview">{{ extractPreview(note.content) }}</div>
           </div>
           <div class="note-meta">
+            <button
+              v-if="desktopNotes.isOnDesktop(note.id)"
+              class="note-desktop active"
+              :title="$t('titlebar.desktopNoteOn')"
+              @click.stop="desktopNotes.toggle(note.id)"
+            >
+              <i class="i-mdi-pin"></i>
+            </button>
             <span class="note-time">{{ formatTimestamp(note.updatedAt) }}</span>
           </div>
         </div>
@@ -79,6 +89,14 @@ function extractPreview(content: string): string {
             <div class="note-preview">{{ extractPreview(note.content) }}</div>
           </div>
           <div class="note-meta">
+            <button
+              v-if="desktopNotes.isOnDesktop(note.id)"
+              class="note-desktop active"
+              :title="$t('titlebar.desktopNoteOn')"
+              @click.stop="desktopNotes.toggle(note.id)"
+            >
+              <i class="i-mdi-pin"></i>
+            </button>
             <span class="note-time">{{ formatTimestamp(note.updatedAt) }}</span>
           </div>
         </div>
@@ -175,6 +193,35 @@ function extractPreview(content: string): string {
 .note-time {
   font-size: 11px;
   color: var(--color-text-secondary);
+}
+
+.note-desktop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.note-desktop:hover {
+  background: var(--color-popup-hover);
+  color: var(--color-text);
+}
+
+/* 已经在桌面上的，一直亮着，别让用户找不到它在哪 */
+.note-desktop.active {
+  opacity: 1;
+  color: var(--color-primary);
 }
 
 .note-item.pinned {
