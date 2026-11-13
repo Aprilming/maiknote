@@ -127,6 +127,12 @@ pub fn reveal_app_in_finder() -> Result<(), String> {
     }
 }
 
+/// 重启应用（改完完全磁盘访问等设置后，让新权限生效）
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

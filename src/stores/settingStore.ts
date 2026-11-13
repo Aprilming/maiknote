@@ -90,11 +90,19 @@ function normalizeDesktopNoteLevel(parsed: Partial<AppSettings> & { desktopNoteO
   return 'desktop'
 }
 
+/** 笔记边框宽度：笔记背景到窗口边界之间的留白，0 表示没有边框 */
+export function clampNoteBorderWidth(width: unknown): number {
+  const value = Number(width)
+  if (!Number.isFinite(value)) return 8
+  return Math.min(10, Math.max(0, Math.round(value)))
+}
+
 export interface AppSettings {
   language: 'zh-CN' | 'en-US'
   theme: Theme
   fontSize: number
   tabSize: number
+  noteBorderWidth: number // 笔记背景与窗口边界之间的留白/边框宽度（px），0 = 没有边框，背景铺满
   fontFamily: string
   showGrid: boolean
   translucent: boolean
@@ -148,6 +156,7 @@ export const useSettingStore = defineStore('setting', () => {
     theme: 'auto',
     fontSize: 14,
     tabSize: 4,
+    noteBorderWidth: 8,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     showGrid: false,
     translucent: true,
@@ -229,7 +238,11 @@ export const useSettingStore = defineStore('setting', () => {
 
   // Actions
   function updateSettings<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
-    settings.value[key] = (key === 'tabSize' ? clampTabSize(value as number) : value) as AppSettings[K]
+    const nextValue =
+      key === 'tabSize' ? clampTabSize(value as number)
+      : key === 'noteBorderWidth' ? clampNoteBorderWidth(value)
+      : value
+    settings.value[key] = nextValue as AppSettings[K]
     // Save to localStorage
     saveSettings()
 
@@ -259,6 +272,7 @@ export const useSettingStore = defineStore('setting', () => {
           ...settings.value,
           ...parsed,
           tabSize: clampTabSize(parsed.tabSize ?? settings.value.tabSize),
+          noteBorderWidth: clampNoteBorderWidth(parsed.noteBorderWidth ?? settings.value.noteBorderWidth),
           edgeEnabled:
             typeof parsed.edgeEnabled === 'boolean' ? parsed.edgeEnabled : settings.value.edgeEnabled,
           edgeStripWidth:
@@ -305,6 +319,7 @@ export const useSettingStore = defineStore('setting', () => {
       theme: 'auto',
       fontSize: 14,
       tabSize: 4,
+      noteBorderWidth: 8,
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       showGrid: false,
       translucent: true,

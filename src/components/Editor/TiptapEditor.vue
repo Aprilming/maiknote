@@ -2033,7 +2033,8 @@ defineExpose({
   height: 100%;
   overflow-y: auto;
   background: var(--note-bg, transparent);
-  border-radius: 8px;
+  /* 跟随笔记边框宽度：边框为 0 时不留圆角缺口 */
+  border-radius: var(--note-radius, 8px);
 }
 
 /* AI 加载指示器 */

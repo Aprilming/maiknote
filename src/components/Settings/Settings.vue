@@ -262,14 +262,25 @@ function blockNoteShortcuts(e: KeyboardEvent) {
   }
 }
 
+/** Esc 返回主页面：录制快捷键、确认弹窗开着时，Esc 先归它们用 */
+function handleExitKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (recordingKey.value) return
+  if (document.querySelector('.confirm-mask')) return
+  e.preventDefault()
+  goBack()
+}
+
 onMounted(() => {
   window.addEventListener('keydown', blockNoteShortcuts, true)
+  window.addEventListener('keydown', handleExitKeydown)
   document.addEventListener('mousemove', onDragMove)
   document.addEventListener('mouseup', onDragEnd)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', blockNoteShortcuts, true)
+  window.removeEventListener('keydown', handleExitKeydown)
   document.removeEventListener('mousemove', onDragMove)
   document.removeEventListener('mouseup', onDragEnd)
   stopFdaPolling()
@@ -923,6 +934,24 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
               @input="settingStore.updateSettings('tabSize', parseInt(($event.target as HTMLInputElement).value))"
               class="alpha-slider"
               :style="{ '--fill': `${((settingStore.settings.tabSize - 1) / 11) * 100}%` }"
+            />
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.noteBorderWidth') }}</span>
+              <span class="setting-desc">{{ $t('settings.noteBorderWidthDesc') }}</span>
+              <span class="setting-value">{{ settingStore.settings.noteBorderWidth }}px</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="1"
+              :value="settingStore.settings.noteBorderWidth"
+              @input="settingStore.updateSettings('noteBorderWidth', parseInt(($event.target as HTMLInputElement).value))"
+              class="alpha-slider"
+              :style="{ '--fill': `${(settingStore.settings.noteBorderWidth / 10) * 100}%` }"
             />
           </div>
 

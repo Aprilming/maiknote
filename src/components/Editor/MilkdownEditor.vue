@@ -26,6 +26,15 @@ const { isDark } = useTheme()
 
 const NOTE_COLORS = computed(() => isDark() ? DARK_NOTE_COLORS : LIGHT_NOTE_COLORS)
 
+// 笔记边框：笔记背景与窗口边界之间的留白宽度，0 时背景直接铺满，不再有边框
+const noteFrameStyle = computed(() => {
+  const width = settingStore.settings.noteBorderWidth
+  return {
+    '--note-border-width': `${width}px`,
+    '--note-radius': width > 0 ? '8px' : '0px',
+  }
+})
+
 const colorPickerVisible = ref(false)
 
 function toggleColorPicker() {
@@ -819,7 +828,7 @@ function handleToggleSourceMode() {
 </script>
 
 <template>
-  <div class="editor-container">
+  <div class="editor-container" :style="noteFrameStyle">
     <!-- navigation hint toast - 显示在工具栏上方 -->
     <Transition name="hint-fade">
       <div v-if="noteStore.navigationHint.visible" class="navigation-hint">
@@ -1019,7 +1028,8 @@ function handleToggleSourceMode() {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 8px;
+  /* 笔记边框宽度由设置控制，0 时笔记背景铺满整个编辑区 */
+  padding: var(--note-border-width, 8px);
   background: transparent;
 }
 
@@ -1042,7 +1052,7 @@ function handleToggleSourceMode() {
   white-space: pre-wrap;
   word-wrap: break-word;
   box-sizing: border-box;
-  border-radius: var(--radius-lg);
+  border-radius: var(--note-radius, 8px);
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
@@ -1154,11 +1164,11 @@ function handleToggleSourceMode() {
 }
 
 .left-hint {
-  left: 10px;
+  left: calc(var(--note-border-width, 8px) + 2px);
 }
 
 .right-hint {
-  right: 10px;
+  right: calc(var(--note-border-width, 8px) + 2px);
 }
 
 .editor-wrapper:hover .nav-hint {
@@ -1180,8 +1190,8 @@ function handleToggleSourceMode() {
 
 .right-bottom-controls {
   position: absolute;
-  bottom: 10px;
-  right: 10px;
+  bottom: calc(var(--note-border-width, 8px) + 2px);
+  right: calc(var(--note-border-width, 8px) + 2px);
   z-index: 11;
   display: flex;
   align-items: center;
@@ -1277,8 +1287,8 @@ function handleToggleSourceMode() {
 
 .bottom-bar {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
+  bottom: calc(var(--note-border-width, 8px) + 2px);
+  left: calc(var(--note-border-width, 8px) + 2px);
   z-index: 11;
   display: flex;
   align-items: center;
@@ -1288,7 +1298,7 @@ function handleToggleSourceMode() {
 /* 当前笔记的文件路径：底部居中，过长时由头部省略、文件名保持完整 */
 .file-path-bar {
   position: absolute;
-  bottom: 10px;
+  bottom: calc(var(--note-border-width, 8px) + 2px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;

@@ -42,6 +42,8 @@ export default {
   'settings.fontSize': 'Font Size',
   'settings.tabSize': 'Tab Size',
   'settings.tabSizeValue': '{count} spaces',
+  'settings.noteBorderWidth': 'Note Border',
+  'settings.noteBorderWidthDesc': 'Width of the border between note background and window edge; 0 = no border, background fills the window',
   'settings.codeTheme': 'Code Theme',
   'settings.editorStylePreset': 'Editor Style',
   'settings.editorStylePresetDesc': 'Choose visual style for code blocks, inline code, and blockquotes',

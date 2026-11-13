@@ -127,7 +127,7 @@ pub async fn desktop_note_open(
     app: AppHandle,
     note_id: String,
     bounds: Option<DesktopBounds>,
-    on_top: Option<bool>,
+    level: Option<String>,
 ) -> Result<String, String> {
     let label = label_for(&note_id);
 
@@ -153,18 +153,11 @@ pub async fn desktop_note_open(
         .build()
         .map_err(|e| format!("创建桌面笔记窗口失败: {e}"))?;
 
-    let want_top = on_top.unwrap_or(false);
-    apply_level(&app, &window, want_top);
+    let want_level = level.unwrap_or_else(|| "desktop".to_string());
+    apply_level(&app, &window, &want_level);
 
-    // 前端 show() 之后 AppKit 会把窗口重新 order 到普通层级，等它稳定再压一次
-    {
-        let app_handle = app.clone();
-        let target = window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(700));
-            apply_level(&app_handle, &target, want_top);
-        });
-    }
+    // 前端 show() 之后 AppKit 会把窗口重新 order 到普通层级，等它稳定再压几次
+    apply_level_settling(&app, &window, &want_level);
 
     Ok(label)
 }
@@ -178,16 +171,16 @@ pub async fn desktop_note_close(app: AppHandle, note_id: String) -> Result<(), S
     Ok(())
 }
 
-/// 切换所有桌面卡片的层级（设置里的「浮在最上层」开关）
+/// 切换所有桌面卡片的层级（设置里的层级三档：top / normal / desktop）
 #[tauri::command]
-pub async fn desktop_note_apply_on_top(app: AppHandle, on_top: bool) -> Result<usize, String> {
+pub async fn desktop_note_apply_level(app: AppHandle, level: String) -> Result<usize, String> {
     let mut count = 0;
     for label in app.webview_windows().keys().cloned().collect::<Vec<_>>() {
         if note_id_of(&label).is_none() {
             continue;
         }
         if let Some(window) = app.get_webview_window(&label) {
-            apply_level(&app, &window, on_top);
+            apply_level(&app, &window, &level);
             count += 1;
         }
     }
