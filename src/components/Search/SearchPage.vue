@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useI18n } from 'vue-i18n'
-import { confirmAction } from '@/composables/useConfirm'
-import DirectoryTree from './DirectoryTree.vue'
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -13,151 +11,33 @@ const emit = defineEmits<{
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
 const { t, locale } = useI18n()
+
 const searchInput = ref<HTMLInputElement | null>(null)
+const listRef = ref<HTMLDivElement | null>(null)
 const localQuery = ref('')
-const isTrashView = ref(false)
+const activeIndex = ref(0)
 
-// 拖拽状态
-const isDragging = ref(false)
-const draggedNoteId = ref<string | null>(null)
-const dragOverNoteIndex = ref<number | null>(null)
-const dragOverDirId = ref<string | null | undefined>(undefined)
-const dragStartPos = ref({ x: 0, y: 0 })
-
-// 是否通过关键词搜索
 const isSearching = computed(() => localQuery.value.trim().length > 0)
 
-// 筛选后的搜索结果
+/** 只有一个范围：全部未删除的笔记，按修改时间倒序 */
 const searchResults = computed(() => {
-  let results = isTrashView.value ? noteStore.trashedNotes : noteStore.activeNotes
-  if (!isSearching.value && !isTrashView.value) {
-    results = noteStore.getNotesByDirectory(directoryStore.currentDirectoryId)
+  const q = localQuery.value.trim().toLowerCase()
+  let results = noteStore.activeNotes
+
+  // 空查询时列表不渲染，这里不必计算
+  if (q) {
+    results = results.filter(n => searchableText(n).includes(q))
   }
-  if (localQuery.value) {
-    const q = localQuery.value.toLowerCase()
-    results = results.filter(n =>
-      n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)
-    )
-  }
-  return results.slice(0, 50)
+
+  return [...results].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 100)
 })
 
-// 当前目录名称
-const currentDirName = computed(() => {
-  if (isTrashView.value) return t('trash.title')
-  if (directoryStore.currentDirectoryId === null) return t('dirTree.rootDir')
-  return directoryStore.getDirectory(directoryStore.currentDirectoryId)?.name ?? t('dirTree.rootDir')
-})
+const emptyText = computed(() =>
+  isSearching.value ? t('search.noMatch') : t('search.emptyNotes')
+)
 
-// ---- Pointer event handlers (document-level) ----
+// ---- 工具函数 ----
 
-function onNotePointerDown(e: PointerEvent, noteId: string) {
-  if (isTrashView.value) return
-  draggedNoteId.value = noteId
-  dragStartPos.value = { x: e.clientX, y: e.clientY }
-  isDragging.value = false
-  dragOverNoteIndex.value = null
-  dragOverDirId.value = undefined
-}
-
-function onDocPointerMove(e: PointerEvent) {
-  if (!draggedNoteId.value) return
-
-  // 检测是否超过拖拽阈值 (8px)
-  if (!isDragging.value) {
-    const dx = Math.abs(e.clientX - dragStartPos.value.x)
-    const dy = Math.abs(e.clientY - dragStartPos.value.y)
-    if (dx <= 8 && dy <= 8) return
-    isDragging.value = true
-  }
-
-  e.preventDefault()
-
-  // 检测鼠标下方元素
-  const els = document.elementsFromPoint(e.clientX, e.clientY)
-
-  // 检测目录
-  let foundDir = false
-  for (const el of els) {
-    const dirEl = (el as HTMLElement).closest('[data-dir-id]') as HTMLElement | null
-    if (dirEl) {
-      const raw = dirEl.getAttribute('data-dir-id')
-      dragOverDirId.value = raw === 'root' ? null : raw
-      dragOverNoteIndex.value = null
-      foundDir = true
-      break
-    }
-  }
-  if (!foundDir) dragOverDirId.value = undefined
-
-  // 检测笔记排序目标（仅当不在目录上时）
-  if (!foundDir) {
-    for (const el of els) {
-      const noteEl = (el as HTMLElement).closest('[data-note-index]') as HTMLElement | null
-      if (noteEl) {
-        const idx = parseInt(noteEl.getAttribute('data-note-index')!, 10)
-        if (!isNaN(idx) && draggedNoteId.value) {
-          const curIdx = searchResults.value.findIndex(n => n.id === draggedNoteId.value)
-          dragOverNoteIndex.value = idx !== curIdx ? idx : null
-        }
-        break
-      }
-    }
-  }
-
-  // 没找到任何目标则清除
-  if (!foundDir && !els.some(el => !!(el as HTMLElement).closest('[data-note-index]'))) {
-    dragOverNoteIndex.value = null
-  }
-}
-
-function onDocPointerUp() {
-  if (!draggedNoteId.value) return
-
-  if (isDragging.value) {
-    // 拖入目录
-    if (dragOverDirId.value !== undefined) {
-      const nid = draggedNoteId.value
-      const did = dragOverDirId.value
-      resetDrag()
-      noteStore.moveNoteToDirectory(nid, did)
-      return
-    }
-
-    // 列表内排序
-    if (dragOverNoteIndex.value !== null) {
-      const src = noteStore.notes.findIndex(n => n.id === draggedNoteId.value)
-      const tgt = searchResults.value[dragOverNoteIndex.value]
-      if (tgt && src !== -1) {
-        const dst = noteStore.notes.findIndex(n => n.id === tgt.id)
-        if (dst !== -1 && src !== dst) {
-          const ids = noteStore.notes.map(n => n.id)
-          const [moved] = ids.splice(src, 1)
-          ids.splice(dst, 0, moved)
-          noteStore.reorderNotes(ids)
-        }
-      }
-    }
-  } else {
-    // 点击选择：同步目录过滤，使主编辑器只显示该目录下的笔记
-    const clickedNote = noteStore.notes.find(n => n.id === draggedNoteId.value)
-    noteStore.setFilterDirectory(clickedNote?.directoryId ?? null)
-    localQuery.value = ''
-    noteStore.selectNote(draggedNoteId.value)
-    emit('close')
-  }
-
-  resetDrag()
-}
-
-function resetDrag() {
-  isDragging.value = false
-  draggedNoteId.value = null
-  dragOverNoteIndex.value = null
-  dragOverDirId.value = undefined
-}
-
-// ---- 格式化/工具函数 ----
 function formatDate(ts: number): string {
   const d = new Date(ts)
   const diff = Date.now() - ts
@@ -165,11 +45,55 @@ function formatDate(ts: number): string {
   if (diff < day) return t('search.today')
   if (diff < 2 * day) return t('search.yesterday')
   if (diff < 7 * day) return t('search.daysAgo', { n: Math.floor(diff / day) })
-  return d.toLocaleDateString(locale.value === 'en-US' ? 'en-US' : 'zh-CN', { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString(locale.value === 'en-US' ? 'en-US' : 'zh-CN', {
+    month: 'short',
+    day: 'numeric'
+  })
+}
+
+/** 去掉语法噪音，只留可读文字；预览与搜索共用同一份口径 */
+function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ') // 代码块
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // 图片语法
+    .replace(/!\{[^}]*\}\S*/g, ' ') // !{asset://...} 本地资源
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // 链接只留文字
+    .replace(/https?:\/\/\S+/g, ' ') // 裸 URL
+    .replace(/<\/?[a-zA-Z][^>]*>/g, ' ') // HTML 标签
+    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)])\s+/gm, ' ') // 标题/列表前缀
+    .replace(/[#*`_~|>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** 搜索用文本：标题 + 正文，带缓存（note 内容变化时按 updatedAt 失效） */
+const searchTextCache = new Map<string, string>()
+
+function searchableText(note: { id: string; title: string; content: string; updatedAt: number }): string {
+  const key = `${note.id}@${note.updatedAt}`
+  const cached = searchTextCache.get(key)
+  if (cached !== undefined) return cached
+
+  if (searchTextCache.size > 400) searchTextCache.clear()
+  const value = `${note.title} ${plainText(note.content)}`.toLowerCase()
+  searchTextCache.set(key, value)
+  return value
 }
 
 function getPreview(s: string): string {
-  return s.replace(/[#*`_~\[\]]/g, '').trim().substring(0, 80)
+  return plainText(s).substring(0, 120)
+}
+
+/** 正文开头就是标题时不再重复展示预览 */
+function isSameAsTitle(note: { title: string; content: string }): boolean {
+  const title = note.title.trim()
+  const body = getPreview(note.content)
+  return !body || body === title
+}
+
+function dirNameOf(note: { directoryId?: string | null }): string {
+  if (!note.directoryId) return t('dirTree.rootDir')
+  return directoryStore.getDirectory(note.directoryId)?.name ?? t('dirTree.rootDir')
 }
 
 function highlightKeyword(text: string, kw: string): string {
@@ -180,414 +104,459 @@ function highlightKeyword(text: string, kw: string): string {
   )
 }
 
+// ---- 交互 ----
+
+function scrollActiveIntoView() {
+  nextTick(() => {
+    const el = listRef.value?.querySelector(`[data-idx="${activeIndex.value}"]`) as HTMLElement | null
+    el?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function moveActive(delta: number) {
+  if (searchResults.value.length === 0) return
+  const next = activeIndex.value + delta
+  activeIndex.value = Math.min(searchResults.value.length - 1, Math.max(0, next))
+  scrollActiveIntoView()
+}
+
+function openNote(noteId: string) {
+  const note = noteStore.notes.find(n => n.id === noteId)
+  // 同步目录过滤，使主编辑器只显示该目录下的笔记
+  noteStore.setFilterDirectory(note?.directoryId ?? null)
+  noteStore.selectNote(noteId)
+  emit('close')
+}
+
+function handleSelect(noteId: string) {
+  openNote(noteId)
+}
+
 function handleCancel() {
   localQuery.value = ''
   emit('close')
 }
 
-function handleSelectDirectory() {
-  isTrashView.value = false
-}
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    handleCancel()
+    return
+  }
+  if (!isSearching.value) return
 
-function handleSelectTrash() {
-  isTrashView.value = true
-  localQuery.value = ''
-  resetDrag()
-}
-
-async function handleRestore(noteId: string) {
-  await noteStore.restoreNote(noteId)
-}
-
-async function handlePermanentDelete(noteId: string) {
-  const confirmed = await confirmAction({
-    message: t('trash.deleteConfirm'),
-    confirmText: t('trash.delete')
-  })
-  if (confirmed) {
-    await noteStore.permanentlyDeleteNote(noteId)
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    moveActive(1)
+    return
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    moveActive(-1)
+    return
+  }
+  if (e.key === 'Enter') {
+    const target = searchResults.value[activeIndex.value]
+    if (target) {
+      e.preventDefault()
+      openNote(target.id)
+    }
   }
 }
 
-async function handleEmptyTrash() {
-  if (noteStore.trashedNotes.length === 0) return
-  const confirmed = await confirmAction({
-    message: t('trash.emptyConfirm', { count: noteStore.trashedNotes.length }),
-    confirmText: t('trash.empty')
-  })
-  if (confirmed) {
-    await noteStore.emptyTrash()
-  }
-}
+watch(searchResults, () => {
+  activeIndex.value = 0
+})
 
 onMounted(() => {
   searchInput.value?.focus()
   document.addEventListener('keydown', handleKeydown)
-  document.addEventListener('pointermove', onDocPointerMove)
-  document.addEventListener('pointerup', onDocPointerUp)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
-  document.removeEventListener('pointermove', onDocPointerMove)
-  document.removeEventListener('pointerup', onDocPointerUp)
-  resetDrag()
 })
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') handleCancel()
-}
 </script>
 
 <template>
-  <div class="search-page">
-    <!-- 顶部搜索栏 -->
-    <div class="search-header">
-      <div class="search-input-wrapper">
+  <div class="search-page" :class="{ 'is-idle': !isSearching }">
+    <div class="search-wrap">
+      <!-- 搜索框 -->
+      <div class="search-bar" :class="{ 'is-active': isSearching }">
         <i class="i-mdi-magnify search-icon"></i>
         <input
           ref="searchInput"
           v-model="localQuery"
           type="text"
-          :placeholder="$t('search.searchIn', { name: currentDirName })"
+          :placeholder="$t('search.searchAll')"
           class="search-input"
         />
-        <button v-if="localQuery" class="clear-btn" @click="localQuery = ''">
+        <button v-if="localQuery" class="clear-btn" :title="$t('search.cancel')" @click="localQuery = ''">
           <i class="i-mdi-close"></i>
         </button>
-      </div>
-      <button class="cancel-btn" @click="handleCancel">{{ $t('search.cancel') }}</button>
-    </div>
-
-    <!-- 底部左右分栏 -->
-    <div class="search-body">
-      <!-- 左侧目录树 -->
-      <div class="search-sidebar">
-        <DirectoryTree
-          :highlight-dir-id="isDragging ? dragOverDirId : undefined"
-          :is-trash-selected="isTrashView"
-          :show-trash="true"
-          :on-select="handleSelectDirectory"
-          @select-trash="handleSelectTrash"
-        />
+        <span v-else class="esc-hint">esc</span>
       </div>
 
-      <!-- 右侧笔记列表 -->
-      <div class="search-main">
-        <div class="dir-title">
-          <i v-if="isTrashView" class="i-mdi-delete-outline"></i>
-          <i v-else class="i-mdi-folder-outline"></i>
-          <span>{{ currentDirName }}</span>
-          <span class="dir-title-count">{{ $t('search.noteCount', { count: searchResults.length }) }}</span>
-          <button
-            v-if="isTrashView && noteStore.trashedNotes.length > 0"
-            class="empty-trash-btn"
-            @click="handleEmptyTrash"
-          >
-            {{ $t('trash.empty') }}
-          </button>
+      <!-- 结果列表：只在有查询时出现 -->
+      <div v-if="isSearching" ref="listRef" class="result-list">
+        <div v-if="searchResults.length === 0" class="empty-state">
+          <i class="i-mdi-text-box-search-outline"></i>
+          <p>{{ emptyText }}</p>
         </div>
 
-        <div class="search-results">
-          <div v-if="searchResults.length === 0" class="no-results">
-            <template v-if="localQuery">{{ $t('search.noMatch') }}</template>
-            <template v-else-if="isTrashView">{{ $t('trash.emptyState') }}</template>
-            <template v-else-if="directoryStore.currentDirectoryId === null">{{ $t('search.emptyNotes') }}</template>
-            <template v-else>{{ $t('search.emptyDir') }}</template>
-          </div>
-
+        <div
+          v-for="(note, index) in searchResults"
+          :key="note.id"
+          :data-idx="index"
+          class="result-item"
+          :class="{ 'is-active': index === activeIndex }"
+          @mouseenter="activeIndex = index"
+          @click="handleSelect(note.id)"
+        >
+          <div class="result-title" v-html="highlightKeyword(note.title || $t('search.untitled'), localQuery)"></div>
           <div
-            v-for="(note, index) in searchResults"
-            :key="note.id"
-            :data-note-id="note.id"
-            :data-note-index="index"
-            class="result-item"
-            :class="{
-              'is-dragging': draggedNoteId === note.id,
-              'is-drag-over': isDragging && dragOverNoteIndex === index && dragOverDirId === undefined
-            }"
-            @pointerdown="onNotePointerDown($event, note.id)"
-          >
-            <div class="result-header">
-              <div class="result-title" v-html="highlightKeyword(note.title, localQuery)"></div>
-              <i v-if="note.isLocked" class="i-mdi-lock result-locked-icon"></i>
-              <div class="result-date">{{ formatDate(note.updatedAt) }}</div>
-            </div>
-            <div class="result-preview" v-html="highlightKeyword(getPreview(note.content), localQuery)"></div>
-            <div v-if="isTrashView" class="trash-actions" @pointerdown.stop>
-              <button class="trash-action-btn restore" @click.stop="handleRestore(note.id)">
-                <i class="i-mdi-restore"></i>
-                <span>{{ $t('trash.restore') }}</span>
-              </button>
-              <button class="trash-action-btn delete" @click.stop="handlePermanentDelete(note.id)">
-                <i class="i-mdi-delete-forever-outline"></i>
-                <span>{{ $t('trash.delete') }}</span>
-              </button>
-            </div>
+            v-if="!isSameAsTitle(note)"
+            class="result-preview"
+            v-html="highlightKeyword(getPreview(note.content), localQuery)"
+          ></div>
+
+          <div class="result-meta">
+            <span class="meta-dir">
+              <i class="i-mdi-folder-outline"></i>
+              {{ dirNameOf(note) }}
+            </span>
+            <i v-if="note.isLocked" class="i-mdi-lock-outline meta-lock"></i>
+            <span class="meta-dot">·</span>
+            <span class="meta-date">{{ formatDate(note.updatedAt) }}</span>
           </div>
         </div>
+      </div>
+
+      <!-- 底部提示：只在有查询时出现 -->
+      <div v-if="isSearching" class="search-footer">
+        <span class="hint"><kbd>↑</kbd><kbd>↓</kbd> {{ $t('search.hintMove') }}</span>
+        <span class="hint"><kbd>↵</kbd> {{ $t('search.hintOpen') }}</span>
+        <span class="hint"><kbd>esc</kbd> {{ $t('search.hintClose') }}</span>
+        <span v-if="searchResults.length" class="result-count">{{ $t('search.noteCount', { count: searchResults.length }) }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* ============================================
+   全局搜索页 · 磨砂玻璃皮肤
+   口径：整页透明露出原生 vibrancy，中间一块半透明玻璃面板；
+   面板内部按「下沉槽位 / 悬停白雾」两级语言处理，不再用实色卡片。
+   ============================================ */
 .search-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: transparent;
-}
+  /* ---- 玻璃令牌（浅色） ---- */
+  --sp-mesh:
+    radial-gradient(70% 60% at 8% -8%, rgba(120, 160, 255, 0.34) 0%, transparent 72%),
+    radial-gradient(65% 60% at 92% 2%, rgba(204, 148, 242, 0.28) 0%, transparent 70%),
+    radial-gradient(85% 70% at 50% 112%, rgba(104, 204, 176, 0.3) 0%, transparent 70%),
+    linear-gradient(160deg, rgba(230, 237, 251, 0.94) 0%, rgba(243, 233, 247, 0.92) 100%);
+  --sp-panel-strong: rgba(255, 255, 255, 0.72);
+  --sp-border: rgba(255, 255, 255, 0.7);
+  --sp-line: rgba(0, 0, 0, 0.07);
+  --sp-sunken: rgba(120, 120, 128, 0.11);
+  --sp-row-hover: rgba(255, 255, 255, 0.46);
+  --sp-mark: rgba(255, 214, 10, 0.42);
+  --sp-blur: blur(30px) saturate(180%);
 
-.search-header {
-  display: flex;
-  align-items: center;
-  padding: 16px 16px 12px;
-  gap: 12px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.search-body {
-  display: flex;
   flex: 1;
   min-height: 0;
-}
-
-.search-sidebar {
-  width: 40%;
-  min-width: 180px;
-  max-width: 320px;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 0;
   overflow: hidden;
-  border-right: 1px solid var(--color-border);
+  /* 页底铺一层低饱和柔光雾（半透，原生 vibrancy 仍能透上来），
+     卡片 blur 的才是「有内容可模糊」的背景，而不是一片白 */
+  background: var(--sp-mesh);
+  animation: fade-in var(--duration-normal) var(--ease-out);
 }
 
-.search-main {
-  flex: 1;
+/* 细密的霜面颗粒：白底上也能看出「磨砂」而不是纯色块 */
+.search-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.32'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+}
+
+:global([data-theme='dark'] .search-page) {
+  --sp-mesh:
+    radial-gradient(70% 60% at 10% -5%, rgba(58, 104, 220, 0.3) 0%, transparent 72%),
+    radial-gradient(65% 60% at 90% 5%, rgba(146, 84, 206, 0.22) 0%, transparent 70%),
+    radial-gradient(80% 65% at 50% 110%, rgba(36, 148, 128, 0.2) 0%, transparent 70%),
+    linear-gradient(165deg, rgba(20, 22, 28, 0.92) 0%, rgba(25, 21, 30, 0.9) 100%);
+  --sp-panel-strong: rgba(255, 255, 255, 0.15);
+  --sp-border: rgba(255, 255, 255, 0.16);
+  --sp-line: rgba(255, 255, 255, 0.1);
+  --sp-sunken: rgba(0, 0, 0, 0.16);
+  --sp-row-hover: rgba(255, 255, 255, 0.1);
+  --sp-mark: rgba(255, 214, 10, 0.28);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- 内容列（整页就是一块玻璃，不再往里套卡片） ---- */
+.search-wrap {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  width: 100%;
+  max-width: 880px;
+  /* 顶部留出悬浮标题栏（40px + 8px 边距）的位置，避免搜索框被压住 */
+  padding: 50px 18px 10px;
+  transition: padding var(--duration-normal) var(--ease-out);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
-.search-input-wrapper {
-  flex: 1;
+/* ---- 搜索框（下沉槽位） ---- */
+.search-bar {
+  position: relative;
   display: flex;
   align-items: center;
-  position: relative;
+  height: 46px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--sp-border);
+  background: linear-gradient(165deg, var(--sp-panel-strong) 0%, color-mix(in srgb, var(--sp-panel-strong) 78%, transparent) 100%);
+  -webkit-backdrop-filter: var(--sp-blur);
+  backdrop-filter: var(--sp-blur);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 18px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.search-bar:focus-within {
+  background: var(--sp-panel-strong);
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 .search-icon {
-  position: absolute;
-  left: 12px;
+  flex-shrink: 0;
+  font-size: 20px;
   color: var(--color-text-secondary);
-  font-size: 18px;
+  margin-right: 10px;
 }
 
 .search-input {
-  width: 100%;
-  height: 40px;
-  padding: 0 36px;
-  font-size: 15px;
-  border: 1px solid var(--color-border);
-  border-radius: 20px;
-  background: var(--color-surface);
-  color: var(--color-text);
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+  border: none;
   outline: none;
-}
-
-.search-input:focus {
-  border-color: var(--color-primary);
-}
-
-.clear-btn {
-  position: absolute;
-  right: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 50%;
-  background: var(--color-border);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.cancel-btn {
-  padding: 8px 4px;
-  font-size: 15px;
-  color: var(--color-primary);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.dir-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 16px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.dir-title i {
-  font-size: 16px;
-  color: var(--color-text-secondary);
-}
-
-.dir-title-count {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--color-text-secondary);
-  margin-left: 4px;
-}
-
-.empty-trash-btn {
-  margin-left: auto;
-  padding: 4px 8px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 6px;
   background: transparent;
-  color: var(--color-danger, #ef4444);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.empty-trash-btn:hover {
-  background: rgba(239, 68, 68, 0.1);
-}
-
-.search-results {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.no-results {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-}
-
-.result-item {
-  padding: 12px 16px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
-}
-
-.result-item.is-dragging {
-  opacity: 0.5;
-  background: var(--color-surface);
-}
-
-.result-item.is-drag-over {
-  border-top: 2px solid var(--color-primary);
-}
-
-.result-item:hover {
-  background: color-mix(in srgb, var(--color-text-secondary) 6%, transparent);
-}
-
-.result-item:active {
-  transform: scale(0.995);
-}
-
-.result-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.result-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-family: var(--font-sans);
   color: var(--color-text);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   letter-spacing: -0.01em;
 }
 
-.result-locked-icon {
-  font-size: 14px;
-  color: var(--color-primary);
-  margin-left: 6px;
-  flex-shrink: 0;
+.search-input::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 0.85;
 }
 
-.result-date {
-  font-size: 12px;
+.clear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-text-secondary) 20%, transparent);
   color: var(--color-text-secondary);
-  margin-left: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.clear-btn:hover {
+  background: color-mix(in srgb, var(--color-text-secondary) 32%, transparent);
+}
+
+.esc-hint {
   flex-shrink: 0;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  border: 1px solid var(--sp-line);
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--sp-panel-strong);
+}
+
+.search-page.is-idle .search-wrap {
+  justify-content: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 72px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.empty-state i {
+  font-size: 22px;
+  opacity: 0.5;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+/* ---- 结果列表 ---- */
+.result-list {
+  flex: 1;
+  min-height: 0;
+  margin-top: 14px;
+  overflow-y: auto;
+  padding: 2px 0 10px;
+  scroll-padding: 8px 0 10px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 26px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 26px), transparent 100%);
+}
+
+.result-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--sp-line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.result-item.is-active {
+  background: var(--sp-row-hover);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+:global([data-theme='dark'] .result-item.is-active) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+.result-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .result-preview {
+  margin-top: 3px;
   font-size: var(--text-sm);
-  color: var(--color-text-secondary);
   line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
+  color: var(--color-text-secondary);
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.trash-actions {
+.result-meta {
   display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.trash-action-btn {
-  display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.85;
+  min-height: 18px;
+}
+
+.meta-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta-dir i,
+.meta-lock {
   font-size: 12px;
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
 }
 
-.trash-action-btn i {
-  font-size: 14px;
+.meta-dot {
+  opacity: 0.5;
 }
 
-.trash-action-btn.restore {
-  color: var(--color-primary);
+.meta-date {
+  flex-shrink: 0;
 }
 
-.trash-action-btn.delete {
-  color: var(--color-danger, #ef4444);
+/* ---- 底部提示 ---- */
+.search-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 4px 2px;
+  border-top: 1px solid var(--sp-line);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+  flex-shrink: 0;
 }
 
-.trash-action-btn:hover {
-  background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent);
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
-.trash-action-btn:active {
-  transform: scale(0.95);
+.hint kbd {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border: 1px solid var(--sp-line);
+  border-radius: 3px;
+  background: var(--sp-panel-strong);
 }
 
+.result-count {
+  margin-left: auto;
+}
+
+/* 高亮关键词 */
 .result-item :deep(mark) {
-  background: rgba(255, 221, 0, 0.4);
+  background: var(--sp-mark);
   color: inherit;
-  padding: 0 2px;
+  padding: 0 1px;
   border-radius: 2px;
 }
 </style>
