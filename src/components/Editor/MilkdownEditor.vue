@@ -299,10 +299,11 @@ function toggleLock() {
 }
 
 // 计算当前笔记字数
+// 空行在 .md 源码里靠零宽空格占位（见 emptyLine.ts），它不是用户写的字，不能算进字数：
+// 否则一篇只写了几个字的笔记，因为多留了空行就显示成几十字
 const wordCount = computed(() => {
-  const text = localContent.value || ''
-  const count = text.trim().length
-  return count
+  const text = (localContent.value || '').replace(/[\u200b\ufeff]/g, '')
+  return text.trim().length
 })
 
 // get current note
