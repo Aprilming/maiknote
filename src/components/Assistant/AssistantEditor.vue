@@ -200,7 +200,7 @@ function handleOverlayClick(e: MouseEvent) {
   backdrop-filter: blur(18px) saturate(140%);
 }
 
-:global(html[data-theme='dark']) .dialog-overlay {
+:global(html[data-theme='dark'] .dialog-overlay) {
   --dlg-bg: linear-gradient(180deg, rgba(46, 46, 48, 0.97), rgba(36, 36, 38, 0.96));
   --dlg-text: #f2f2f7;
   --dlg-text-dim: rgba(235, 235, 245, 0.62);

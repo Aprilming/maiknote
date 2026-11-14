@@ -863,7 +863,7 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.07);
 }
 
-:global(html[data-theme='dark']) .head-hide:hover {
+:global(html[data-theme='dark'] .head-hide:hover) {
   background: rgba(255, 255, 255, 0.12);
 }
 
@@ -1194,21 +1194,21 @@ onUnmounted(() => {
   border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-:global([data-theme="dark"]) .card-content.md :deep(code),
-:global([data-theme="dark"]) .card-content.md :deep(pre) {
+:global([data-theme="dark"] .card-content.md code),
+:global([data-theme="dark"] .card-content.md pre) {
   background: rgba(255, 255, 255, 0.1);
 }
 
-:global([data-theme="dark"]) .card-content.md :deep(blockquote) {
+:global([data-theme="dark"] .card-content.md blockquote) {
   border-left-color: rgba(255, 255, 255, 0.24);
 }
 
-:global([data-theme="dark"]) .card-content.md :deep(hr) {
+:global([data-theme="dark"] .card-content.md hr) {
   border-top-color: rgba(255, 255, 255, 0.18);
 }
 
-:global([data-theme="dark"]) .card-content.md :deep(th),
-:global([data-theme="dark"]) .card-content.md :deep(td) {
+:global([data-theme="dark"] .card-content.md th),
+:global([data-theme="dark"] .card-content.md td) {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
@@ -1335,21 +1335,22 @@ onUnmounted(() => {
 }
 
 /* 深色主题微调 */
-:global([data-theme='dark']) .note-card,
-:global(html[data-theme='dark']) .note-card {
+:global([data-theme='dark'] .note-card) {
   background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
-:global(html[data-theme='dark']) .note-card:hover {
+:global([data-theme='dark'] .note-card:hover) {
   background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
-:global(html[data-theme='dark']) .ctx-menu {
+:global([data-theme='dark'] .ctx-menu) {
   background: rgba(38, 40, 44, 0.96);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
 }
 
-:global(html[data-theme='dark']) .edge-panel {
+:global([data-theme='dark'] .edge-panel) {
   border-left-color: rgba(255, 255, 255, 0.08);
   box-shadow: -12px 0 28px rgba(0, 0, 0, 0.45);
 }

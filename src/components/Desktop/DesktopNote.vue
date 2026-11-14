@@ -333,7 +333,7 @@ onUnmounted(() => {
   transition: box-shadow 0.16s ease, border-color 0.16s ease;
 }
 
-:global(html[data-theme='dark']) .card {
+:global(html[data-theme='dark'] .card) {
   background: rgba(38, 38, 40, 0.92);
 }
 

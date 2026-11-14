@@ -27,7 +27,7 @@ Website & downloads: [maiknote.91kfc.vip](https://maiknote.91kfc.vip)
 **Come and go** · summon/hide anywhere with one shortcut ｜ **What you see is what you write** · live Markdown, no preview pane ｜ **No entities without need** · minimal UI, focus on content
 
 ## Screenshots
-
+![img.png](resources/img.png)
 ![Main window](resources/demo1.webp)
 ![Dark theme](resources/demo1-dark.webp)
 

@@ -14,6 +14,7 @@
   --accent: #7aa2ff;
   --accent-2: #b18bff;
   --accent-ink: #ffffff;
+  --red: #ff6b6b;
   --radius: 18px;
   --shadow: 0 40px 120px rgba(0, 0, 0, .55);
   --maxw: 1080px;
@@ -32,6 +33,7 @@ html[data-theme="light"] {
   --faint: #8b909c;
   --accent: #2f6bff;
   --accent-2: #7a4dff;
+  --red: #e5484d;
   --shadow: 0 30px 80px rgba(20, 24, 40, .16);
 }
 
@@ -352,6 +354,7 @@ h2 {
 
 .card h3 { margin: 0 0 8px; font-size: 16px; letter-spacing: -.012em; }
 .card p { margin: 0; color: var(--muted); font-size: 14px; }
+.card p .hl { color: var(--red); font-weight: 700; }
 
 .card code {
   padding: 1px 5px;
@@ -539,7 +542,7 @@ html[data-theme="light"] .code code { color: #e8ecf5; }
 }
 .copy-btn:hover { background: rgba(255, 255, 255, .18); }
 
-.hint { margin: 14px 0 0 !important; font-size: 13px !important; color: var(--faint) !important; }
+.hint { margin: 14px 0 0 !important; font-size: 13px !important; color: var(--red) !important; font-weight: 600; }
 
 .tree {
   margin: 0;

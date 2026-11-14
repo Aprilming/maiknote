@@ -27,7 +27,7 @@
 **召之即来，挥之即去** · 全局快捷键随时唤起 / 隐藏 ｜ **所见即所得** · 实时渲染 Markdown，无需切换预览 ｜ **如无必要，勿增实体** · 极简界面，专注内容本身
 
 ## 主要界面
-
+![img.png](resources/img.png)
 ![主界面](resources/demo1.webp)
 ![深色](resources/demo1-dark.webp)
 

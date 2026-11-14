@@ -2282,13 +2282,13 @@ defineExpose({
   background: rgba(120, 120, 128, 0.14);
 }
 
-:global(html[data-theme='dark']) .ai-preview-chip {
+:global(html[data-theme='dark'] .ai-preview-chip) {
   color: #4fb0ff;
   background: rgba(10, 132, 255, 0.22);
 }
 
-:global(html[data-theme='dark']) .ai-preview-chip.is-empty,
-:global(html[data-theme='dark']) .ai-preview-chip.is-failed {
+:global(html[data-theme='dark'] .ai-preview-chip.is-empty),
+:global(html[data-theme='dark'] .ai-preview-chip.is-failed) {
   color: rgba(235, 235, 245, 0.6);
   background: rgba(120, 120, 128, 0.24);
 }
@@ -2429,32 +2429,32 @@ defineExpose({
 
 .ai-btn-stop:hover { background: rgba(255, 59, 48, 0.2); }
 
-:global(html[data-theme='dark']) .ai-preview {
+:global(html[data-theme='dark'] .ai-preview) {
   background: rgba(40, 40, 42, 0.97);
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-:global(html[data-theme='dark']) .ai-preview-head,
-:global(html[data-theme='dark']) .ai-preview-foot {
+:global(html[data-theme='dark'] .ai-preview-head),
+:global(html[data-theme='dark'] .ai-preview-foot) {
   border-color: rgba(255, 255, 255, 0.07);
 }
 
-:global(html[data-theme='dark']) .ai-preview-title,
-:global(html[data-theme='dark']) .ai-preview-text {
+:global(html[data-theme='dark'] .ai-preview-title),
+:global(html[data-theme='dark'] .ai-preview-text) {
   color: rgba(255, 255, 255, 0.86);
 }
 
-:global(html[data-theme='dark']) .ai-preview-foot {
+:global(html[data-theme='dark'] .ai-preview-foot) {
   background: rgba(255, 255, 255, 0.03);
 }
 
-:global(html[data-theme='dark']) .ai-btn {
+:global(html[data-theme='dark'] .ai-btn) {
   color: rgba(255, 255, 255, 0.86);
   background: rgba(120, 120, 128, 0.28);
 }
 
-:global(html[data-theme='dark']) .ai-btn-primary {
+:global(html[data-theme='dark'] .ai-btn-primary) {
   color: #fff;
 }
 

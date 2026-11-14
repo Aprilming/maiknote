@@ -1511,7 +1511,7 @@ onBeforeUnmount(() => {
   --tree-orphan: #f97316;
 }
 
-:global(html[data-theme='dark']) .file-tree {
+:global(html[data-theme='dark'] .file-tree) {
   --tree-root: #a78bfa;
   --tree-folder: #fbbf24;
   --tree-note: #38bdf8;
