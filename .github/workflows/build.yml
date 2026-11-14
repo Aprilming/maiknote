@@ -2,6 +2,7 @@ name: Build
 
 on:
   # 只在打 tag 时编译发布；main 分支与 PR 不构建
+  # （main 分支的 Rust 缓存预热见 warm-cache.yml：tag 缓存在独立 ref 域，不复用）
   push:
     tags: ['**']
   workflow_dispatch:
@@ -18,6 +19,8 @@ jobs:
   # 发布：tag 推送时构建双架构
   release:
     strategy:
+      # 一个架构失败不连坐另一个
+      fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
@@ -43,6 +46,9 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
+          # 缓存统一由 warm-cache.yml 在 main 上生成；tag 构建只读不写，
+          # 省掉每次 ~35s 的缓存上传
+          save-if: false
       - run: npm ci
       - run: APP_VERSION="${GITHUB_REF_NAME#v}" npm run tauri build -- --target ${{ matrix.target }}
       # 注入小组件扩展、重签、重打 dmg 与 updater 包

@@ -1,0 +1,60 @@
+name: Warm Rust Cache
+
+# 目的：tag 触发的 Build 走的是 refs/heads/refs/tags/<tag> 这个独立缓存域，
+# 每次打 tag 都拿不到上一次的 Rust 缓存（实测缓存还原 1s = 未命中），
+# 于是每次都从零编译全部依赖（约 5-6 分钟）。
+# 这里在 main 分支提前把 release 依赖编好并存入缓存：
+# 默认分支的缓存对所有 ref（含 tag）可见，tag 构建就能直接命中。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/tauri.conf.json'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/warm-cache.yml'
+  schedule:
+    # 每周刷新一次，避免缓存因 7 天未访问被淘汰
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  warm:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+      # 与 build.yml 完全一致的 workspaces/key，保证缓存 key 前缀相同、可被 tag 构建命中
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - run: npm run build
+      # 只编 Rust 依赖，不做打包签名，产物丢弃；目的是把 target 目录写进缓存
+      - name: Prebuild release dependencies
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }} --features custom-protocol
