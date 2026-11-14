@@ -6,6 +6,9 @@ on:
     tags: ['**']
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'site/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +16,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # 快速验证：PR 或 push 到 main 时只构建 aarch64
@@ -30,6 +34,11 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: aarch64-apple-darwin
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: aarch64-apple-darwin
       - run: npm ci
       - run: npm run tauri build -- --target aarch64-apple-darwin
       # 小组件是独立的 WidgetKit 扩展，打包后编译注入并重打 dmg
@@ -62,6 +71,11 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
       - run: npm ci
       - run: APP_VERSION="${GITHUB_REF_NAME#v}" npm run tauri build -- --target ${{ matrix.target }}
       # 注入小组件扩展、重签、重打 dmg 与 updater 包
