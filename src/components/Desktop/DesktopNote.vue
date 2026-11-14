@@ -6,6 +6,8 @@ import { emit, emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { writeText as writeClipboardNative } from '@tauri-apps/plugin-clipboard-manager'
 import { useI18n } from 'vue-i18n'
 import { createPreviewMarkdown, toggleTaskLine } from '@/utils/markdownTasks'
+import { useTheme } from '@/composables/useTheme'
+import { adaptNoteColor } from '@/utils/noteColorTheme'
 import {
   DESKTOP_NOTE_BOUNDS,
   DESKTOP_NOTE_CLOSED,
@@ -61,10 +63,13 @@ function isLightColor(hex: string): boolean {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.62
 }
 
-/** 卡片底色跟笔记颜色同步；没设颜色就用主题默认色 */
+const { currentTheme } = useTheme()
+
+/** 卡片底色跟笔记颜色同步（按明暗主题适配）；没设颜色就用主题默认色 */
 const cardStyle = computed<Record<string, string>>(() => {
-  const bg = payload.value?.backgroundColor?.trim()
-  if (!bg) return {} as Record<string, string>
+  const stored = payload.value?.backgroundColor?.trim()
+  if (!stored) return {} as Record<string, string>
+  const bg = adaptNoteColor(stored, currentTheme.value)
   const light = isLightColor(bg)
   return {
     background: bg,

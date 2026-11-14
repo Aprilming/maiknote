@@ -7,7 +7,7 @@
   <p>一款 macOS 原生的 AI Markdown 悬浮便签应用</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-macOS-black?style=flat-square&logo=apple" />
-    <img src="https://img.shields.io/badge/Tauri-2.x-blue?style=flat-square" />
+![img.png](img.png)    <img src="https://img.shields.io/badge/Tauri-2.x-blue?style=flat-square" />
     <img src="https://img.shields.io/badge/Vue-3.x-42b883?style=flat-square&logo=vue.js" />
     <img src="https://img.shields.io/badge/iCloud-同步-0071e3?style=flat-square&logo=icloud" />
     <img src="https://img.shields.io/github/v/release/Aprilming/maiknote?style=flat-square&label=Version" />

@@ -258,6 +258,9 @@ const props = defineProps<{
   noteBgColor?: string
 }>()
 
+// 底色由父级按当前主题适配后传进来（MilkdownEditor 的 adaptedNoteBg），这里只管渲染
+const adaptedNoteBg = computed(() => props.noteBgColor || '')
+
 const emit = defineEmits<{
   update: [markdown: string]
 }>()
@@ -473,18 +476,26 @@ const contextMenuStyle = ref<{ left: string; top: string }>({ left: '0px', top: 
 const savedSelectionText = ref('') // 保存右键菜单打开时的选中文本
 // 存储右键点击前的 ProseMirror 选区快照（用于在右键处理完成后恢复）
 let rightClickSnapshot: { from: number; to: number } | null = null
+// 右键时的选区（AI 用它确定处理范围，避免菜单交互过程中选区丢失）
+let savedSelectionRange: { from: number; to: number } | null = null
 const hasClipboardText = ref(false) // 剪贴板是否有文本（控制「粘贴」项显示）
 const contextMenuLinkHref = ref('') // 右键点中的链接地址（空串表示不是链接）
 
-// AI 相关
+// AI 相关：先生成到预览面板，用户确认后才写入笔记
 const isAILoading = ref(false)
-let pendingSelectionText = '' // 待处理的选中文本（用于传递给AI）
-let contentBeforeSelection = '' // 选中内容之前的内容
-let contentAfterSelection = '' // 选中内容之后的内容
-let userHadSelection = false   // 用户发起 AI 请求时是否有选中文本
-let originalContent = '' // 原始编辑器内容（用于匹配失败时保留原文）
+const aiPreviewVisible = ref(false)
+const aiPreviewText = ref('')
+const aiPreviewName = ref('')
+const aiPreviewError = ref('')
+const aiPreviewStatus = ref<'idle' | 'streaming' | 'done' | 'error'>('idle')
+// 联网搜索在这次生成里的结果：off 未开启 / used 已用上 / empty 没有结果 / failed 请求失败
+const aiPreviewSearch = ref<'off' | 'used' | 'empty' | 'failed'>('off')
+const aiTargetScope = ref<'selection' | 'document'>('selection')
+const aiPreviewBodyRef = ref<HTMLElement>()
 let aiAbortController: AbortController | null = null
-
+let aiInputText = '' // 送给模型的原文
+let aiDocSnapshot = '' // 发起请求时的整篇 Markdown，用于判断笔记是否已被改动
+let aiTarget: { from: number; to: number; scope: 'selection' | 'document' } | null = null
 const hasAIConfig = computed(() => true) // 始终显示菜单，未配置时点击会提示
 
 // 用户助手列表（排除模板助手）
@@ -493,36 +504,41 @@ const userAssistants = computed(() => {
 })
 
 // Toast 通知函数
-function showToast(message: string, duration = 2000) {
+let toastHost: HTMLDivElement | null = null
+
+function ensureToastHost() {
+  if (toastHost && document.body.contains(toastHost)) return toastHost
+  const host = document.createElement('div')
+  host.className = 'app-toast-host'
+  document.body.appendChild(host)
+  toastHost = host
+  return host
+}
+
+// 轻提示：多条排队堆叠，不会互相压住
+function showToast(message: string, duration = 2400) {
+  const host = ensureToastHost()
   const toast = document.createElement('div')
+  toast.className = 'app-toast'
   toast.textContent = message
-  toast.style.cssText = `
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.8);
-    color: #fff;
-    padding: 10px 20px;
-    border-radius: 4px;
-    z-index: 10000;
-    font-size: 14px;
-  `
-  document.body.appendChild(toast)
-  setTimeout(() => toast.remove(), duration)
+  host.appendChild(toast)
+  requestAnimationFrame(() => toast.classList.add('is-in'))
+  setTimeout(() => {
+    toast.classList.remove('is-in')
+    setTimeout(() => toast.remove(), 200)
+  }, duration)
 }
 
-// 停止 AI 请求
+// 停止生成（已生成的部分留在预览面板里，不会丢）
 function stopAI() {
-  if (aiAbortController) {
-    aiAbortController.abort()
-    aiAbortController = null
-    isAILoading.value = false
-    document.body.style.cursor = ''
-    showToast(t('toast.stopped'))
-  }
+  if (!aiAbortController) return
+  aiAbortController.abort()
+  aiAbortController = null
+  isAILoading.value = false
+  aiPreviewText.value = normalizeTaskMarkdown(aiPreviewText.value)
+  aiPreviewStatus.value = aiPreviewText.value ? 'done' : 'idle'
+  showToast(t('toast.stopped'))
 }
-
 // 右键菜单处理
 function handleContextMenu(e: MouseEvent) {
   // 左侧文件树有自己的右键菜单，交给它处理（本监听器挂在 document 捕获阶段，必须在这里放行）
@@ -557,6 +573,10 @@ function handleContextMenu(e: MouseEvent) {
       savedSelectionText.value = ''
     }
   }
+
+  savedSelectionRange = rightClickSnapshot
+    ? { from: rightClickSnapshot.from, to: rightClickSnapshot.to }
+    : { from: editor.value?.state.selection.from ?? 0, to: editor.value?.state.selection.to ?? 0 }
 
   // 阻止默认行为
   e.preventDefault()
@@ -612,6 +632,7 @@ function hideContextMenu() {
   savedSelectionText.value = ''
   contextMenuLinkHref.value = ''
   rightClickSnapshot = null
+  savedSelectionRange = null
 }
 
 // 复制选中内容（Markdown 源码，与 Cmd+C 一致）
@@ -659,7 +680,7 @@ function handleWrapperClick(e: MouseEvent) {
   if (inProseMirror) {
     return
   }
-  if (target.closest('.bubble-menu') || target.closest('.ai-loading-indicator')) {
+  if (target.closest('.bubble-menu') || target.closest('.ai-preview')) {
     return
   }
 
@@ -702,119 +723,129 @@ function handleWrapperClick(e: MouseEvent) {
   view.dom.focus()
 }
 
-// AI 处理函数
-function handleAI(assistantId: string) {
-  // 先保存选中文本（避免 hideContextMenu 清空它）
-  pendingSelectionText = savedSelectionText.value
+// ============ AI：生成到预览面板，确认后才写入 ============
 
-  // 判断是否有选中文本
-  userHadSelection = false
-  contentBeforeSelection = ''
-  contentAfterSelection = ''
-  originalContent = ''
+// 打开预览面板（清空上一次结果）
+function openAiPreview(name: string) {
+  aiPreviewName.value = name
+  aiPreviewText.value = ''
+  aiPreviewError.value = ''
+  aiPreviewStatus.value = 'idle'
+  aiPreviewSearch.value = 'off'
+  aiPreviewVisible.value = true
+}
 
-  // 使用首尾片段匹配来定位选中文本（逐步递减长度）
-  if (editor.value && savedSelectionText.value) {
-    const fullContent = getNormalizedMarkdown()
-    const text = pendingSelectionText
-
-    const MAX_PREFIX_SUFFIX = 15
-    const MIN_PREFIX_SUFFIX = 5
-
-    let prefixIndex = -1
-    let suffixIndex = -1
-    let matchedSuffixLength = 0
-
-    // 前缀匹配：从长到短递减，直到匹配成功或小于最小长度
-    for (let len = MAX_PREFIX_SUFFIX; len >= MIN_PREFIX_SUFFIX; len--) {
-      const prefix = text.slice(0, len)
-      prefixIndex = fullContent.indexOf(prefix)
-      if (prefixIndex !== -1) {
-        break
-      }
-    }
-
-    // 后缀匹配：从长到短递减，直到匹配成功或小于最小长度
-    for (let len = MAX_PREFIX_SUFFIX; len >= MIN_PREFIX_SUFFIX; len--) {
-      const suffix = text.slice(-len)
-      const searchFrom = prefixIndex !== -1 ? prefixIndex : 0
-      const found = fullContent.indexOf(suffix, searchFrom)
-      if (found !== -1) {
-        suffixIndex = found
-        matchedSuffixLength = len
-        break
-      }
-    }
-
-    if (prefixIndex !== -1 && suffixIndex !== -1 && prefixIndex < suffixIndex) {
-      // 找到了前缀和后缀，用它们来精确计算位置
-      contentBeforeSelection = fullContent.slice(0, prefixIndex)
-      contentAfterSelection = fullContent.slice(suffixIndex + matchedSuffixLength)
-      userHadSelection = true
-    } else if (prefixIndex !== -1) {
-      // 只找到前缀，用 text.length 估算
-      contentBeforeSelection = fullContent.slice(0, prefixIndex)
-      contentAfterSelection = fullContent.slice(prefixIndex + text.length)
-      userHadSelection = true
-    } else {
-      // 匹配失败：保存原文用于流式输出
-      originalContent = fullContent
-    }
+function closeAiPreview() {
+  if (aiAbortController) {
+    aiAbortController.abort()
+    aiAbortController = null
+    isAILoading.value = false
   }
+  aiPreviewVisible.value = false
+  aiPreviewStatus.value = 'idle'
+  aiPreviewText.value = ''
+  aiPreviewError.value = ''
+  aiTarget = null
+  aiInputText = ''
+}
+
+// 流式输出时让预览区跟到底部
+function scrollAiPreviewToBottom() {
+  const el = aiPreviewBodyRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+// 右键菜单点了某个助手：只确定处理范围和原文，文档一个字都不改
+function handleAI(assistantId: string) {
+  const ed = editor.value
+  if (!ed) return
+
+  const assistant = assistantsStore.getAssistantById(assistantId)
+  const range = savedSelectionRange ?? { from: ed.state.selection.from, to: ed.state.selection.to }
+  const hasSelection = range.from !== range.to
+
+  aiInputText = hasSelection
+    ? serializeSelectionToMarkdown(ed.state.doc.slice(range.from, range.to))
+    : getNormalizedMarkdown()
+  aiTarget = hasSelection
+    ? { from: range.from, to: range.to, scope: 'selection' }
+    : { from: 0, to: ed.state.doc.content.size, scope: 'document' }
+  aiTargetScope.value = aiTarget.scope
+  aiDocSnapshot = getNormalizedMarkdown()
+  savedSelectionRange = null
 
   hideContextMenu()
-  const assistant = assistantsStore.getAssistantById(assistantId)
-  console.log('[BaiduSearch] 选中助手:', assistant?.name, 'searchEnabled:', assistant?.searchEnabled, 'baiduSearchKey exists:', !!settingStore.settings.baiduSearchKey)
+
+  if (!assistant) {
+    showToast(t('toast.noAssistant'))
+    return
+  }
   if (!settingStore.settings.aiUrl || !settingStore.settings.aiKey || !settingStore.settings.aiModel) {
     showToast(t('toast.configureAI'))
     return
   }
-  callAI(assistantId)
+  if (!aiInputText.trim()) {
+    showToast(t('toast.aiEmpty'))
+    return
+  }
+
+  openAiPreview(assistant.name)
+  void callAI(assistantId)
 }
 
-// 调用AI API（流式响应 + 请求取消）
+// 联网搜索词：链接和 markdown 记号对搜索没用，先清掉再截断
+function buildSearchQuery(text: string): string {
+  const cleaned = text
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[`*_>#|~\[\]()]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return (cleaned || text).slice(0, 120)
+}
+
+// 流式请求：结果只写进预览面板，不动文档
 async function callAI(assistantId: string) {
-  // 如果已有请求在运行，先取消
   if (aiAbortController) {
     aiAbortController.abort()
     aiAbortController = null
   }
 
-  isAILoading.value = true
-  document.body.style.cursor = 'wait'
-
-  const text = String(pendingSelectionText || getNormalizedMarkdown() || '')
-
-  // 根据ID获取助手配置
   const assistant = assistantsStore.getAssistantById(assistantId)
   if (!assistant) {
     showToast(t('toast.noAssistant'))
-    isAILoading.value = false
-    document.body.style.cursor = ''
     return
   }
-  const prompt = String(assistant.prompt || '')
 
-  // 百度搜索增强：如果助手启用了搜索且有 API Key，先搜索获取实时信息
+  const prompt = String(assistant.prompt || '')
+  const text = aiInputText
+
+  aiPreviewStatus.value = 'streaming'
+  isAILoading.value = true
+
+  // 百度搜索增强：助手开了联网就先取实时信息
   let searchContext = ''
-  console.log('[BaiduSearch] 检查搜索条件:', { searchEnabled: assistant.searchEnabled, hasKey: !!settingStore.settings.baiduSearchKey, keyLen: settingStore.settings.baiduSearchKey?.length })
   if (assistant.searchEnabled && settingStore.settings.baiduSearchKey) {
     showToast(t('toast.searching'))
     try {
-      const searchQuery = pendingSelectionText || text.slice(0, 200)
-      console.log('[BaiduSearch] 开始搜索, query:', searchQuery)
+      const searchQuery = buildSearchQuery(text)
       const searchResult = await callBaiduSearch(searchQuery, settingStore.settings.baiduSearchKey, {
         resource_type_filter: [{ type: 'web', top_k: 5 }],
       })
-      console.log('[BaiduSearch] 搜索结果长度:', searchResult.length)
-      searchContext = `\n\n以下是与用户问题相关的互联网搜索结果（仅供事实参考，请基于搜索结果和你的知识综合回答）：\n${searchResult}\n\n请基于以上搜索结果和你的知识，完成用户请求。`
+      if (searchResult.trim()) {
+        aiPreviewSearch.value = 'used'
+        searchContext = `\n\n以下是与用户问题相关的互联网搜索结果（仅供事实参考，请基于搜索结果和你的知识综合回答）：\n${searchResult}\n\n请基于以上搜索结果和你的知识，完成用户请求。`
+      } else {
+        // 没搜到东西不算错误，模型直接用自己的知识干活
+        aiPreviewSearch.value = 'empty'
+        showToast(t('toast.searchEmpty'))
+      }
     } catch (e) {
       console.error('[BaiduSearch] 搜索失败:', e)
-      showToast(t('toast.searchFailed', { error: e instanceof Error ? e.message : 'Unknown error' }))
+      aiPreviewSearch.value = 'failed'
+      showToast(t('toast.searchSkipped', { error: e instanceof Error ? e.message : 'Unknown error' }))
     }
   }
-
-  console.log('[BaiduSearch] 最终 searchContext 长度:', searchContext.length, '将注入 LLM')
 
   aiAbortController = new AbortController()
   const signal = aiAbortController.signal
@@ -833,7 +864,7 @@ async function callAI(assistantId: string) {
           { role: 'user', content: `${prompt}\n\n${text}${searchContext}` }
         ],
         temperature: 0.7,
-        stream: true  // 启用流式响应
+        stream: true
       }),
       signal
     })
@@ -842,97 +873,179 @@ async function callAI(assistantId: string) {
       throw new Error(`API错误: ${response.status}`)
     }
 
-    // 流式读取响应
     const reader = response.body?.getReader()
     if (!reader) {
       throw new Error('无法读取响应流')
     }
 
     const decoder = new TextDecoder()
-    let fullContent = ''
+    // SSE 的一行可能被网络切片劈成两半：必须留缓冲，否则被劈开的那条 delta 会整条丢掉（表现为随机少字）
+    let sseBuffer = ''
 
-    // 根据是否有选中文本决定初始内容
-    if (editor.value) {
-      if (userHadSelection) {
-        // 有选中文本：先删除选中的内容，设置内容为选中前+选中后
-        editor.value.commands.setContent(contentBeforeSelection + contentAfterSelection)
-      } else if (!pendingSelectionText) {
-        // 没有选中文本且没有待处理文本：清空编辑器
-        editor.value.commands.setContent('')
-      } else {
-        // 有 pendingSelectionText 但匹配失败：保留原文
-        editor.value.commands.setContent(originalContent)
+    const consumeSseLine = (rawLine: string) => {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+      if (!line.startsWith('data:')) return
+      const data = line.slice(5).trim()
+      if (!data || data === '[DONE]') return
+      try {
+        const parsed = JSON.parse(data)
+        const choice = parsed.choices?.[0]
+        const piece = choice?.delta?.content ?? choice?.message?.content ?? choice?.text
+        if (typeof piece === 'string' && piece) {
+          aiPreviewText.value += piece
+          if (/[\[\]□☐]/.test(piece)) {
+            aiPreviewText.value = normalizeTaskMarkdown(aiPreviewText.value)
+          }
+          scrollAiPreviewToBottom()
+        }
+      } catch {
+        // 单条事件解析失败就跳过这一条，不影响后面的内容
       }
     }
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-
-      const chunk = decoder.decode(value, { stream: true })
-      // 解析 SSE 格式的数据
-      const lines = chunk.split('\n')
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6)
-          if (data === '[DONE]') continue
-          try {
-            const parsed = JSON.parse(data)
-            const content = parsed.choices?.[0]?.delta?.content
-            if (content) {
-              fullContent += content
-              // 流式更新编辑器内容
-              if (editor.value) {
-                if (userHadSelection) {
-                  // 有选中文本：拼接 选中前内容 + AI回复 + 选中后内容
-                  editor.value.commands.setContent(contentBeforeSelection + fullContent + contentAfterSelection)
-                } else if (originalContent) {
-                  // 匹配失败但有 originalContent：保留原文，追加 AI 回复
-                  editor.value.commands.setContent(originalContent + fullContent)
-                } else {
-                  // 没有选中文本：直接显示AI回复
-                  editor.value.commands.setContent(fullContent)
-                }
-              }
-            }
-          } catch {
-            // 忽略解析错误（可能是不完整的 JSON）
-          }
-        }
-      }
+      sseBuffer += decoder.decode(value, { stream: true })
+      const lines = sseBuffer.split('\n')
+      sseBuffer = lines.pop() ?? ''
+      for (const line of lines) consumeSseLine(line)
     }
+    // 流结束时最后一行可能没有换行收尾
+    consumeSseLine(sseBuffer + decoder.decode())
 
-    // 生成完成后，如果有选中后的内容，需要完整拼接
-    if (contentAfterSelection && editor.value) {
-      const finalContent = contentBeforeSelection + fullContent + contentAfterSelection
-      editor.value.commands.setContent(finalContent)
+    aiPreviewText.value = normalizeTaskMarkdown(
+      aiPreviewText.value.replace(/^[\s\u200b]+/, '').trimEnd()
+    )
+    if (aiPreviewText.value) {
+      aiPreviewStatus.value = 'done'
+    } else {
+      aiPreviewStatus.value = 'error'
+      aiPreviewError.value = t('toast.aiEmptyResult')
     }
-
-    if (fullContent) {
-      // 发送完整内容（包括选中前后的内容如果有的话）
-      const finalContent = contentBeforeSelection + fullContent + contentAfterSelection
-      emit('update', finalContent)
-    }
-    showToast(t('toast.completed'))
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      // 请求被取消，不显示错误
+      aiPreviewStatus.value = aiPreviewText.value ? 'done' : 'idle'
       return
     }
     console.error('AI调用失败:', error)
-    showToast(t('toast.aiFailed', { error: error instanceof Error ? error.message : 'Unknown error' }))
+    aiPreviewError.value = error instanceof Error ? error.message : 'Unknown error'
+    aiPreviewStatus.value = 'error'
+    showToast(t('toast.aiFailed', { error: aiPreviewError.value }))
   } finally {
     isAILoading.value = false
-    document.body.style.cursor = ''
     aiAbortController = null
-    pendingSelectionText = ''
-    contentBeforeSelection = ''
-    contentAfterSelection = ''
-    originalContent = ''
   }
 }
 
+// 生成期间笔记被改动过：原来的位置就不能再用来替换
+function aiTargetStale(): boolean {
+  return getNormalizedMarkdown() !== aiDocSnapshot
+}
 
+// 插入位置：有选区插在选区之后，全文处理插在文末
+function aiInsertAnchor(): number {
+  const ed = editor.value
+  if (!ed) return 0
+  if (!aiTarget) return ed.state.selection.to
+  return aiTarget.scope === 'document' ? ed.state.doc.content.size : aiTarget.to
+}
+
+// 待办行归一化：模型经常漏掉 "- " 或写成 []/[x]/* [ ]/1. [ ]/□，
+// 这里统一补成标准任务列表语法，否则插入笔记后那一行只是普通文本、不是勾选框
+function normalizeTaskMarkdown(markdown: string): string {
+  if (!markdown) return markdown
+  if (!/[\[\]□☐]/.test(markdown)) return markdown
+  const lines = markdown.split('\n')
+  const out: string[] = []
+  let inFence = false
+  for (const line of lines) {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence
+      out.push(line)
+      continue
+    }
+    if (inFence) {
+      out.push(line)
+      continue
+    }
+    const m = line.match(/^([\t ]*)(?:(\d+[.)]|[-*+•·])\s*)?(?:\[([ xX]?)\]|【([ xX]?)】|□|☐)(?!\()\s*(\S.*)$/)
+    if (!m) {
+      out.push(line)
+      continue
+    }
+    const checked = (m[3] ?? m[4] ?? '').toLowerCase() === 'x'
+    const next = `${m[1]}- [${checked ? 'x' : ' '}] ${m[5].trim()}`
+    out.push(next)
+  }
+  return out.join('\n')
+}
+
+// 结果按块解析成 HTML：insertContentAt 的 markdown 补丁只做行内解析，会把标题/列表压平
+function markdownToHtml(markdown: string): string {
+  const storage = (editor.value?.storage as any)?.markdown
+  if (storage?.parser) {
+    try {
+      return storage.parser.parse(markdown)
+    } catch (err) {
+      console.error('[ai] markdown 解析失败，按纯文本插入', err)
+    }
+  }
+  return markdown
+}
+
+function insertAiTextAt(anchor: number): boolean {
+  const ed = editor.value
+  const text = aiPreviewText.value.trim()
+  if (!ed || !text) return false
+  ed.chain().focus().insertContentAt(anchor, markdownToHtml('\n\n' + text)).run()
+  emitEditorUpdate()
+  closeAiPreview()
+  return true
+}
+
+// 插入到原文之后（保留原文）
+function insertAiAtCursor() {
+  if (insertAiTextAt(aiInsertAnchor())) showToast(t('toast.aiInserted'))
+}
+
+// 替换原文（有选区替换选区，无选区替换全文），写入前先校验目标位置
+function applyAiReplace() {
+  const ed = editor.value
+  const text = normalizeTaskMarkdown(aiPreviewText.value).trim()
+  if (!ed || !text) return
+
+  if (aiTargetStale()) {
+    // 位置已失效：退化成插入，绝不覆盖用户刚写的内容
+    if (insertAiTextAt(aiInsertAnchor())) showToast(t('toast.aiDocChanged'))
+    return
+  }
+
+  if (!aiTarget || aiTarget.scope === 'document') {
+    ed.commands.setContent(text)
+  } else {
+    ed.chain().focus().insertContentAt({ from: aiTarget.from, to: aiTarget.to }, markdownToHtml(text), { updateSelection: true }).run()
+  }
+
+  emitEditorUpdate()
+  closeAiPreview()
+  showToast(t('toast.aiApplied'))
+}
+
+// Esc 关掉预览面板（生成中就顺手停掉）
+function handleAiPreviewEsc(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !aiPreviewVisible.value) return
+  event.stopPropagation()
+  closeAiPreview()
+}
+
+// 复制预览结果
+async function copyAiPreview() {
+  const text = aiPreviewText.value
+  if (!text) return
+  const ok = await copyText(text)
+  if (ok) showToast(t('toast.copied'))
+}
 /* ----- 链接交互 ----- */
 
 // 补全协议：用户可能只敲 example.com
@@ -1661,6 +1774,9 @@ onMounted(async () => {
   // 点别处关掉链接输入面板
   document.addEventListener('mousedown', hideLinkPanelOnOutsideClick, true)
 
+  // Esc 关闭 AI 预览面板
+  window.addEventListener('keydown', handleAiPreviewEsc, true)
+
   // 编辑器 DOM 上 capture 阶段拦截右键 mousedown，保存 ProseMirror 选区快照
   // 不调用 preventDefault/stopImmediatePropagation，让事件自然传播
   // macOS WebKit 会在 JS 事件分发前后通过原生层面修改 DOM 选区，
@@ -1691,9 +1807,9 @@ onMounted(async () => {
     }
   }) as EventListener)
 
-  // 直接监听背景色变化并设置DOM样式
+  // 直接监听背景色变化并设置DOM样式（同时依赖 currentTheme，主题切换后要重算）
   watchEffect(() => {
-    const color = props.noteBgColor
+    const color = adaptedNoteBg.value
     const wrapper = document.querySelector('.tiptap-wrapper') as HTMLElement | null
     if (wrapper) {
       if (color) {
@@ -1722,6 +1838,7 @@ onUnmounted(() => {
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)
   document.removeEventListener('mousedown', hideLinkPanelOnOutsideClick, true)
+  window.removeEventListener('keydown', handleAiPreviewEsc, true)
 })
 
 defineExpose({
@@ -1762,17 +1879,59 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" :style="noteBgColor ? { '--note-bg': noteBgColor } : undefined" @click="handleWrapperClick">
-    <!-- AI 加载指示器 -->
-    <div v-if="isAILoading" class="ai-loading-indicator">
-      <div class="ai-loading-content">
-        <span class="ai-loading-text">{{ $t('editor.aiThinking') }}</span>
-        <button class="ai-stop-btn" @click="stopAI">
-          <i class="i-mdi-stop"></i>
-          {{ $t('editor.stop') }}
-        </button>
+  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" :style="adaptedNoteBg ? { '--note-bg': adaptedNoteBg } : undefined" @click="handleWrapperClick">
+    <!-- AI 结果预览：先生成到面板，确认后才写入笔记 -->
+    <Teleport to="body">
+      <div v-if="aiPreviewVisible" class="ai-preview">
+        <div class="ai-preview-head">
+          <div class="ai-preview-head-main">
+            <span class="ai-preview-emblem"><i class="i-mdi-creation"></i></span>
+            <div class="ai-preview-titles">
+              <div class="ai-preview-title-row">
+                <span class="ai-preview-title">{{ aiPreviewName }}</span>
+                <span v-if="aiPreviewSearch !== 'off'" class="ai-preview-chip" :class="'is-' + aiPreviewSearch">
+                  {{ aiPreviewSearch === 'used' ? $t('editor.aiSearchUsed') : aiPreviewSearch === 'empty' ? $t('editor.aiSearchEmpty') : $t('editor.aiSearchOff') }}
+                </span>
+              </div>
+              <span class="ai-preview-state" :class="'is-' + aiPreviewStatus">
+                {{ aiPreviewStatus === 'streaming' ? $t('editor.aiGenerating') : aiPreviewStatus === 'error' ? (aiPreviewError || $t('editor.aiFailedState')) : $t('editor.aiReady') }}
+              </span>
+            </div>
+          </div>
+          <button class="ai-preview-close" :title="$t('editor.aiDiscard')" @click="closeAiPreview">
+            <i class="i-mdi-close"></i>
+          </button>
+        </div>
+
+        <div ref="aiPreviewBodyRef" class="ai-preview-body">
+          <pre v-if="aiPreviewText" class="ai-preview-text">{{ aiPreviewText }}</pre>
+          <div v-else class="ai-preview-skeleton">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+
+        <div class="ai-preview-foot">
+          <button v-if="aiPreviewStatus === 'streaming'" class="ai-btn ai-btn-stop" @click="stopAI">
+            <i class="i-mdi-stop"></i>
+            <span>{{ $t('editor.stop') }}</span>
+          </button>
+          <template v-else>
+            <button class="ai-btn" :disabled="!aiPreviewText" @click="copyAiPreview">
+              <i class="i-mdi-content-copy"></i>
+              <span>{{ $t('editor.aiCopy') }}</span>
+            </button>
+            <button class="ai-btn" :disabled="!aiPreviewText" @click="insertAiAtCursor">
+              <i class="i-mdi-arrow-down-bold-box-outline"></i>
+              <span>{{ $t('editor.aiInsert') }}</span>
+            </button>
+            <button class="ai-btn ai-btn-primary" :disabled="!aiPreviewText" @click="applyAiReplace">
+              <i class="i-mdi-swap-horizontal"></i>
+              <span>{{ aiTargetScope === 'document' ? $t('editor.aiReplaceAll') : $t('editor.aiReplace') }}</span>
+            </button>
+          </template>
+        </div>
       </div>
-    </div>
+    </Teleport>
     <EditorContent :editor="editor" class="tiptap" />
     <BubbleMenu
       v-if="editor"
@@ -2037,55 +2196,271 @@ defineExpose({
   border-radius: var(--note-radius, 8px);
 }
 
-/* AI 加载指示器 */
-.ai-loading-indicator {
+/* AI 结果预览面板 */
+.ai-preview {
   position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 100;
-  background: rgba(30, 30, 30, 0.95);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 8px 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(48vh, 400px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(252, 252, 253, 0.97);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 16px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  animation: aiPreviewIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.ai-loading-content {
+@keyframes aiPreviewIn {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.ai-preview-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px 9px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
-.ai-loading-text {
-  color: #e0e0e0;
+.ai-preview-head-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ai-preview-emblem {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #fff;
+  background: linear-gradient(158deg, #4fb0ff, #007aff);
+}
+
+.ai-preview-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ai-preview-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-preview-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #007aff;
+  background: rgba(0, 122, 255, 0.12);
+  white-space: nowrap;
+}
+
+.ai-preview-chip.is-empty,
+.ai-preview-chip.is-failed {
+  color: rgba(60, 60, 67, 0.6);
+  background: rgba(120, 120, 128, 0.14);
+}
+
+:global(html[data-theme='dark']) .ai-preview-chip {
+  color: #4fb0ff;
+  background: rgba(10, 132, 255, 0.22);
+}
+
+:global(html[data-theme='dark']) .ai-preview-chip.is-empty,
+:global(html[data-theme='dark']) .ai-preview-chip.is-failed {
+  color: rgba(235, 235, 245, 0.6);
+  background: rgba(120, 120, 128, 0.24);
+}
+
+.ai-preview-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.86);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-preview-state {
+  font-size: 10.5px;
+  color: rgba(60, 60, 67, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-preview-state.is-streaming { color: #007aff; }
+.ai-preview-state.is-done { color: #34c759; }
+.ai-preview-state.is-error { color: #ff3b30; }
+
+.ai-preview-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(60, 60, 67, 0.5);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.ai-preview-close:hover {
+  background: rgba(120, 120, 128, 0.14);
+  color: rgba(0, 0, 0, 0.8);
+}
+
+.ai-preview-body {
+  flex: 1;
+  min-height: 64px;
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+}
+
+.ai-preview-text {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: rgba(0, 0, 0, 0.82);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-preview-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.ai-preview-skeleton span {
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(120, 120, 128, 0.14) 0%, rgba(120, 120, 128, 0.26) 50%, rgba(120, 120, 128, 0.14) 100%);
+  background-size: 200% 100%;
+  animation: aiSkeleton 1.2s ease-in-out infinite;
+}
+
+.ai-preview-skeleton span:nth-child(2) { width: 82%; }
+.ai-preview-skeleton span:nth-child(3) { width: 56%; }
+
+@keyframes aiSkeleton {
+  0% { background-position: 120% 0; }
+  100% { background-position: -20% 0; }
+}
+
+.ai-preview-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(120, 120, 128, 0.12);
+  color: rgba(0, 0, 0, 0.82);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease, opacity 150ms ease;
+}
+
+.ai-btn i {
   font-size: 13px;
 }
 
-.ai-stop-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: rgba(255, 100, 100, 0.9);
-  border: none;
-  border-radius: 4px;
-  color: white;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+.ai-btn:hover { background: rgba(120, 120, 128, 0.2); }
+.ai-btn:active { transform: scale(0.97); }
+
+.ai-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+  transform: none;
 }
 
-.ai-stop-btn:hover {
-  background: rgba(255, 80, 80, 1);
+.ai-btn-primary {
+  color: #fff;
+  background: linear-gradient(158deg, #339dff, #007aff);
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.3);
 }
 
-.ai-stop-btn:active {
-  transform: scale(0.95);
+.ai-btn-primary:hover {
+  background: linear-gradient(158deg, #4aa6ff, #0a84ff);
 }
 
-.ai-stop-btn i {
-  font-size: 14px;
+.ai-btn-stop {
+  color: #ff3b30;
+  background: rgba(255, 59, 48, 0.12);
+}
+
+.ai-btn-stop:hover { background: rgba(255, 59, 48, 0.2); }
+
+:global(html[data-theme='dark']) .ai-preview {
+  background: rgba(40, 40, 42, 0.97);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+:global(html[data-theme='dark']) .ai-preview-head,
+:global(html[data-theme='dark']) .ai-preview-foot {
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+:global(html[data-theme='dark']) .ai-preview-title,
+:global(html[data-theme='dark']) .ai-preview-text {
+  color: rgba(255, 255, 255, 0.86);
+}
+
+:global(html[data-theme='dark']) .ai-preview-foot {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:global(html[data-theme='dark']) .ai-btn {
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(120, 120, 128, 0.28);
+}
+
+:global(html[data-theme='dark']) .ai-btn-primary {
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-preview { animation: none; }
+  .ai-preview-skeleton span { animation: none; }
 }
 
 :deep(.tiptap) {
@@ -2509,6 +2884,41 @@ defineExpose({
 </style>
 
 <style>
+/* 轻提示：顶部居中堆叠 */
+.app-toast-host {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.app-toast {
+  max-width: min(460px, calc(100vw - 48px));
+  padding: 7px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #fff;
+  background: rgba(28, 28, 30, 0.86);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transition: opacity 180ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.app-toast.is-in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
 /* Tiptap 基础样式覆盖 */
 .tiptap {
   height: 100%;

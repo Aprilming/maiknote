@@ -120,14 +120,18 @@ export async function callBaiduSearch(
         .filter(item => item.type === 'text')
         .map(item => item.text)
         .join('\n')
+        .trim()
       if (!texts) {
-        throw new Error('搜索未返回文本结果')
+        // 联网搜索只是增强项：没有文本结果就当"没有结果"，让模型用自己的知识继续
+        console.warn('[BaiduSearch] 响应里没有文本结果，按无结果处理')
+        return ''
       }
       console.log('[BaiduSearch] 搜索结果长度:', texts.length)
       return texts
     }
 
-    throw new Error('搜索响应格式异常')
+    console.warn('[BaiduSearch] 响应缺少 content 字段，按无结果处理')
+    return ''
   } catch (error) {
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new Error('网络请求失败，请检查网络连接')

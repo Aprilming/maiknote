@@ -7,6 +7,8 @@ useI18n()
 export interface ColorOption {
   nameKey: string
   value: string
+  /** 当前主题下实际显示的颜色，缺省按 value 画 */
+  swatch?: string
 }
 
 defineProps<{
@@ -72,7 +74,7 @@ onUnmounted(() => {
         :title="$t(color.nameKey)"
         @click="selectColor(color.value)"
       >
-        <span class="color-swatch" :style="{ background: color.value }"></span>
+        <span class="color-swatch" :style="{ background: color.swatch || color.value }"></span>
         <span class="color-label">{{ $t(color.nameKey) }}</span>
       </button>
       <div

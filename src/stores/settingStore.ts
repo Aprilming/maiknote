@@ -2,6 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useAssistantsStore } from '@/stores/assistantsStore'
 import type { PresetColors } from '@/composables/editorStylePresets'
+import {
+  DEFAULT_NOTE_LOGO_STYLE,
+  DEFAULT_NOTE_LOGO_VARIANT,
+  normalizeNoteLogoStyle,
+  normalizeNoteLogoVariant,
+  type NoteLogoStyle,
+} from '@/utils/noteLogoPresets'
 import { clampTabSize } from '@/components/Editor/tabInsert'
 
 export type Theme = 'light' | 'dark' | 'auto'
@@ -142,6 +149,8 @@ export interface AppSettings {
   desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
   fileTreePinnedSection: boolean // 文件树里是否显示「收藏笔记」大类
   fileTreeFontSize: number // 文件树字号（px），11–18
+  noteLogoStyle: NoteLogoStyle // 笔记 Logo 风格：standard=标准圆角方块 / meego=MeeGo·N9 拟物
+  noteLogoVariant: string // 笔记 Logo 配色预设 id
   ipApiUrl: string // IP 助手的出口 IP 查询地址，留空即用默认
   titleBarBehavior: TitleBarBehavior
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
@@ -198,6 +207,8 @@ export const useSettingStore = defineStore('setting', () => {
     desktopNoteBounds: {},
     fileTreePinnedSection: true,
     fileTreeFontSize: 12.5,
+    noteLogoStyle: DEFAULT_NOTE_LOGO_STYLE,
+    noteLogoVariant: DEFAULT_NOTE_LOGO_VARIANT,
     ipApiUrl: DEFAULT_IP_API_URL,
     titleBarBehavior: 'auto-hide',
     pathClickAction: 'copy',
@@ -267,8 +278,17 @@ export const useSettingStore = defineStore('setting', () => {
       : key === 'noteBorderWidth' ? clampNoteBorderWidth(value)
       : key === 'fileTreeFontSize' ? clampFileTreeFontSize(value)
       : key === 'ipApiUrl' ? String(value ?? '').trim()
+      : key === 'noteLogoStyle' ? normalizeNoteLogoStyle(value)
+      : key === 'noteLogoVariant' ? normalizeNoteLogoVariant(settings.value.noteLogoStyle, value)
       : value
     settings.value[key] = nextValue as AppSettings[K]
+    // 换风格时旧预设可能不属于新风格，回落到新风格的默认配色
+    if (key === 'noteLogoStyle') {
+      settings.value.noteLogoVariant = normalizeNoteLogoVariant(
+        settings.value.noteLogoStyle,
+        settings.value.noteLogoVariant,
+      )
+    }
     // Save to localStorage
     saveSettings()
 
@@ -300,6 +320,11 @@ export const useSettingStore = defineStore('setting', () => {
           tabSize: clampTabSize(parsed.tabSize ?? settings.value.tabSize),
           noteBorderWidth: clampNoteBorderWidth(parsed.noteBorderWidth ?? settings.value.noteBorderWidth),
           fileTreeFontSize: clampFileTreeFontSize(parsed.fileTreeFontSize ?? settings.value.fileTreeFontSize),
+          noteLogoStyle: normalizeNoteLogoStyle(parsed.noteLogoStyle ?? settings.value.noteLogoStyle),
+          noteLogoVariant: normalizeNoteLogoVariant(
+            normalizeNoteLogoStyle(parsed.noteLogoStyle ?? settings.value.noteLogoStyle),
+            parsed.noteLogoVariant ?? settings.value.noteLogoVariant,
+          ),
           ipApiUrl: normalizeIpApiUrl(parsed.ipApiUrl ?? settings.value.ipApiUrl),
           edgeEnabled:
             typeof parsed.edgeEnabled === 'boolean' ? parsed.edgeEnabled : settings.value.edgeEnabled,
@@ -367,6 +392,8 @@ export const useSettingStore = defineStore('setting', () => {
     desktopNoteBounds: {},
       fileTreePinnedSection: true,
       fileTreeFontSize: 12.5,
+      noteLogoStyle: DEFAULT_NOTE_LOGO_STYLE,
+      noteLogoVariant: DEFAULT_NOTE_LOGO_VARIANT,
       ipApiUrl: DEFAULT_IP_API_URL,
       titleBarBehavior: 'auto-hide',
       pathClickAction: 'copy',

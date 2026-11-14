@@ -13,8 +13,11 @@ import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
 import PrivacyPledge from '@/components/common/PrivacyPledge.vue'
 import PrivacyDialog from '@/components/common/PrivacyDialog.vue'
 import { useI18n } from 'vue-i18n'
+import NoteLogo from '@/components/NoteLogo.vue'
+import { presetsOfStyle, type NoteLogoStyle } from '@/utils/noteLogoPresets'
+import { syncAppIcon, appIconReport, appIconError } from '@/composables/useAppIcon'
 import { useTheme } from '@/composables/useTheme'
-import { LIGHT_NOTE_COLORS, DARK_NOTE_COLORS } from '@/utils/noteColors'
+import { noteColorOptionsFor } from '@/utils/noteColors'
 
 // 安全获取 Tauri 窗口
 const isTauri = typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
@@ -110,8 +113,12 @@ const { currentTheme, isDark } = useTheme()
 const assistantsStore = useAssistantsStore()
 const { t, locale } = useI18n()
 
+// 模板助手卡片图标（顺序与 defaultAssistants 对齐）
+const templateIcons = ['i-mdi-auto-fix', 'i-mdi-playlist-check', 'i-mdi-creation']
+
 // 默认笔记背景色（和编辑器右下角的笔记底色共用同一套色板）
-const noteBgColors = computed(() => (isDark() ? DARK_NOTE_COLORS : LIGHT_NOTE_COLORS))
+// value 是存进设置的规范底色，swatch 是它在当前主题下显示出来的样子
+const noteBgColors = computed(() => noteColorOptionsFor(currentTheme.value))
 /** 贴边小白条的预设颜色（白 / 浅灰 / 蓝 / 深灰），其余走自定义取色器 */
 const edgeStripPresets = ['#ffffff', '#c8ccd4', '#3b82f6', '#1f2329']
 const defaultNoteBgName = computed(() => {
@@ -131,17 +138,43 @@ function onDefaultNoteBgInput(e: Event) {
 }
 
 // 分类导航
-type CategoryKey = 'general' | 'fileTree' | 'ai' | 'sidebar' | 'shortcuts' | 'about'
+type CategoryKey = 'general' | 'personalization' | 'fileTree' | 'ai' | 'sidebar' | 'shortcuts' | 'about'
 const activeCategory = ref<CategoryKey>('general')
 
 const categories = computed(() => [
   { key: 'general' as const, icon: 'i-mdi-tune', label: t('settings.general') },
-  { key: 'fileTree' as const, icon: 'i-mdi-file-tree-outline', label: t('settings.fileTree') },
+  { key: 'personalization' as const, icon: 'i-mdi-palette-outline', label: t('settings.personalization') },
+  { key: 'fileTree' as const, icon: 'i-mdi-page-layout-sidebar-left', label: t('settings.fileTree') },
   { key: 'ai' as const, icon: 'i-mdi-robot', label: t('settings.ai') },
   { key: 'sidebar' as const, icon: 'i-mdi-dock-right', label: t('settings.sidebar') },
   { key: 'shortcuts' as const, icon: 'i-mdi-keyboard', label: t('settings.shortcuts') },
   { key: 'about' as const, icon: 'i-mdi-information-outline', label: t('settings.about') },
 ])
+
+/** 笔记 Logo：当前风格下可选的全部配色 */
+const logoPresets = computed(() => presetsOfStyle(settingStore.settings.noteLogoStyle))
+
+/** 切换 Logo 风格（store 会把不属于新风格的配色回落到默认） */
+function setLogoStyle(style: NoteLogoStyle) {
+  settingStore.updateSettings('noteLogoStyle', style)
+  void syncAppIcon(settingStore.settings.noteLogoVariant)
+}
+
+/** 选配色：顺手把 macOS 里的 App 图标也换成这一款 */
+function pickLogoVariant(variant: string) {
+  settingStore.updateSettings('noteLogoVariant', variant)
+  void syncAppIcon(settingStore.settings.noteLogoVariant)
+}
+
+/** Logo 一栏底部那行状态提示 */
+const appIconHint = computed(() => {
+  if (appIconError.value) return t('settings.logoAppIconFailed')
+  const report = appIconReport.value
+  if (!report) return ''
+  if (report.bundle_updated) return t('settings.logoAppIconSynced')
+  if (report.bundle) return t('settings.logoAppIconAlready')
+  return t('settings.logoAppIconDevMode')
+})
 
 /** 当前分类名（顶部标题居中显示） */
 const currentCategoryLabel = computed(
@@ -569,6 +602,84 @@ async function handleSaveAssistant(data: { name: string; prompt: string; searchE
   }
 }
 
+// ===== 助手拖拽排序（指针事件，不走 HTML5 DnD）=====
+// WKWebView 里 HTML5 拖拽不可靠，这里用 pointerdown/move/up 自己算位置
+const draggingAssistantId = ref<string | null>(null)
+const dragOverAssistantId = ref<string | null>(null)
+const assistantsListRef = ref<HTMLElement | null>(null)
+const DRAG_THRESHOLD = 4
+
+let dragPointerId: number | null = null
+let assistantDragStartY = 0
+let assistantDragStartX = 0
+let dragStarted = false
+
+function onAssistantCardPointerDown(e: PointerEvent, assistant: Assistant) {
+  if (e.button !== 0 || e.isPrimary === false) return
+  const target = e.target as HTMLElement | null
+  // 卡片上的按钮保持原行为，不参与拖拽
+  if (target?.closest('button, input, textarea')) return
+
+  dragPointerId = e.pointerId
+  assistantDragStartX = e.clientX
+  assistantDragStartY = e.clientY
+  dragStarted = false
+  draggingAssistantId.value = assistant.id
+
+  window.addEventListener('pointermove', onAssistantDragMove)
+  window.addEventListener('pointerup', onAssistantDragEnd)
+  window.addEventListener('pointercancel', onAssistantDragEnd)
+}
+
+function assistantIdAtPoint(x: number, y: number): string | null {
+  const cards = assistantsListRef.value?.querySelectorAll<HTMLElement>('.assistant-card')
+  if (!cards) return null
+  for (const card of Array.from(cards)) {
+    const rect = card.getBoundingClientRect()
+    if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
+      return card.dataset.assistantId ?? null
+    }
+  }
+  return null
+}
+
+function onAssistantDragMove(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId || !draggingAssistantId.value) return
+  if (!dragStarted) {
+    if (Math.abs(e.clientY - assistantDragStartY) < DRAG_THRESHOLD && Math.abs(e.clientX - assistantDragStartX) < DRAG_THRESHOLD) return
+    dragStarted = true
+    document.body.classList.add('is-dragging-assistant')
+  }
+  const overId = assistantIdAtPoint(e.clientX, e.clientY)
+  dragOverAssistantId.value = overId && overId !== draggingAssistantId.value ? overId : null
+}
+
+async function onAssistantDragEnd(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId) return
+  const fromId = draggingAssistantId.value
+  const toId = dragOverAssistantId.value
+  const wasDragging = dragStarted
+
+  window.removeEventListener('pointermove', onAssistantDragMove)
+  window.removeEventListener('pointerup', onAssistantDragEnd)
+  window.removeEventListener('pointercancel', onAssistantDragEnd)
+  document.body.classList.remove('is-dragging-assistant')
+
+  dragPointerId = null
+  dragStarted = false
+  draggingAssistantId.value = null
+  dragOverAssistantId.value = null
+
+  if (!wasDragging || !fromId || !toId || fromId === toId) return
+  await assistantsStore.moveAssistant(fromId, toId)
+}
+
+onUnmounted(() => {
+  window.removeEventListener('pointermove', onAssistantDragMove)
+  window.removeEventListener('pointerup', onAssistantDragEnd)
+  window.removeEventListener('pointercancel', onAssistantDragEnd)
+})
+
 async function handleToggleSearch(assistant: Assistant) {
   await assistantsStore.updateAssistant(assistant.id, {
     searchEnabled: !assistant.searchEnabled,
@@ -789,8 +900,224 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
       <!-- 右侧设置内容 -->
       <div class="settings-content">
-        <!-- 通用 -->
-        <section v-if="activeCategory === 'general'" class="settings-section">
+        <!-- 通用：语言文字 / 卡片外观 / 窗口启动 / 高级 -->
+        <div v-if="activeCategory === 'general'" class="settings-groups">
+          <div class="settings-group-title">{{ $t('settings.groupLanguage') }}</div>
+          <section class="settings-section">
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.language') }}</span>
+              </div>
+              <div class="theme-selector">
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.language === 'zh-CN' }"
+                  @click="settingStore.updateSettings('language', 'zh-CN')"
+                >
+                  <span>中文</span>
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.language === 'en-US' }"
+                  @click="settingStore.updateSettings('language', 'en-US')"
+                >
+                  <span>English</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.fontSize') }}</span>
+                <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
+              </div>
+              <input
+                type="range"
+                min="10"
+                max="32"
+                step="1"
+                :value="settingStore.settings.fontSize"
+                @input="settingStore.updateSettings('fontSize', parseInt(($event.target as HTMLInputElement).value))"
+                class="alpha-slider"
+                :style="{ '--fill': `${((settingStore.settings.fontSize - 10) / 22) * 100}%` }"
+              />
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.tabSize') }}</span>
+                <span class="setting-value">{{ $t('settings.tabSizeValue', { count: settingStore.settings.tabSize }) }}</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="12"
+                step="1"
+                :value="settingStore.settings.tabSize"
+                @input="settingStore.updateSettings('tabSize', parseInt(($event.target as HTMLInputElement).value))"
+                class="alpha-slider"
+                :style="{ '--fill': `${((settingStore.settings.tabSize - 1) / 11) * 100}%` }"
+              />
+            </div>
+          </section>
+          <div class="settings-group-title">{{ $t('settings.groupCards') }}</div>
+          <section class="settings-section">
+            <div class="setting-item setting-item-inline">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.linkPreview') }}</span>
+                <span class="setting-desc">{{ $t('settings.linkPreviewDesc') }}</span>
+              </div>
+              <button
+                class="toggle-btn"
+                :class="{ active: settingStore.settings.linkPreviewEnabled }"
+                @click="settingStore.updateSettings('linkPreviewEnabled', !settingStore.settings.linkPreviewEnabled)"
+              >
+                <span class="toggle-slider"></span>
+              </button>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.desktopNoteLevel') }}</span>
+                <span class="setting-desc">{{ $t('settings.desktopNoteLevelDesc') }}</span>
+              </div>
+              <div class="theme-selector">
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.desktopNoteLevel === 'top' }"
+                  @click="setDesktopNoteLevel('top')"
+                >
+                  <i class="i-mdi-arrow-up-bold-box"></i>
+                  <span>{{ $t('settings.levelTop') }}</span>
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.desktopNoteLevel === 'normal' }"
+                  @click="setDesktopNoteLevel('normal')"
+                >
+                  <i class="i-mdi-window-restore"></i>
+                  <span>{{ $t('settings.levelNormal') }}</span>
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.desktopNoteLevel === 'desktop' }"
+                  @click="setDesktopNoteLevel('desktop')"
+                >
+                  <i class="i-mdi-monitor"></i>
+                  <span>{{ $t('settings.levelDesktop') }}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+          <div class="settings-group-title">{{ $t('settings.groupWindow') }}</div>
+          <section class="settings-section">
+            <div class="setting-item setting-item-inline">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.autoLaunch') }}</span>
+              </div>
+              <button
+                class="toggle-btn"
+                :class="{ active: settingStore.settings.autoLaunch }"
+                @click="toggleAutoLaunch"
+              >
+                <span class="toggle-slider"></span>
+              </button>
+            </div>
+
+            <div class="setting-item setting-item-inline">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
+                <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
+              </div>
+              <button
+                  class="toggle-btn"
+                  :class="{ active: settingStore.settings.rememberLastDirectory }"
+                  @click="settingStore.updateSettings('rememberLastDirectory', !settingStore.settings.rememberLastDirectory)"
+              >
+                <span class="toggle-slider"></span>
+              </button>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.closeBehavior') }}</span>
+              </div>
+              <div class="theme-selector">
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.closeBehavior === 'hide' }"
+                  @click="settingStore.updateSettings('closeBehavior', 'hide')"
+                >
+                  <i class="i-mdi-eye-off-outline"></i>
+                  <span>{{ $t('settings.closeBehaviorHide') }}</span>
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.closeBehavior === 'quit' }"
+                  @click="settingStore.updateSettings('closeBehavior', 'quit')"
+                >
+                  <i class="i-mdi-exit-to-app"></i>
+                  <span>{{ $t('settings.closeBehaviorQuit') }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.titleBarBehavior') }}</span>
+              </div>
+              <div class="theme-selector">
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.titleBarBehavior === 'auto-hide' }"
+                  @click="settingStore.updateSettings('titleBarBehavior', 'auto-hide')"
+                >
+                  <i class="i-mdi-eye-off-outline"></i>
+                  <span>{{ $t('settings.titleBarAutoHide') }}</span>
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: settingStore.settings.titleBarBehavior === 'always-show' }"
+                  @click="settingStore.updateSettings('titleBarBehavior', 'always-show')"
+                >
+                  <i class="i-mdi-eye-outline"></i>
+                  <span>{{ $t('settings.titleBarAlwaysShow') }}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+          <div class="settings-group-title">{{ $t('settings.groupAdvanced') }}</div>
+          <section class="settings-section">
+            <div class="setting-item">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.ipApiUrl') }}</span>
+                <span v-if="ipApiUrlEffective === DEFAULT_IP_API_URL" class="setting-value">{{ $t('settings.ipApiUrlDefault') }}</span>
+              </div>
+              <span class="setting-desc">{{ $t('settings.ipApiUrlDesc') }}</span>
+              <input
+                type="text"
+                class="text-input"
+                :value="settingStore.settings.ipApiUrl"
+                :placeholder="DEFAULT_IP_API_URL"
+                spellcheck="false"
+                @change="settingStore.updateSettings('ipApiUrl', ($event.target as HTMLInputElement).value)"
+                @keydown.enter="($event.target as HTMLInputElement).blur()"
+              />
+              <button
+                class="link-btn"
+                type="button"
+                :disabled="ipApiUrlEffective === DEFAULT_IP_API_URL"
+                @click="settingStore.updateSettings('ipApiUrl', DEFAULT_IP_API_URL)"
+              >
+                <i class="i-mdi-restore"></i>
+                <span>{{ $t('settings.ipApiUrlReset') }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <!-- 个性化：主题 / 透明度 / 编辑器样式 / 代码主题 / 默认背景色 / Logo -->
+        <section v-if="activeCategory === 'personalization'" class="settings-section">
           <div class="setting-item">
             <div class="setting-label">
               <span class="setting-name">{{ $t('settings.theme') }}</span>
@@ -825,75 +1152,6 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
           <div class="setting-item">
             <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.language') }}</span>
-            </div>
-            <div class="theme-selector">
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.language === 'zh-CN' }"
-                @click="settingStore.updateSettings('language', 'zh-CN')"
-              >
-                <span>中文</span>
-              </button>
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.language === 'en-US' }"
-                @click="settingStore.updateSettings('language', 'en-US')"
-              >
-                <span>English</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="setting-item setting-item-inline">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.linkPreview') }}</span>
-              <span class="setting-desc">{{ $t('settings.linkPreviewDesc') }}</span>
-            </div>
-            <button
-              class="toggle-btn"
-              :class="{ active: settingStore.settings.linkPreviewEnabled }"
-              @click="settingStore.updateSettings('linkPreviewEnabled', !settingStore.settings.linkPreviewEnabled)"
-            >
-              <span class="toggle-slider"></span>
-            </button>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.desktopNoteLevel') }}</span>
-              <span class="setting-desc">{{ $t('settings.desktopNoteLevelDesc') }}</span>
-            </div>
-            <div class="theme-selector">
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.desktopNoteLevel === 'top' }"
-                @click="setDesktopNoteLevel('top')"
-              >
-                <i class="i-mdi-arrow-up-bold-box"></i>
-                <span>{{ $t('settings.levelTop') }}</span>
-              </button>
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.desktopNoteLevel === 'normal' }"
-                @click="setDesktopNoteLevel('normal')"
-              >
-                <i class="i-mdi-window-restore"></i>
-                <span>{{ $t('settings.levelNormal') }}</span>
-              </button>
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.desktopNoteLevel === 'desktop' }"
-                @click="setDesktopNoteLevel('desktop')"
-              >
-                <i class="i-mdi-monitor"></i>
-                <span>{{ $t('settings.levelDesktop') }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
               <span class="setting-name">{{ $t('settings.transparency') }}</span>
               <span class="setting-value">{{ Math.round(settingStore.settings.windowAlpha * 100) }}%</span>
             </div>
@@ -906,40 +1164,6 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
               @input="onAlphaChange"
               class="alpha-slider"
               :style="{ '--fill': `${((settingStore.settings.windowAlpha - 0.6) / 0.4) * 100}%` }"
-            />
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.fontSize') }}</span>
-              <span class="setting-value">{{ settingStore.settings.fontSize }}px</span>
-            </div>
-            <input
-              type="range"
-              min="10"
-              max="32"
-              step="1"
-              :value="settingStore.settings.fontSize"
-              @input="settingStore.updateSettings('fontSize', parseInt(($event.target as HTMLInputElement).value))"
-              class="alpha-slider"
-              :style="{ '--fill': `${((settingStore.settings.fontSize - 10) / 22) * 100}%` }"
-            />
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.tabSize') }}</span>
-              <span class="setting-value">{{ $t('settings.tabSizeValue', { count: settingStore.settings.tabSize }) }}</span>
-            </div>
-            <input
-              type="range"
-              min="1"
-              max="12"
-              step="1"
-              :value="settingStore.settings.tabSize"
-              @input="settingStore.updateSettings('tabSize', parseInt(($event.target as HTMLInputElement).value))"
-              class="alpha-slider"
-              :style="{ '--fill': `${((settingStore.settings.tabSize - 1) / 11) * 100}%` }"
             />
           </div>
 
@@ -959,24 +1183,6 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
               class="alpha-slider"
               :style="{ '--fill': `${(settingStore.settings.noteBorderWidth / 10) * 100}%` }"
             />
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.codeTheme') }}</span>
-            </div>
-            <div class="code-theme-selector">
-              <button
-                v-for="theme in codeThemeOptions"
-                :key="theme.value"
-                class="code-theme-btn"
-                :class="{ active: settingStore.settings.codeTheme === theme.value }"
-                @click="settingStore.updateSettings('codeTheme', theme.value)"
-              >
-                <i :class="theme.icon"></i>
-                <span>{{ theme.label }}</span>
-              </button>
-            </div>
           </div>
 
           <div class="setting-item">
@@ -1052,77 +1258,20 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
             </div>
           </div>
 
-          <div class="setting-item setting-item-inline">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.autoLaunch') }}</span>
-            </div>
-            <button
-              class="toggle-btn"
-              :class="{ active: settingStore.settings.autoLaunch }"
-              @click="toggleAutoLaunch"
-            >
-              <span class="toggle-slider"></span>
-            </button>
-          </div>
-
-          <div class="setting-item setting-item-inline">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.rememberLastDir') }}</span>
-              <span class="setting-desc">{{ $t('settings.rememberLastDirDesc') }}</span>
-            </div>
-            <button
-                class="toggle-btn"
-                :class="{ active: settingStore.settings.rememberLastDirectory }"
-                @click="settingStore.updateSettings('rememberLastDirectory', !settingStore.settings.rememberLastDirectory)"
-            >
-              <span class="toggle-slider"></span>
-            </button>
-          </div>
-
           <div class="setting-item">
             <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.closeBehavior') }}</span>
+              <span class="setting-name">{{ $t('settings.codeTheme') }}</span>
             </div>
-            <div class="theme-selector">
+            <div class="code-theme-selector">
               <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.closeBehavior === 'hide' }"
-                @click="settingStore.updateSettings('closeBehavior', 'hide')"
+                v-for="theme in codeThemeOptions"
+                :key="theme.value"
+                class="code-theme-btn"
+                :class="{ active: settingStore.settings.codeTheme === theme.value }"
+                @click="settingStore.updateSettings('codeTheme', theme.value)"
               >
-                <i class="i-mdi-eye-off-outline"></i>
-                <span>{{ $t('settings.closeBehaviorHide') }}</span>
-              </button>
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.closeBehavior === 'quit' }"
-                @click="settingStore.updateSettings('closeBehavior', 'quit')"
-              >
-                <i class="i-mdi-exit-to-app"></i>
-                <span>{{ $t('settings.closeBehaviorQuit') }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="setting-item">
-            <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.titleBarBehavior') }}</span>
-            </div>
-            <div class="theme-selector">
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.titleBarBehavior === 'auto-hide' }"
-                @click="settingStore.updateSettings('titleBarBehavior', 'auto-hide')"
-              >
-                <i class="i-mdi-eye-off-outline"></i>
-                <span>{{ $t('settings.titleBarAutoHide') }}</span>
-              </button>
-              <button
-                class="theme-btn"
-                :class="{ active: settingStore.settings.titleBarBehavior === 'always-show' }"
-                @click="settingStore.updateSettings('titleBarBehavior', 'always-show')"
-              >
-                <i class="i-mdi-eye-outline"></i>
-                <span>{{ $t('settings.titleBarAlwaysShow') }}</span>
+                <i :class="theme.icon"></i>
+                <span>{{ theme.label }}</span>
               </button>
             </div>
           </div>
@@ -1147,7 +1296,7 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
                 :key="color.value"
                 class="note-bg-chip"
                 :class="{ active: settingStore.settings.defaultNoteBackgroundColor.toLowerCase() === color.value.toLowerCase() }"
-                :style="{ background: color.value }"
+                :style="{ background: color.swatch || color.value }"
                 :title="$t(color.nameKey)"
                 @click="setDefaultNoteBg(color.value)"
               ></button>
@@ -1165,33 +1314,55 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
           <div class="setting-item">
             <div class="setting-label">
-              <span class="setting-name">{{ $t('settings.ipApiUrl') }}</span>
-              <span v-if="ipApiUrlEffective === DEFAULT_IP_API_URL" class="setting-value">{{ $t('settings.ipApiUrlDefault') }}</span>
+              <span class="setting-name">{{ $t('settings.logoStyle') }}</span>
+              <span class="setting-desc">{{ $t('settings.logoStyleDesc') }}</span>
             </div>
-            <span class="setting-desc">{{ $t('settings.ipApiUrlDesc') }}</span>
-            <input
-              type="text"
-              class="text-input"
-              :value="settingStore.settings.ipApiUrl"
-              :placeholder="DEFAULT_IP_API_URL"
-              spellcheck="false"
-              @change="settingStore.updateSettings('ipApiUrl', ($event.target as HTMLInputElement).value)"
-              @keydown.enter="($event.target as HTMLInputElement).blur()"
-            />
-            <button
-              class="link-btn"
-              type="button"
-              :disabled="ipApiUrlEffective === DEFAULT_IP_API_URL"
-              @click="settingStore.updateSettings('ipApiUrl', DEFAULT_IP_API_URL)"
-            >
-              <i class="i-mdi-restore"></i>
-              <span>{{ $t('settings.ipApiUrlReset') }}</span>
-            </button>
+            <div class="theme-selector">
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.noteLogoStyle === 'standard' }"
+                @click="setLogoStyle('standard')"
+              >
+                <NoteLogo logo-style="standard" :size="14" />
+                <span>{{ $t('settings.logoStyleStandard') }}</span>
+              </button>
+              <button
+                class="theme-btn"
+                :class="{ active: settingStore.settings.noteLogoStyle === 'meego' }"
+                @click="setLogoStyle('meego')"
+              >
+                <NoteLogo logo-style="meego" :size="14" />
+                <span>{{ $t('settings.logoStyleMeego') }}</span>
+              </button>
+            </div>
           </div>
 
+          <div class="setting-item">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.logoVariant') }}</span>
+              <span class="setting-desc">{{ $t('settings.logoVariantDesc') }}</span>
+            </div>
+            <div class="logo-grid">
+              <button
+                v-for="preset in logoPresets"
+                :key="preset.id"
+                class="logo-option"
+                :class="{ active: settingStore.settings.noteLogoVariant === preset.id }"
+                :title="$t(preset.descKey)"
+                @click="pickLogoVariant(preset.id)"
+              >
+                <span class="logo-option-art">
+                  <NoteLogo :logo-style="preset.style" :variant="preset.id" :size="40" />
+                </span>
+                <span class="logo-option-name">{{ $t(preset.nameKey) }}</span>
+                <span class="logo-option-desc">{{ $t(preset.descKey) }}</span>
+              </button>
+            </div>
+            <p v-if="appIconHint" class="logo-icon-hint">{{ appIconHint }}</p>
+          </div>
         </section>
 
-        <!-- 文件树（左侧导航栏） -->
+        <!-- 导航栏（左侧文件树） -->
         <section v-if="activeCategory === 'fileTree'" class="settings-section">
           <div class="setting-item">
             <div class="setting-label">
@@ -1342,11 +1513,14 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
             </div>
             <div class="template-assistants">
               <button
-                v-for="template in defaultAssistants"
+                v-for="(template, index) in defaultAssistants"
                 :key="template.id"
                 class="template-assistant-btn"
                 @click="handleTemplateClick(template)"
               >
+                <span class="template-icon">
+                  <i :class="templateIcons[index % templateIcons.length]"></i>
+                </span>
                 <span class="template-name">{{ template.name }}</span>
               </button>
             </div>
@@ -1355,17 +1529,32 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
           <div class="setting-item">
             <div class="setting-label">
               <span class="setting-name">{{ $t('settings.aiMyAssistants') }}</span>
+              <span class="setting-desc">{{ $t('settings.assistantOrderHint') }}</span>
             </div>
-            <div class="user-assistants">
+            <div ref="assistantsListRef" class="user-assistants">
               <div
                 v-for="assistant in userAssistants"
                 :key="assistant.id"
+                :data-assistant-id="assistant.id"
                 class="assistant-card"
+                :class="{
+                  'is-dragging': draggingAssistantId === assistant.id,
+                  'is-drag-over': dragOverAssistantId === assistant.id,
+                }"
+                @pointerdown="onAssistantCardPointerDown($event, assistant)"
               >
+                <span class="assistant-grip" :title="$t('settings.dragToSort')">
+                  <i class="i-mdi-drag-vertical"></i>
+                </span>
+                <div class="assistant-avatar">
+                  <i class="i-mdi-face-agent"></i>
+                </div>
                 <div class="assistant-info">
                   <div class="assistant-name">
-                    <i class="i-mdi-face-agent"></i>
-                    <span>{{ assistant.name }}</span>
+                    <span class="assistant-name-text">{{ assistant.name }}</span>
+                    <span v-if="assistant.searchEnabled" class="assistant-chip">
+                      <i class="i-mdi-web"></i>{{ $t('assistant.searchChip') }}
+                    </span>
                   </div>
                   <div class="assistant-preview">{{ getPromptPreview(assistant.prompt) }}</div>
                 </div>
@@ -2141,6 +2330,24 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   overflow: hidden;
 }
 
+/* 分类小标题：通用设置按用途拆成几张面板，标题放在面板上方 */
+.settings-groups {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-group-title {
+  padding: 0 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--st-text-soft);
+}
+
+.settings-group-title:not(:first-child) {
+  padding-top: 14px;
+}
+
 .settings-section.shortcuts-section {
   background: none;
   border: none;
@@ -2349,6 +2556,69 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
 .theme-btn i {
   font-size: 14px;
+}
+
+/* ============ 笔记 Logo ============ */
+.logo-grid {
+  display: grid;
+  /* auto-fit 让少数几个配色把整行铺满，窗口变窄时自动减少每行个数 */
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.logo-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+
+.logo-option:hover {
+  background: var(--st-sunken);
+}
+
+.logo-option:active {
+  transform: scale(0.98);
+}
+
+.logo-option.active {
+  background: var(--st-chip);
+  border-color: color-mix(in srgb, var(--st-accent) 45%, transparent);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.logo-option-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+}
+
+.logo-option-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--st-text);
+}
+
+.logo-option-desc {
+  font-size: 9.5px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--st-text-soft);
+}
+
+.logo-icon-hint {
+  margin: 8px 2px 0;
+  font-size: 11px;
+  color: var(--st-text-soft);
 }
 
 /* ============ 代码主题 ============ */
@@ -2741,24 +3011,26 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 }
 
 /* ============ AI 助手 ============ */
+/* 模板助手：三张并列槽位卡，图标在上、名称在下，hover 才点亮强调色 */
 .template-assistants {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .template-assistant-btn {
-  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  padding: 11px 8px;
+  padding: 11px 6px 10px;
   border: 1px solid transparent;
-  border-radius: 11px;
+  border-radius: 12px;
   background: var(--st-sunken);
   cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out),
-              border-color var(--duration-fast) var(--ease-out);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .template-assistant-btn:hover {
@@ -2770,12 +3042,43 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   transform: scale(0.98);
 }
 
+.template-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--st-chip);
+  color: var(--st-text-dim);
+  box-shadow: var(--st-shadow);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.template-icon i {
+  font-size: 15px;
+}
+
+.template-assistant-btn:hover .template-icon {
+  background: var(--st-accent);
+  color: #fff;
+  box-shadow: 0 4px 10px -5px var(--st-accent);
+}
+
 .template-name {
-  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--st-text);
 }
 
+/* 我的助手：头像块 + 名称/预览 + 操作按钮组 */
 .user-assistants {
   display: flex;
   flex-direction: column;
@@ -2783,24 +3086,97 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 }
 
 .assistant-card {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  padding: 9px 11px;
+  padding: 8px 10px;
   border: 1px solid transparent;
-  border-radius: 11px;
+  border-radius: 12px;
   background: var(--st-sunken);
-  transition: background var(--duration-fast) var(--ease-out),
-              border-color var(--duration-fast) var(--ease-out);
+  cursor: grab;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .assistant-card:hover {
   background: var(--st-chip);
   border-color: var(--st-panel-border);
+  box-shadow: var(--st-shadow);
+}
+
+.assistant-card.is-dragging {
+  cursor: grabbing;
+  opacity: 0.45;
+}
+
+:global(body.is-dragging-assistant) {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.assistant-card.is-drag-over {
+  background: var(--st-accent-soft);
+  border-color: var(--st-accent-line);
+}
+
+/* 落点指示线 */
+.assistant-card.is-drag-over::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -3px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--st-accent);
+}
+
+.assistant-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  flex-shrink: 0;
+  margin-left: -4px;
+  color: var(--st-text-dim);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.assistant-grip i {
+  font-size: 13px;
+}
+
+.assistant-card:hover .assistant-grip {
+  opacity: 0.75;
+}
+
+.assistant-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(158deg, #4fb0ff 0%, var(--st-accent) 82%);
+  box-shadow:
+    0 4px 10px -6px var(--st-accent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.assistant-avatar i {
+  font-size: 16px;
 }
 
 .assistant-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   flex: 1;
   min-width: 0;
 }
@@ -2808,16 +3184,35 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 .assistant-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
-  font-size: 12px;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--st-text);
 }
 
-.assistant-name i {
-  font-size: 14px;
+.assistant-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--st-accent-soft);
   color: var(--st-accent);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.assistant-chip i {
+  font-size: 10px;
 }
 
 .assistant-preview {
@@ -2825,29 +3220,37 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+  line-height: 1.45;
   color: var(--st-text-soft);
 }
 
 .assistant-actions {
   display: flex;
   gap: 2px;
-  margin-left: 8px;
+  margin-left: 4px;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.assistant-card:hover .assistant-actions {
+  opacity: 1;
 }
 
 .action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 25px;
+  height: 25px;
   border: none;
   border-radius: 7px;
   background: transparent;
   color: var(--st-text-dim);
   cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out),
-              color var(--duration-fast) var(--ease-out),
-              transform var(--duration-fast) var(--ease-out);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .action-btn i {
@@ -2865,11 +3268,12 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 }
 
 .search-btn.active {
+  background: var(--st-accent-soft);
   color: var(--st-accent);
 }
 
 .delete-btn:hover {
-  background: color-mix(in srgb, var(--st-danger) 12%, transparent);
+  background: var(--st-danger-soft);
   color: var(--st-danger);
 }
 
@@ -2878,16 +3282,18 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 10px;
-  border: 1px dashed var(--st-panel-border);
-  border-radius: 11px;
+  padding: 9px;
+  border: 1px dashed var(--st-row-line);
+  border-radius: 12px;
   background: transparent;
   color: var(--st-text-dim);
+  font-family: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: border-color var(--duration-fast) var(--ease-out),
-              color var(--duration-fast) var(--ease-out),
-              background var(--duration-fast) var(--ease-out);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
 }
 
 .add-assistant-btn:hover {
@@ -2903,6 +3309,8 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 .add-assistant-btn i {
   font-size: 15px;
 }
+
+
 
 /* ============ 完全磁盘访问 ============ */
 .fda-row {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, watchEffect } from 'vue'
 import { getCurrentWindow, availableMonitors } from '@tauri-apps/api/window'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { invoke } from '@tauri-apps/api/core'
@@ -9,10 +9,12 @@ import { useSettingStore } from '@/stores/settingStore'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
+import { adaptNoteColor } from '@/utils/noteColorTheme'
 import { useEditorStyle } from '@/composables/useEditorStyle'
 import { useEdgePanel, isMainAutoHideSuppressed } from '@/composables/useEdgePanel'
 import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { useVersionCheck } from '@/composables/useVersionCheck'
+import { syncAppIcon } from '@/composables/useAppIcon'
 import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
 import TitleBar from '@/components/TitleBar/TitleBar.vue'
@@ -29,7 +31,7 @@ const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
 useShortcuts(openSettings)
 useGlobalShortcut()
-useTheme() // 初始化主题系统
+const { currentTheme } = useTheme() // 初始化主题系统，currentTheme 供笔记底色做明暗适配
 useEditorStyle() // 初始化编辑器样式预设
 useEdgePanel() // 把收藏笔记同步到屏幕边缘面板
 const { locale } = useI18n()
@@ -100,11 +102,24 @@ watch(updateAvailable, (val) => {
 // 监听透明度变化，同步 surface 背景色
 watch(() => settingStore.settings.windowAlpha, updateSurfaceColor, { immediate: true })
 
+// 当前笔记的背景色提升成全局变量：编辑器内是局部 --note-bg，侧栏等外围面板拿不到，
+// 这里挂到根节点，悬浮面板（文件树卡片）才能跟笔记背景同色。
+// 颜色要按当前主题适配，否则暗色主题下会出现「亮纸底 + 浅色文字」
+watchEffect(() => {
+  const color = noteStore.currentNote?.backgroundColor
+  const root = document.documentElement
+  if (color) root.style.setProperty('--note-bg-global', adaptNoteColor(color, currentTheme.value))
+  else root.style.removeProperty('--note-bg-global')
+})
+
 // 当 windowAlpha = 1.0 时，内容容器使用不透明背景，防止任何透明区域露出毛玻璃
+// 编辑器视图的底色跟随当前笔记底色（--note-panel），侧栏/底栏外的留白也跟着同色；
+// 设置、搜索页仍用常规背景
 const contentStyle = computed(() => {
-  return settingStore.settings.windowAlpha >= 1.0
-    ? { background: 'var(--color-background)' }
-    : { background: 'transparent' }
+  if (settingStore.settings.windowAlpha < 1.0) return { background: 'transparent' }
+  return {
+    background: currentView.value === 'editor' ? 'var(--note-panel)' : 'var(--color-background)',
+  }
 })
 
 function openSettings() {
@@ -174,6 +189,9 @@ onMounted(async () => {
 
   // Load settings
   settingStore.loadSettings()
+
+  // 启动时把 macOS 应用图标同步成设置里选中的 Logo（后台进行，不阻塞界面）
+  void syncAppIcon(settingStore.settings.noteLogoVariant)
 
   // 应用窗口透明度
   if (settingStore.settings.windowAlpha < 1.0) {
@@ -263,7 +281,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-container">
+  <div class="app-container" :style="contentStyle">
     <div class="app-background" :class="{ 'show-grid': settingStore.settings.showGrid }"></div>
     <!-- 加载遮罩 - 防止开机自启时iCloud未准备好导致空白 -->
     <div v-if="!isAppReady" class="app-loading">
@@ -272,7 +290,7 @@ onUnmounted(() => {
         <span>{{ $t('app.loading') }}</span>
       </div>
     </div>
-    <div v-else class="app-content" :style="contentStyle">
+    <div v-else class="app-content">
       <TitleBar v-if="currentView !== 'settings'" @open-settings="openSettings" @open-search="openSearchPage" />
       <SearchPage v-if="currentView === 'search'" @close="closeSearchPage" />
       <Settings v-else-if="currentView === 'settings'" @back="closeSettings" />

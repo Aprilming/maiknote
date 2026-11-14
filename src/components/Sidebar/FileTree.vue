@@ -8,6 +8,7 @@ import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import type { Directory, Note, NoteFileEntry } from '@/types/note'
 import NoteColorPicker from '@/components/NoteColorPicker.vue'
+import NoteLogo from '@/components/NoteLogo.vue'
 import { useTheme } from '@/composables/useTheme'
 import { TREE_DARK_COLORS, TREE_LIGHT_COLORS } from '@/utils/treeColors'
 
@@ -941,7 +942,14 @@ onBeforeUnmount(() => {
     @contextmenu.prevent
   >
     <header class="tree-head">
-      <span class="tree-heading">{{ $t('fileTree.title') }}</span>
+      <span class="tree-heading">
+        <NoteLogo
+          :logo-style="settingStore.settings.noteLogoStyle"
+          :variant="settingStore.settings.noteLogoVariant"
+          :size="16"
+        />
+        <span class="tree-heading-text">{{ $t('fileTree.title') }}</span>
+      </span>
     </header>
 
     <div class="tree-body" @contextmenu="openBlankContextMenu">
@@ -1408,15 +1416,24 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 悬浮圆角卡片：四周留白 + 圆角 + 细描边 + 轻阴影，不再贴边到底
+   注意：这里不能加 backdrop-filter / overflow:hidden —— 会给内部 position:fixed 的
+   右键菜单与回收站预览造 containing block 并裁切它们 */
 .file-tree {
   position: relative;
   flex-shrink: 0;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* 与顶栏同一套几何：左边距 10px、圆角 12px、细描边保持一致 */
+  margin: 8px 0 10px 10px;
+  border-radius: 12px;
+  /* 面板自己一套底色（--side-panel-bg，亮/暗各一版），和笔记纸面同色系但不同色，
+     靠这层中性面板浮在笔记底色上；窗口留白仍跟笔记同色 */
+  background: var(--side-panel-bg);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
   min-height: 0;
-  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
-  border-right: 1px solid var(--color-border);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -1446,13 +1463,14 @@ onBeforeUnmount(() => {
   color: color-mix(in srgb, var(--tree-root) 55%, var(--color-text-secondary));
 }
 
-.tree-heading::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--tree-root), var(--tree-note));
-  box-shadow: 0 0 6px color-mix(in srgb, var(--tree-root) 45%, transparent);
+/* Logo 取代原来的小圆点，尺寸跟随字号缩放 */
+.tree-heading :deep(.note-logo) {
+  width: calc(16px * var(--tree-fs-scale, 1));
+  height: auto;
+}
+
+.tree-heading-text {
+  line-height: 1;
 }
 
 .head-actions {
@@ -2076,11 +2094,12 @@ onBeforeUnmount(() => {
 .resize-handle {
   position: absolute;
   top: 0;
-  right: -2px;
-  width: 4px;
+  right: 0;
+  width: 6px;
   height: 100%;
   cursor: col-resize;
   z-index: 2;
+  border-radius: 0 12px 12px 0;
 }
 
 .resize-handle:hover {

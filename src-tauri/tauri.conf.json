@@ -70,7 +70,8 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
-      "../.agents/skills/maiknote-guide": "skills/maiknote-guide"
+      "../.agents/skills/maiknote-guide": "skills/maiknote-guide",
+      "icons/logos/*.icns": "logos/"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

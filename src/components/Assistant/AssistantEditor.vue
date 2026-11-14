@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Assistant } from '@/stores/assistantsStore'
 
@@ -20,11 +20,19 @@ const name = ref('')
 const prompt = ref('')
 const searchEnabled = ref(false)
 
+const nameInput = ref<HTMLInputElement | null>(null)
+
 // 是否为编辑模式
 const isEditMode = computed(() => !!props.assistant)
 
 // 弹窗标题
-const dialogTitle = computed(() => isEditMode.value ? t('assistant.editTitle') : t('assistant.newTitle'))
+const dialogTitle = computed(() => (isEditMode.value ? t('assistant.editTitle') : t('assistant.newTitle')))
+
+// 保存按钮是否可用
+const canSave = computed(() => !!name.value.trim())
+
+// 提示词字数
+const promptLength = computed(() => prompt.value.trim().length)
 
 // 合并监听 modelValue 和 assistant 变化
 watch(
@@ -34,11 +42,12 @@ watch(
       name.value = ''
       prompt.value = ''
       searchEnabled.value = false
-    } else if (assistant) {
-      name.value = assistant.name
-      prompt.value = assistant.prompt
-      searchEnabled.value = assistant.searchEnabled ?? false
+      return
     }
+    name.value = assistant?.name ?? ''
+    prompt.value = assistant?.prompt ?? ''
+    searchEnabled.value = assistant?.searchEnabled ?? false
+    nextTick(() => nameInput.value?.focus())
   },
   { immediate: true }
 )
@@ -73,54 +82,83 @@ function handleOverlayClick(e: MouseEvent) {
   <Teleport to="body">
     <Transition name="dialog">
       <div v-if="modelValue" class="dialog-overlay" @click="handleOverlayClick">
-        <div class="dialog-container">
-          <div class="dialog-header">
-            <h2 class="dialog-title">{{ dialogTitle }}</h2>
-            <button class="close-btn" @click="closeDialog">
+        <div
+          class="dialog-card"
+          role="dialog"
+          aria-modal="true"
+          @keydown.esc="closeDialog"
+        >
+          <header class="dialog-head">
+            <div class="head-emblem">
+              <i class="i-mdi-face-agent"></i>
+            </div>
+            <div class="head-text">
+              <h2 class="head-title">{{ dialogTitle }}</h2>
+              <p class="head-sub">{{ $t('assistant.subtitle') }}</p>
+            </div>
+            <button class="head-close" type="button" @click="closeDialog">
               <i class="i-mdi-close"></i>
+            </button>
+          </header>
+
+          <div class="dialog-body">
+            <section class="field">
+              <div class="field-head">
+                <label class="field-label" for="assistant-name">{{ $t('assistant.name') }}</label>
+              </div>
+              <input
+                id="assistant-name"
+                ref="nameInput"
+                v-model="name"
+                type="text"
+                class="field-input"
+                :placeholder="$t('assistant.namePlaceholder')"
+                @keydown.enter.prevent="handleSave"
+              />
+            </section>
+
+            <section class="field">
+              <div class="field-head">
+                <label class="field-label" for="assistant-prompt">{{ $t('assistant.prompt') }}</label>
+                <span class="field-meta">{{ $t('assistant.charCount', { n: promptLength }) }}</span>
+              </div>
+              <textarea
+                id="assistant-prompt"
+                v-model="prompt"
+                class="field-textarea"
+                :placeholder="$t('assistant.promptPlaceholder')"
+                rows="7"
+                spellcheck="false"
+              ></textarea>
+            </section>
+
+            <button
+              type="button"
+              class="switch-row"
+              :class="{ 'is-on': searchEnabled }"
+              role="switch"
+              :aria-checked="searchEnabled"
+              @click="searchEnabled = !searchEnabled"
+            >
+              <span class="switch-icon">
+                <i class="i-mdi-web"></i>
+              </span>
+              <span class="switch-text">
+                <span class="switch-title">{{ $t('assistant.webSearch') }}</span>
+                <span class="switch-desc">{{ $t('assistant.webSearchHint') }}</span>
+              </span>
+              <span class="switch" :class="{ 'is-on': searchEnabled }">
+                <span class="switch-knob"></span>
+              </span>
             </button>
           </div>
 
-          <div class="dialog-content">
-            <div class="form-item">
-              <label class="form-label">{{ $t('assistant.name') }}</label>
-              <input
-                v-model="name"
-                type="text"
-                class="form-input"
-                :placeholder="$t('assistant.namePlaceholder')"
-              />
-            </div>
-
-            <div class="form-item">
-              <label class="form-label">{{ $t('assistant.prompt') }}</label>
-              <textarea
-                v-model="prompt"
-                class="form-textarea"
-                :placeholder="$t('assistant.promptPlaceholder')"
-                rows="6"
-              ></textarea>
-            </div>
-
-            <div class="form-item">
-              <label class="form-label">{{ $t('assistant.webSearch') }}</label>
-              <div class="toggle-with-hint">
-                <button
-                  class="toggle-btn"
-                  :class="{ active: searchEnabled }"
-                  @click="searchEnabled = !searchEnabled"
-                >
-                  <span class="toggle-slider"></span>
-                </button>
-                <span class="toggle-hint">{{ $t('assistant.webSearchHint') }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="dialog-footer">
-            <button class="btn btn-cancel" @click="closeDialog">{{ $t('assistant.cancel') }}</button>
-            <button class="btn btn-save" @click="handleSave" :disabled="!name.trim()">{{ $t('assistant.save') }}</button>
-          </div>
+          <footer class="dialog-foot">
+            <button type="button" class="btn-ghost" @click="closeDialog">{{ $t('assistant.cancel') }}</button>
+            <button type="button" class="btn-primary" :disabled="!canSave" @click="handleSave">
+              {{ $t('assistant.save') }}
+            </button>
+          </footer>
         </div>
       </div>
     </Transition>
@@ -128,207 +166,421 @@ function handleOverlayClick(e: MouseEvent) {
 </template>
 
 <style scoped>
+/* ============================================
+   助手编辑弹窗
+   口径与设置页一致：毛玻璃面板 + 发丝线 + 单一强调色，
+   控件统一成"下沉槽位 / 选中胶囊"。
+   ============================================ */
+
 .dialog-overlay {
+  /* ---- 弹窗级令牌（浅色） ---- */
+  --dlg-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 249, 251, 0.96));
+  --dlg-text: #1d1d1f;
+  --dlg-text-dim: rgba(60, 60, 67, 0.62);
+  --dlg-text-soft: rgba(60, 60, 67, 0.42);
+  --dlg-accent: #007aff;
+  --dlg-accent-2: #0a84ff;
+  --dlg-accent-soft: rgba(0, 122, 255, 0.12);
+  --dlg-accent-line: rgba(0, 122, 255, 0.32);
+  --dlg-line: rgba(0, 0, 0, 0.07);
+  --dlg-sunken: rgba(120, 120, 128, 0.1);
+  --dlg-hover: rgba(120, 120, 128, 0.16);
+  --dlg-track: rgba(120, 120, 128, 0.26);
+  --dlg-scrim: rgba(0, 0, 0, 0.24);
+
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1100;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
+  padding: 24px;
+  background: var(--dlg-scrim);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
 }
 
-.dialog-container {
-  width: 480px;
-  max-width: 90vw;
-  max-height: 90vh;
+:global(html[data-theme='dark']) .dialog-overlay {
+  --dlg-bg: linear-gradient(180deg, rgba(46, 46, 48, 0.97), rgba(36, 36, 38, 0.96));
+  --dlg-text: #f2f2f7;
+  --dlg-text-dim: rgba(235, 235, 245, 0.62);
+  --dlg-text-soft: rgba(235, 235, 245, 0.42);
+  --dlg-accent: #0a84ff;
+  --dlg-accent-2: #409cff;
+  --dlg-accent-soft: rgba(10, 132, 255, 0.2);
+  --dlg-accent-line: rgba(10, 132, 255, 0.4);
+  --dlg-line: rgba(255, 255, 255, 0.08);
+  --dlg-sunken: rgba(120, 120, 128, 0.22);
+  --dlg-hover: rgba(120, 120, 128, 0.3);
+  --dlg-track: rgba(120, 120, 128, 0.4);
+  --dlg-scrim: rgba(0, 0, 0, 0.5);
+}
+
+.dialog-card {
   display: flex;
   flex-direction: column;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  width: 508px;
+  max-width: calc(100vw - 48px);
+  max-height: min(86vh, 760px);
+  border-radius: 20px;
   overflow: hidden;
+  color: var(--dlg-text);
+  background: var(--dlg-bg);
+  border: 1px solid var(--dlg-line);
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    0 28px 64px -16px rgba(0, 0, 0, 0.32),
+    0 8px 20px -10px rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
 }
 
-.dialog-header {
+/* ============ 头部 ============ */
+.dialog-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--color-border);
+  gap: 11px;
+  padding: 16px 18px 14px;
   flex-shrink: 0;
 }
 
-.dialog-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0;
-}
-
-.close-btn {
+.head-emblem {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(158deg, #4fb0ff 0%, var(--dlg-accent) 78%);
+  box-shadow:
+    0 6px 12px -6px rgba(0, 122, 255, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.head-emblem i {
+  font-size: 19px;
+}
+
+.head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.head-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--dlg-text);
+}
+
+.head-sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--dlg-text-soft);
+}
+
+.head-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--dlg-text-dim);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
-.close-btn:hover {
-  background: var(--color-popup-hover);
-  color: var(--color-text);
+.head-close:hover {
+  background: var(--dlg-hover);
+  color: var(--dlg-text);
 }
 
-.close-btn:active {
+.head-close:active {
   transform: scale(0.9);
 }
 
-.close-btn i {
-  font-size: 18px;
+.head-close i {
+  font-size: 16px;
 }
 
-.dialog-content {
-  padding: 20px;
+/* ============ 主体 ============ */
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 2px 18px 18px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
 
-.form-item {
-  margin-bottom: 16px;
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 
-.form-item:last-child {
-  margin-bottom: 0;
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
 }
 
-.form-label {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--color-text);
-  margin-bottom: 8px;
+.field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--dlg-text-dim);
 }
 
-.form-input {
+.field-meta {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dlg-text-soft);
+}
+
+.field-input,
+.field-textarea {
   width: 100%;
-  padding: 10px 12px;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  color: var(--color-text);
-  outline: none;
-  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
   box-sizing: border-box;
-}
-
-.form-input:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 15%, transparent);
-}
-
-.form-input::placeholder {
-  color: var(--color-text-secondary);
-  opacity: 0.6;
-}
-
-.form-textarea {
-  width: 100%;
-  padding: 10px 12px;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--dlg-sunken);
   font-family: inherit;
+  font-size: 13px;
   line-height: 1.6;
-  color: var(--color-text);
+  color: var(--dlg-text);
   outline: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.field-textarea {
+  min-height: 158px;
+  max-height: 44vh;
   resize: vertical;
-  min-height: 120px;
-  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
-  box-sizing: border-box;
 }
 
-.form-textarea:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 15%, transparent);
+.field-input::placeholder,
+.field-textarea::placeholder {
+  color: var(--dlg-text-soft);
 }
 
-.form-textarea::placeholder {
-  color: var(--color-text-secondary);
-  opacity: 0.6;
+.field-input:hover,
+.field-textarea:hover {
+  border-color: var(--dlg-line);
 }
 
-.dialog-footer {
+.field-input:focus,
+.field-textarea:focus {
+  background: transparent;
+  border-color: var(--dlg-accent-line);
+  box-shadow: 0 0 0 3px var(--dlg-accent-soft);
+}
+
+/* ============ 联网搜索开关行 ============ */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--dlg-sunken);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.switch-row:hover {
+  border-color: var(--dlg-line);
+}
+
+.switch-row.is-on {
+  background: var(--dlg-accent-soft);
+  border-color: var(--dlg-accent-line);
+}
+
+.switch-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--dlg-hover);
+  color: var(--dlg-text-dim);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.switch-row.is-on .switch-icon {
+  background: var(--dlg-accent);
+  color: #fff;
+}
+
+.switch-icon i {
+  font-size: 14px;
+}
+
+.switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.switch-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--dlg-text);
+}
+
+.switch-desc {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dlg-text-soft);
+}
+
+.switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--dlg-track);
+  transition: background var(--duration-normal) var(--ease-out);
+}
+
+.switch.is-on {
+  background: linear-gradient(180deg, var(--dlg-accent-2), var(--dlg-accent));
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.switch.is-on .switch-knob {
+  transform: translateX(16px);
+}
+
+.switch-row:active .switch-knob {
+  transform: scale(0.92);
+}
+
+.switch-row.is-on:active .switch-knob {
+  transform: translateX(16px) scale(0.92);
+}
+
+/* ============ 底部 ============ */
+.dialog-foot {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--color-border);
+  gap: 8px;
+  padding: 13px 18px;
   flex-shrink: 0;
+  border-top: 1px solid var(--dlg-line);
+  background: color-mix(in srgb, var(--dlg-sunken) 40%, transparent);
 }
 
-.btn {
-  padding: 8px 16px;
+.btn-ghost,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  padding: 7px 15px;
   border: none;
-  border-radius: var(--radius-sm);
-  font-size: 14px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
 }
 
-.btn-cancel {
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  color: var(--color-text);
+.btn-ghost {
+  background: var(--dlg-sunken);
+  color: var(--dlg-text-dim);
 }
 
-.btn-cancel:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+.btn-ghost:hover {
+  background: var(--dlg-hover);
+  color: var(--dlg-text);
 }
 
-.btn-cancel:active {
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(180deg, var(--dlg-accent-2), var(--dlg-accent));
+  box-shadow:
+    0 6px 12px -6px rgba(0, 122, 255, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 8px 16px -6px rgba(0, 122, 255, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn-ghost:active,
+.btn-primary:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-.btn-save {
-  background: var(--color-primary);
-  color: white;
+.btn-primary:disabled {
+  cursor: default;
+  opacity: 0.42;
+  box-shadow: none;
 }
 
-.btn-save:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.btn-save:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.btn-save:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* 过渡动画 */
+/* ============ 过渡 ============ */
 .dialog-enter-active,
 .dialog-leave-active {
-  transition: opacity var(--duration-normal) var(--ease-out);
+  transition: opacity 180ms var(--ease-out);
 }
 
-.dialog-enter-active .dialog-container,
-.dialog-leave-active .dialog-container {
-  transition: transform var(--duration-normal) var(--ease-out), opacity var(--duration-normal) var(--ease-out);
+.dialog-enter-active .dialog-card,
+.dialog-leave-active .dialog-card {
+  transition:
+    transform 220ms var(--ease-out),
+    opacity 180ms var(--ease-out);
 }
 
 .dialog-enter-from,
@@ -336,62 +588,20 @@ function handleOverlayClick(e: MouseEvent) {
   opacity: 0;
 }
 
-.dialog-enter-from .dialog-container,
-.dialog-leave-to .dialog-container {
-  transform: scale(0.95);
+.dialog-enter-from .dialog-card,
+.dialog-leave-to .dialog-card {
   opacity: 0;
+  transform: scale(0.96) translateY(8px);
 }
 
-.toggle-with-hint {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.toggle-hint {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  line-height: 1.4;
-}
-
-.toggle-btn {
-  position: relative;
-  width: 44px;
-  height: 24px;
-  flex-shrink: 0;
-  border: none;
-  border-radius: 12px;
-  background: var(--color-border);
-  cursor: pointer;
-  transition: background var(--duration-normal) var(--ease-out);
-  padding: 0;
-}
-
-.toggle-btn:active .toggle-slider {
-  transform: scale(0.9);
-}
-
-.toggle-btn.active:active .toggle-slider {
-  transform: translateX(20px) scale(0.9);
-}
-
-.toggle-btn.active {
-  background: var(--color-primary);
-}
-
-.toggle-slider {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: white;
-  transition: transform var(--duration-normal) var(--ease-out);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-}
-
-.toggle-btn.active .toggle-slider {
-  transform: translateX(20px);
+@media (prefers-reduced-motion: reduce) {
+  .dialog-enter-active,
+  .dialog-leave-active,
+  .dialog-enter-active .dialog-card,
+  .dialog-leave-active .dialog-card,
+  .switch,
+  .switch-knob {
+    transition: none;
+  }
 }
 </style>

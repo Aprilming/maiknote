@@ -1,8 +1,13 @@
 /** 笔记背景色（编辑器右下角色板 / 设置里的默认笔记背景色 共用同一套） */
 
+import { adaptNoteColor, type NoteThemeName } from './noteColorTheme'
+
 export interface NoteColorOption {
   nameKey: string
+  /** 笔记里真正存下来的颜色（统一用浅色纸感 hex，切换主题不迁移数据） */
   value: string
+  /** 当前主题下这个选项实际显示的样子，不填就按 value 画 */
+  swatch?: string
 }
 
 /** 浅色主题：低饱和纸感底色 */
@@ -19,7 +24,7 @@ export const LIGHT_NOTE_COLORS: NoteColorOption[] = [
   { nameKey: 'color.beige', value: '#faf8f5' },
 ]
 
-/** 深色主题：同色系的深色底 */
+/** 深色主题：同色系的深色底（历史色板，保留导出以兼容旧数据展示） */
 export const DARK_NOTE_COLORS: NoteColorOption[] = [
   { nameKey: 'color.darkBlue', value: '#1e293b' },
   { nameKey: 'color.darkPurple', value: '#2a1a3e' },
@@ -32,3 +37,14 @@ export const DARK_NOTE_COLORS: NoteColorOption[] = [
   { nameKey: 'color.darkPink', value: '#2e1a2a' },
   { nameKey: 'color.darkBrown', value: '#2e241a' },
 ]
+
+/**
+ * 当前主题下要展示的色板：value 仍是笔记存储的规范底色，swatch 是它在当前主题
+ * 下的实际观感。这样选色板不随主题切换存储值，历史笔记也不用迁移。
+ */
+export function noteColorOptionsFor(theme: NoteThemeName): NoteColorOption[] {
+  return LIGHT_NOTE_COLORS.map((color) => ({
+    ...color,
+    swatch: adaptNoteColor(color.value, theme),
+  }))
+}

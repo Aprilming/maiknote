@@ -85,6 +85,12 @@
   --spacing-xl: 32px;
 
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  /* 笔记底色（App.vue 注入 --note-bg-global）→ 窗口/悬浮面板底色。
+     亮色主题：直接用笔记的纸感底色，面板再向白提一点，浮起来但不割裂 */
+  --note-panel: var(--note-bg-global, var(--color-background));
+  /* 侧栏面板自身底色：故意不用笔记色，浅白面板浮在笔记纸面上（亮色） */
+  --side-panel-bg: color-mix(in srgb, #ffffff 84%, var(--color-surface));
 }
 
 /* Dark mode */
@@ -114,6 +120,11 @@
   --color-text: #f1f5f9;
   --color-text-secondary: #a3a3a3;
   --color-border: rgba(255, 255, 255, 0.08);
+
+  /* 暗色主题：沿用笔记的深色底（笔记色板在暗色下本就是深色系），面板少许提亮 */
+  --note-panel: var(--note-bg-global, var(--color-background));
+  /* 侧栏面板自身底色（暗色）：深色面板少许提亮，浮在笔记深色底上 */
+  --side-panel-bg: color-mix(in srgb, var(--color-surface) 88%, #ffffff);
   --color-danger: #ef4444;
   --color-success: #22c55e;
   --color-warning: #f59e0b;
@@ -236,13 +247,17 @@ textarea {
   white-space: nowrap;
 }
 
-/* Window shake animation for boundary navigation feedback */
+/* Window shake animation for boundary navigation feedback.
+   动画只能挂在圆角壳内部的内容层(.app-container > .app-content)上，绝不能挂到 #app：
+   给根节点加 transform 会让整个 webview 提升为独立合成层，透明窗口在动画期间
+   四个圆角会露出黑色直角。最外层 .app-container(overflow:hidden + 12px 圆角)保持静止，
+   不透明的底色也留在它身上，所以抖动时任何一边都不会露出缝。 */
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   10%, 50%, 90% { transform: translateX(-4px); }
   30%, 70% { transform: translateX(4px); }
 }
 
-.shake {
+#app.shake > .app-container > .app-content {
   animation: shake 0.3s ease-in-out;
 }

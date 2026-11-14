@@ -1,4 +1,5 @@
 // rebuild trigger 1794532729
+pub mod app_icon;
 pub mod autostart;
 pub mod desktop_note;
 pub mod permissions;
@@ -2371,6 +2372,37 @@ pub fn run() {
                     let level = CGShieldingWindowLevel();
                     let _: () = msg_send![ns_window_ptr, setLevel: level as i64];
                     let _: () = msg_send![ns_window_ptr, setCollectionBehavior: NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY];
+
+                    // 四角黑直角根治：contentView 这一层是「方角」的深色背板，网页里的 12px 圆角
+                    // 只裁了网页内容自己，圆角外侧那一圈方角会把背板露出来——暗色主题下配浅色笔记
+                    // 时最明显（四个黑直角）。这里把整个 contentView 图层裁成和原生一致的 12pt 圆角，
+                    // 背板、磨玻璃、webview 一起被裁，方角就没有落脚处了。
+                    let content_view: *mut objc2::runtime::AnyObject =
+                        msg_send![ns_window_ptr, contentView];
+                    if !content_view.is_null() {
+                        let _: () = msg_send![content_view, setWantsLayer: 1i8];
+                        let layer: *mut objc2::runtime::AnyObject = msg_send![content_view, layer];
+                        if !layer.is_null() {
+                            let _: () = msg_send![layer, setCornerRadius: 12.0f64];
+                            let _: () = msg_send![layer, setMasksToBounds: 1i8];
+                        }
+                    }
+                }
+
+                // 兜底：webview 自身图层也裁一次。WKWebView 的内容由独立渲染进程合成，
+                // 个别系统版本上父层遮罩裁不住它，这两层一起裁才算干净。
+                if let Ok(ns_view) = window.ns_view() {
+                    let view_ptr = ns_view as *mut objc2::runtime::AnyObject;
+                    if !view_ptr.is_null() {
+                        unsafe {
+                            let _: () = msg_send![view_ptr, setWantsLayer: 1i8];
+                            let webview_layer: *mut objc2::runtime::AnyObject = msg_send![view_ptr, layer];
+                            if !webview_layer.is_null() {
+                                let _: () = msg_send![webview_layer, setCornerRadius: 12.0f64];
+                                let _: () = msg_send![webview_layer, setMasksToBounds: 1i8];
+                            }
+                        }
+                    }
                 }
 
                 // 如果是开机自启启动，立即隐藏窗口，等待快捷键唤起
@@ -2461,6 +2493,7 @@ pub fn run() {
             set_edge_prefs,
             hide_edge_window,
             read_clipboard,
+            app_icon::apply_app_icon,
             autostart::enable_autostart,
             autostart::disable_autostart,
             autostart::is_autostart_enabled,

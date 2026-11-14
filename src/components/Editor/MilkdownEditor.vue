@@ -13,7 +13,8 @@ import { createSourceTabInsertText } from './tabInsert'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { copyText } from '@/utils/clipboard'
 import { sanitizePathSegment, fileNameForTitle } from '@/utils/notePath'
-import { LIGHT_NOTE_COLORS, DARK_NOTE_COLORS } from '@/utils/noteColors'
+import { noteColorOptionsFor } from '@/utils/noteColors'
+import { adaptNoteColor } from '@/utils/noteColorTheme'
 
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
@@ -22,9 +23,10 @@ const settingStore = useSettingStore()
 const { getICloudPath } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
 
-const { isDark } = useTheme()
+const { currentTheme } = useTheme()
 
-const NOTE_COLORS = computed(() => isDark() ? DARK_NOTE_COLORS : LIGHT_NOTE_COLORS)
+// 色板按主题换算观感，笔记里存的仍是同一份规范底色（切换主题不迁移数据）
+const NOTE_COLORS = computed(() => noteColorOptionsFor(currentTheme.value))
 
 // 笔记边框：笔记背景与窗口边界之间的留白宽度，0 时背景直接铺满，不再有边框
 const noteFrameStyle = computed(() => {
@@ -306,6 +308,12 @@ const wordCount = computed(() => {
 // get current note
 const currentNote = computed(() => noteStore.currentNote)
 
+// 笔记底色在当前主题下的实际取值（暗色主题下压暗，亮色主题下提亮）
+const adaptedNoteBg = computed(() => {
+  const color = currentNote.value?.backgroundColor
+  return color ? adaptNoteColor(color, currentTheme.value) : ''
+})
+
 // ============================================
 // 底部路径：根目录就是 /，末段显示笔记标题
 // ============================================
@@ -528,9 +536,9 @@ onMounted(() => {
     editor.addEventListener('wheel', handleWheel as EventListener, { passive: false })
   }
 
-  // 直接监听背景色变化并设置DOM样式
+  // 直接监听背景色变化并设置DOM样式（同时依赖 currentTheme，主题切换后要重算）
   watchEffect(() => {
-    const color = currentNote.value?.backgroundColor
+    const color = adaptedNoteBg.value
     const wrapper = document.querySelector('.editor-wrapper') as HTMLElement | null
     if (wrapper) {
       if (color) {
@@ -851,7 +859,7 @@ function handleToggleSourceMode() {
           @input="handleSourceInput"
           @keydown="handleSourceKeydown"
           class="source-textarea"
-          :style="currentNote?.backgroundColor ? { background: currentNote.backgroundColor + ' !important' } : {}"
+          :style="adaptedNoteBg ? { background: adaptedNoteBg + ' !important' } : {}"
           :readonly="isLocked"
           :placeholder="$t('editor.sourcePlaceholder')"
         ></textarea>
@@ -865,7 +873,7 @@ function handleToggleSourceMode() {
           :font-size="settingStore.settings.fontSize"
           :font-family="settingStore.settings.fontFamily"
           :is-locked="isLocked"
-          :note-bg-color="currentNote?.backgroundColor"
+          :note-bg-color="adaptedNoteBg"
           @update="handleEditorUpdate"
         />
       </div>
