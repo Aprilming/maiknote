@@ -4,6 +4,7 @@ pub mod autostart;
 pub mod desktop_note;
 pub mod permissions;
 pub mod skills_sync;
+pub mod workspace;
 
 use std::collections::HashMap;
 use std::fs;
@@ -2505,6 +2506,13 @@ pub fn run() {
             skills_sync::skill_sync_status,
             skills_sync::skill_sync_link,
             skills_sync::skill_sync_unlink,
+            workspace::read_workspaces,
+            workspace::write_workspaces,
+            workspace::workspace_meta_root,
+            workspace::ensure_dir,
+            workspace::validate_workspace_dir,
+            workspace::scan_workspace_dir,
+            workspace::copy_workspace_entry,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

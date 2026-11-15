@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { NoteMetadata, DirectoryData, NoteFileEntry } from '@/types/note'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 
 
 // 直接使用 invoke，在非 Tauri 环境下调用时会自然抛出异常（由各函数的 try/catch 捕获）
@@ -8,19 +9,35 @@ async function safeInvoke<T>(command: string, args?: Record<string, unknown>): P
 }
 
 /**
- * File system operations using Tauri commands
+ * File system operations using Tauri commands.
+ * 所有路径都按「当前工作空间」解析：content = 笔记/文件夹/图片根目录，meta = metadata.json 等索引文件所在目录。
  */
 export function useFileSystem() {
+  /** 当前工作空间的内容根目录（笔记 .md、目录文件夹、images 都在这里） */
+  async function getContentPath(): Promise<string> {
+    try {
+      return await useWorkspaceStore().basePathOf('content')
+    } catch (e) {
+      console.error('Failed to resolve workspace content path:', e)
+      throw new Error('Failed to access workspace directory')
+    }
+  }
+
+  /** 当前工作空间的索引目录（metadata.json / directories.json / assistants.json） */
+  async function getMetaPath(): Promise<string> {
+    try {
+      return await useWorkspaceStore().basePathOf('meta')
+    } catch (e) {
+      console.error('Failed to resolve workspace meta path:', e)
+      throw new Error('Failed to access workspace directory')
+    }
+  }
+
   /**
-   * Get the iCloud path for storing notes
+   * 兼容旧调用：返回当前工作空间的内容根目录
    */
   async function getICloudPath(): Promise<string> {
-    try {
-      return await safeInvoke<string>('get_icloud_path')
-    } catch (e) {
-      console.error('Failed to get iCloud path:', e)
-      throw new Error('Failed to access iCloud directory')
-    }
+    return await getContentPath()
   }
 
   /**
@@ -28,7 +45,7 @@ export function useFileSystem() {
    */
   async function readMetadata(): Promise<NoteMetadata> {
     try {
-      const path = await getICloudPath()
+      const path = await getMetaPath()
       const content = await safeInvoke<string>('read_metadata', { basePath: path })
       return JSON.parse(content)
     } catch (e) {
@@ -46,7 +63,7 @@ export function useFileSystem() {
    */
   async function writeMetadata(metadata: NoteMetadata): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getMetaPath()
       const content = JSON.stringify(metadata, null, 2)
       await safeInvoke('write_metadata', { basePath: path, content })
     } catch (e) {
@@ -59,7 +76,7 @@ export function useFileSystem() {
    */
   async function readNote(fileName: string, dir?: string): Promise<string> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName }
       if (dir) args.dir = dir
       return await safeInvoke<string>('read_note', args)
@@ -74,7 +91,7 @@ export function useFileSystem() {
    */
   async function writeNote(fileName: string, content: string, dir?: string): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName, content }
       if (dir) args.dir = dir
       await safeInvoke('write_note', args)
@@ -89,7 +106,7 @@ export function useFileSystem() {
    * @returns 废纸篓中的新路径（回退为直接删除时为空串）
    */
   async function deleteNote(fileName: string, dir?: string): Promise<string> {
-    const path = await getICloudPath()
+    const path = await getContentPath()
     const args: Record<string, unknown> = { basePath: path, fileName }
     if (dir) args.dir = dir
     return await safeInvoke<string>('delete_note', args)
@@ -106,7 +123,7 @@ export function useFileSystem() {
    * 列出磁盘上实际存在的笔记文件（用于发现 metadata 之外的残留）
    */
   async function listNoteFiles(): Promise<NoteFileEntry[]> {
-    const base = await getICloudPath()
+    const base = await getContentPath()
     return await safeInvoke<NoteFileEntry[]>('list_note_files', { basePath: base })
   }
 
@@ -115,7 +132,7 @@ export function useFileSystem() {
    */
   async function createDirectoryFolder(dir: string): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       await safeInvoke('create_directory_folder', { basePath: path, dir })
     } catch (e) {
       console.error(`Failed to create directory folder ${dir}:`, e)
@@ -127,7 +144,7 @@ export function useFileSystem() {
    */
   async function renameDirectoryFolder(oldDir: string, newDir: string): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       await safeInvoke('rename_directory_folder', { basePath: path, oldDir, newDir })
     } catch (e) {
       console.error(`Failed to rename directory folder:`, e)
@@ -139,7 +156,7 @@ export function useFileSystem() {
    */
   async function deleteDirectoryFolder(dir: string, parentDir?: string | null): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, dir }
       if (parentDir) args.parentDir = parentDir
       await safeInvoke('delete_directory_folder', args)
@@ -158,7 +175,7 @@ export function useFileSystem() {
     newFileName?: string
   ): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName }
       if (fromDir !== null) args.fromDir = fromDir
       if (toDir !== null) args.toDir = toDir
@@ -174,7 +191,7 @@ export function useFileSystem() {
    */
   async function setNoteReadonly(fileName: string, dir?: string): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName }
       if (dir) args.dir = dir
       await safeInvoke('set_note_readonly', args)
@@ -188,7 +205,7 @@ export function useFileSystem() {
    */
   async function setNoteReadwrite(fileName: string, dir?: string): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName }
       if (dir) args.dir = dir
       await safeInvoke('set_note_readwrite', args)
@@ -205,7 +222,7 @@ export function useFileSystem() {
     moves: { id: string; fromDir: string | null; toDir: string | null; toFileName: string }[]
   ): Promise<number> {
     if (moves.length === 0) return 0
-    const path = await getICloudPath()
+    const path = await getContentPath()
     return await safeInvoke<number>('migrate_note_layout', { basePath: path, moves })
   }
 
@@ -214,7 +231,7 @@ export function useFileSystem() {
    */
   async function ensureImagesFolder(): Promise<string> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       return await safeInvoke<string>('ensure_images_folder', { basePath: path })
     } catch (e) {
       console.error('Failed to ensure images folder:', e)
@@ -230,7 +247,7 @@ export function useFileSystem() {
    */
   async function saveImage(imageData: string, filename: string): Promise<string> {
     try {
-      const path = await getICloudPath()
+      const path = await getContentPath()
       await safeInvoke<string>('save_image', { basePath: path, imageData, filename })
       // Return asset:// URL for Tauri to serve the file
       // Ensure proper URL encoding and single slash after localhost
@@ -247,7 +264,7 @@ export function useFileSystem() {
    */
   async function readDirectories(): Promise<DirectoryData> {
     try {
-      const path = await getICloudPath()
+      const path = await getMetaPath()
       const content = await safeInvoke<string>('read_directories', { basePath: path })
       return JSON.parse(content)
     } catch (e) {
@@ -264,7 +281,7 @@ export function useFileSystem() {
    */
   async function writeDirectories(data: DirectoryData): Promise<void> {
     try {
-      const path = await getICloudPath()
+      const path = await getMetaPath()
       const content = JSON.stringify(data, null, 2)
       await safeInvoke('write_directories', { basePath: path, content })
     } catch (e) {
@@ -273,6 +290,8 @@ export function useFileSystem() {
   }
 
   return {
+    getContentPath,
+    getMetaPath,
     getICloudPath,
     readMetadata,
     writeMetadata,

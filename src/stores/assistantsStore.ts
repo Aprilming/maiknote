@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useFileSystem } from '@/composables/useFileSystem'
 
 // Assistant interface
 export interface Assistant {
@@ -108,8 +107,12 @@ export const useAssistantsStore = defineStore('assistants', () => {
   const aiConfigExists = ref(false)
   const baiduSearchKey = ref('')
 
-  // File system operations
-  const { getICloudPath } = useFileSystem()
+  /**
+   * 助手与 AI 配置是应用级设置，不跟着工作空间走：固定读写 iCloud 空间的 assistants.json
+   */
+  async function getICloudPath(): Promise<string> {
+    return await invoke<string>('get_icloud_path')
+  }
 
   /**
    * Generate a unique ID using crypto.randomUUID()

@@ -4,6 +4,7 @@ import type { Note, NoteMetadata, NoteFileEntry } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { directoryRelPath, directoryIdFromRelPath, fileNameForTitle, sanitizePathSegment } from '@/utils/notePath'
 import i18n from '@/i18n'
 
@@ -123,10 +124,15 @@ export const useNoteStore = defineStore('note', () => {
   // 导航方向：由导航行为显式设置，编辑器直接绑定此值控制切换动画（上一条=left、下一条/新建=right）
   const navDirection = ref<'left' | 'right' | 'up' | 'down'>('right')
 
+  /** localStorage 按工作空间隔离，切空间不会互相污染「上次打开的笔记」 */
+  function workspaceScopedKey(key: string): string {
+    return `${key}:${useWorkspaceStore().currentId || 'icloud'}`
+  }
+
   // 监听 currentNoteId 变化，保存到 localStorage
   watch(currentNoteId, (newId) => {
     if (newId) {
-      localStorage.setItem('lastOpenedNoteId', newId)
+      localStorage.setItem(workspaceScopedKey('lastOpenedNoteId'), newId)
     }
   })
 
@@ -238,33 +244,45 @@ export const useNoteStore = defineStore('note', () => {
       clearTimeout(saveTimeout)
     }
 
-    saveTimeout = setTimeout(async () => {
-      // Save all pending notes
-      const notesToSave = Array.from(pendingSaveNotes)
-        .map(id => notes.value.find(n => n.id === id))
-        .filter((n): n is Note => n !== undefined)
+    saveTimeout = setTimeout(() => void runPendingSave(), 500) as unknown as number
+  }
 
-      for (const note of notesToSave) {
-        try {
-          await syncNoteFileToDisk(note)
-        } catch (e) {
-          console.error('Failed to save note to iCloud:', e)
-        }
-      }
-
-      // Save metadata if any note changed or metadata explicitly requested
-      if (notesToSave.length > 0 || metadataSavePending) {
-        try {
-          await saveMetadataToCloud()
-        } catch (e) {
-          console.error('Failed to save metadata to iCloud:', e)
-        }
-      }
-
-      pendingSaveNotes.clear()
-      metadataSavePending = false
+  /** 立刻把待保存内容落盘（切换工作空间前必须调用，否则会写进新空间的目录） */
+  async function flushPendingSave(): Promise<void> {
+    if (saveTimeout) {
+      clearTimeout(saveTimeout)
       saveTimeout = null
-    }, 500) as unknown as number
+    }
+    if (pendingSaveNotes.size === 0 && !metadataSavePending) return
+    await runPendingSave()
+  }
+
+  async function runPendingSave(): Promise<void> {
+    saveTimeout = null
+    // Save all pending notes
+    const notesToSave = Array.from(pendingSaveNotes)
+      .map(id => notes.value.find(n => n.id === id))
+      .filter((n): n is Note => n !== undefined)
+
+    for (const note of notesToSave) {
+      try {
+        await syncNoteFileToDisk(note)
+      } catch (e) {
+        console.error('Failed to save note to iCloud:', e)
+      }
+    }
+
+    // Save metadata if any note changed or metadata explicitly requested
+    if (notesToSave.length > 0 || metadataSavePending) {
+      try {
+        await saveMetadataToCloud()
+      } catch (e) {
+        console.error('Failed to save metadata to iCloud:', e)
+      }
+    }
+
+    pendingSaveNotes.clear()
+    metadataSavePending = false
   }
 
   /**
@@ -368,7 +386,9 @@ export const useNoteStore = defineStore('note', () => {
       }
 
       // 恢复上次打开的笔记（确保在过滤后的列表中）
-      const lastOpenedId = localStorage.getItem('lastOpenedNoteId')
+      const lastOpenedId =
+        localStorage.getItem(workspaceScopedKey('lastOpenedNoteId')) ??
+        localStorage.getItem('lastOpenedNoteId')
       const active = activeNoteList.value
       if (lastOpenedId && active.some(n => n.id === lastOpenedId)) {
         currentNoteId.value = lastOpenedId
@@ -1165,6 +1185,25 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * 切换工作空间后重新加载：先落盘 + 清空当前状态，再读新空间的索引与笔记
+   */
+  async function reload(): Promise<void> {
+    if (saveTimeout) {
+      clearTimeout(saveTimeout)
+      saveTimeout = null
+    }
+    pendingSaveNotes.clear()
+    metadataSavePending = false
+    notes.value = []
+    currentNoteId.value = null
+    searchQuery.value = ''
+    filterDirectoryId.value = null
+    loadError.value = null
+    orphanFiles.value = []
+    await loadNotes()
+  }
+
+  /**
    * 历史遗留：以前空笔记被删会进回收站，这里统一清掉（文件移入系统废纸篓 + 移除元数据）。
    */
   async function purgeEmptyTrash(): Promise<void> {
@@ -1236,6 +1275,8 @@ export const useNoteStore = defineStore('note', () => {
     pinToTop,
     // iCloud persistence
     initialize,
+    reload,
+    flushPendingSave,
     loadNotes,
     saveNoteToCloud,
     persistNoteNow,

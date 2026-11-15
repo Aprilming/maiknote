@@ -11,6 +11,9 @@ import NoteColorPicker from '@/components/NoteColorPicker.vue'
 import NoteLogo from '@/components/NoteLogo.vue'
 import { useTheme } from '@/composables/useTheme'
 import { TREE_DARK_COLORS, TREE_LIGHT_COLORS } from '@/utils/treeColors'
+import { useWorkspaceTransfer } from '@/composables/useWorkspaceTransfer'
+import WorkspaceTransferDialog from '@/components/Sidebar/WorkspaceTransferDialog.vue'
+import WorkspaceSwitcher from '@/components/Sidebar/WorkspaceSwitcher.vue'
 
 const props = withDefaults(defineProps<{
   width?: number
@@ -27,6 +30,8 @@ const noteStore = useNoteStore()
 const desktopNotes = useDesktopNotes()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
+// 跨空间搬运弹窗是全局单例状态，文件树这边只负责登记要搬的条目
+const { requestNoteTransfer, requestDirectoryTransfer } = useWorkspaceTransfer()
 
 // 文件树字号缩放系数：以 12.5px 为基准，行高与图标尺寸跟随缩放
 const treeFontScale = computed(() => {
@@ -430,7 +435,8 @@ function openContextMenu(e: MouseEvent, target: ContextTarget) {
     openNote(target.note)
   }
   const menuWidth = 176
-  const menuHeight = 150
+  // 笔记 / 目录菜单多了跨空间搬运两项，估高调大，避免贴窗口底部时被裁掉
+  const menuHeight = target.type === 'note' || target.type === 'dir' ? 240 : 150
   const x = Math.max(6, Math.min(e.clientX, window.innerWidth - menuWidth - 8))
   const y = Math.max(6, Math.min(e.clientY, window.innerHeight - menuHeight - 8))
   ctxMenu.value = { x, y, target }
@@ -517,6 +523,15 @@ function ctxMoveToRoot() {
   const note = ctxNote.value
   closeContextMenu()
   if (note) moveNoteToRoot(note)
+}
+
+/** 跨空间搬运：复制还是移动在弹窗里选，所以四条菜单项共用这一个 handler */
+function ctxOpenTransfer() {
+  const note = ctxNote.value
+  const dir = ctxDir.value
+  closeContextMenu()
+  if (note) requestNoteTransfer(note.id, note.title)
+  else if (dir) requestDirectoryTransfer(dir.id, dir.name)
 }
 
 function ctxDeleteNote() {
@@ -942,14 +957,12 @@ onBeforeUnmount(() => {
     @contextmenu.prevent
   >
     <header class="tree-head">
-      <span class="tree-heading">
-        <NoteLogo
-          :logo-style="settingStore.settings.noteLogoStyle"
-          :variant="settingStore.settings.noteLogoVariant"
-          :size="16"
-        />
-        <span class="tree-heading-text">{{ $t('fileTree.title') }}</span>
-      </span>
+      <NoteLogo
+        :logo-style="settingStore.settings.noteLogoStyle"
+        :variant="settingStore.settings.noteLogoVariant"
+        :size="16"
+      />
+      <WorkspaceSwitcher class="tree-head-ws" />
     </header>
 
     <div class="tree-body" @contextmenu="openBlankContextMenu">
@@ -1300,6 +1313,15 @@ onBeforeUnmount(() => {
           <span>{{ $t('fileTree.color') }}</span>
         </button>
         <div class="ctx-sep"></div>
+        <button class="ctx-item" @click="ctxOpenTransfer">
+          <i class="i-mdi-content-copy"></i>
+          <span>{{ $t('workspace.copyTo') }}</span>
+        </button>
+        <button class="ctx-item" @click="ctxOpenTransfer">
+          <i class="i-mdi-folder-move-outline"></i>
+          <span>{{ $t('workspace.moveTo') }}</span>
+        </button>
+        <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="ctxDeleteDir">
           <i class="i-mdi-trash-can-outline"></i>
           <span>{{ $t('fileTree.deleteDir') }}</span>
@@ -1376,6 +1398,15 @@ onBeforeUnmount(() => {
           <span>{{ $t('fileTree.color') }}</span>
         </button>
         <div class="ctx-sep"></div>
+        <button class="ctx-item" @click="ctxOpenTransfer">
+          <i class="i-mdi-content-copy"></i>
+          <span>{{ $t('workspace.copyTo') }}</span>
+        </button>
+        <button class="ctx-item" @click="ctxOpenTransfer">
+          <i class="i-mdi-folder-move-outline"></i>
+          <span>{{ $t('workspace.moveTo') }}</span>
+        </button>
+        <div class="ctx-sep"></div>
         <button class="ctx-item danger" :class="{ disabled: ctxNote.isLocked }" @click="ctxDeleteNote">
           <i class="i-mdi-trash-can-outline"></i>
           <span>{{ $t('fileTree.deleteNote') }}</span>
@@ -1412,6 +1443,9 @@ onBeforeUnmount(() => {
         <span>{{ dragGhost.label }}</span>
       </div>
     </Teleport>
+
+    <!-- 跨工作空间搬运弹窗：靠 useWorkspaceTransfer 的全局单例状态自己显隐 -->
+    <WorkspaceTransferDialog />
   </aside>
 </template>
 
@@ -1446,31 +1480,28 @@ onBeforeUnmount(() => {
 .tree-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   height: 36px;
-  padding: 0 6px 0 14px;
+  padding: 0 6px 0 12px;
   flex-shrink: 0;
 }
 
-.tree-heading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: calc(11px * var(--tree-fs-scale, 1));
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--tree-root) 55%, var(--color-text-secondary));
+/* 头部右侧是工作空间切换器：当前空间名 + 下拉卡片 */
+.tree-head-ws {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-head-ws :deep(.ws-trigger) {
+  padding-left: 0;
+  font-size: calc(13px * var(--tree-fs-scale, 1));
 }
 
 /* Logo 取代原来的小圆点，尺寸跟随字号缩放 */
-.tree-heading :deep(.note-logo) {
+.tree-head :deep(.note-logo) {
   width: calc(16px * var(--tree-fs-scale, 1));
   height: auto;
-}
-
-.tree-heading-text {
-  line-height: 1;
+  flex-shrink: 0;
 }
 
 .head-actions {

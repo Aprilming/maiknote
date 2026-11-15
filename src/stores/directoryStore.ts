@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Directory, DirectoryData } from '@/types/note'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { directoryRelPath } from '@/utils/notePath'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 
 export const useDirectoryStore = defineStore('directory', () => {
   const fs = useFileSystem()
@@ -13,16 +14,23 @@ export const useDirectoryStore = defineStore('directory', () => {
   const currentDirectoryId = ref<string | null>(null) // null = root
   const isLoading = ref(false)
 
+  /** localStorage 按工作空间隔离，切空间不会互相污染「上次选中的目录」 */
+  function workspaceScopedKey(key: string): string {
+    return `${key}:${useWorkspaceStore().currentId || 'icloud'}`
+  }
+
   // 监听 currentDirectoryId 变化，保存到 localStorage
   watch(currentDirectoryId, (newId) => {
     if (newId !== undefined) {
-      localStorage.setItem('lastSelectedDirectoryId', newId ?? '')
+      localStorage.setItem(workspaceScopedKey('lastSelectedDirectoryId'), newId ?? '')
     }
   })
 
   /** 从 localStorage 恢复上次选择的目录 */
   function restoreLastDirectory(): string | null {
-    const saved = localStorage.getItem('lastSelectedDirectoryId')
+    const saved =
+      localStorage.getItem(workspaceScopedKey('lastSelectedDirectoryId')) ??
+      localStorage.getItem('lastSelectedDirectoryId')
     if (saved && saved !== '') {
       // 确保该目录仍然存在
       const dir = directories.value.find(d => d.id === saved)
@@ -87,6 +95,15 @@ export const useDirectoryStore = defineStore('directory', () => {
     } finally {
       isLoading.value = false
     }
+  }
+
+  /** 切换工作空间后重新加载目录树（先清空旧空间的状态） */
+  async function reload(): Promise<void> {
+    directories.value = []
+    rootDirColor.value = undefined
+    currentDirectoryId.value = null
+    await loadDirectories()
+    restoreLastDirectory()
   }
 
   async function saveDirectories(): Promise<void> {
@@ -245,6 +262,7 @@ export const useDirectoryStore = defineStore('directory', () => {
     getAdjacentDirectoryId,
     isDescendantOf,
     loadDirectories,
+    reload,
     saveDirectories,
     restoreLastDirectory,
     createDirectory,

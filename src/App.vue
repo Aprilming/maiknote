@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useGlobalShortcut } from '@/composables/useGlobalShortcut'
 import { useTheme } from '@/composables/useTheme'
@@ -28,6 +29,7 @@ import PrivacyWelcome from '@/components/common/PrivacyWelcome.vue'
 // Initialize stores and composables
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
+const workspaceStore = useWorkspaceStore()
 const settingStore = useSettingStore()
 useShortcuts(openSettings)
 useGlobalShortcut()
@@ -198,7 +200,10 @@ onMounted(async () => {
     await invoke('set_window_alpha', { alpha: settingStore.settings.windowAlpha })
   }
 
-  // 先加载目录结构：笔记文件名 / 磁盘目录都依赖目录名字链
+  // 先恢复工作空间：后面所有磁盘读写都要按当前空间解析根目录
+  await workspaceStore.initialize()
+
+  // 再加载目录结构：笔记文件名 / 磁盘目录都依赖目录名字链
   await directoryStore.loadDirectories()
 
   // Load notes from iCloud (will create initial note if none exists)
@@ -225,6 +230,9 @@ onMounted(async () => {
       && !settingStore.settings.alwaysOnTop
       && !isNativeDialogCurrentlyOpen()
       && !isMainAutoHideSuppressed()
+      // 切换工作空间要重建目录树和笔记索引，期间窗口会短暂抖动一次焦点，
+      // 不该被当成「用户点走了」而自动隐藏
+      && !workspaceStore.switching
     ) {
       appWindow.hide()
     }
