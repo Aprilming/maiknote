@@ -1118,6 +1118,19 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
 
         <!-- 个性化：主题 / 透明度 / 编辑器样式 / 代码主题 / 默认背景色 / Logo -->
         <section v-if="activeCategory === 'personalization'" class="settings-section">
+          <div class="setting-item setting-item-inline">
+            <div class="setting-label">
+              <span class="setting-name">{{ $t('settings.blockMenu') }}</span>
+              <span class="setting-desc">{{ $t('settings.blockMenuDesc') }}</span>
+            </div>
+            <button
+              class="toggle-btn"
+              :class="{ active: settingStore.settings.blockMenuEnabled }"
+              @click="settingStore.updateSettings('blockMenuEnabled', !settingStore.settings.blockMenuEnabled)"
+            >
+              <span class="toggle-slider"></span>
+            </button>
+          </div>
           <div class="setting-item">
             <div class="setting-label">
               <span class="setting-name">{{ $t('settings.theme') }}</span>

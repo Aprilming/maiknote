@@ -1406,6 +1406,767 @@ function handleCodeLangEsc(event: KeyboardEvent) {
   closeCodeLangPill()
 }
 
+/* ================= 块操作（Notion 风格） =================
+   设置 → 个性化 → 块操作 打开后才启用，默认关闭。
+   把手是 fixed 浮层，挂在 body 上，不写进 ProseMirror 文档：
+   写进文档会抢走段落左侧的点击，空段落里还没法落光标。 */
+const BLOCK_HANDLE_GAP = 36
+const BLOCK_HANDLE_HEIGHT = 24
+const BLOCK_MENU_WIDTH = 210
+const BLOCK_MENU_OFFSET = 6
+const BLOCK_DRAG_THRESHOLD = 6
+const BLOCK_MENU_ESTIMATED_HEIGHT = 380
+// 鼠标从块上走向把手会穿过块间空隙，收起留一点缓冲，别一闪一闪
+const BLOCK_HANDLE_HIDE_DELAY = 140
+// 拖到容器上下边缘这个范围内开始自动滚
+const BLOCK_AUTOSCROLL_ZONE = 56
+const BLOCK_AUTOSCROLL_MAX = 18
+
+interface BlockAnchorState {
+  pos: number
+  top: number
+  bottom: number
+  left: number
+  width: number
+  typeName: string
+}
+
+// 拖动开始时给所有顶层块拍一张快照：拖动过程中文档不变，
+// 每帧只做数字比较，不再逐个 getBoundingClientRect（长笔记会卡）
+interface BlockDragSlot {
+  pos: number
+  size: number
+  top: number
+  bottom: number
+  left: number
+  width: number
+}
+
+const blockMenuEnabled = computed(() => settingStore.settings.blockMenuEnabled)
+const blockHandleEl = ref<HTMLElement | null>(null)
+const blockDropLineEl = ref<HTMLElement | null>(null)
+const blockMenuEl = ref<HTMLElement | null>(null)
+const blockGhostEl = ref<HTMLElement | null>(null)
+const blockGhostInnerEl = ref<HTMLElement | null>(null)
+const blockAnchorType = ref('paragraph')
+const blockMenuOpen = ref(false)
+const blockMenuTop = ref(0)
+const blockMenuLeft = ref(0)
+// 下面这些故意不走响应式：鼠标一动就得当场把把手摆好，
+// 交给 Vue 排队渲染会晚一帧，看起来就是"慢半拍"。
+let blockAnchorState: BlockAnchorState | null = null
+let blockDragFromPos: number | null = null
+let blockDragInsertPos: number | null = null
+let blockDragLineState: { top: number; left: number; width: number } | null = null
+let blockPointerDown: { x: number; y: number; pos: number } | null = null
+let blockDragSlots: BlockDragSlot[] | null = null
+let blockDragScrollStart = 0
+let blockDragGrabDy = 0
+let blockDragPointer = { x: 0, y: 0 }
+let blockDragNoop = false
+let blockAutoScrollRaf = 0
+let blockHideTimer = 0
+
+const blockTypeItems = computed(() => [
+  { value: 'paragraph', label: t('blockMenu.paragraph'), icon: 'i-mdi-format-text' },
+  { value: 'heading1', label: t('blockMenu.heading1'), icon: 'i-mdi-format-header-1' },
+  { value: 'heading2', label: t('blockMenu.heading2'), icon: 'i-mdi-format-header-2' },
+  { value: 'heading3', label: t('blockMenu.heading3'), icon: 'i-mdi-format-header-3' },
+  { value: 'bulletList', label: t('blockMenu.bulletList'), icon: 'i-mdi-format-list-bulleted' },
+  { value: 'orderedList', label: t('blockMenu.orderedList'), icon: 'i-mdi-format-list-numbered' },
+  { value: 'taskList', label: t('blockMenu.taskList'), icon: 'i-mdi-format-list-checks' },
+  { value: 'quote', label: t('blockMenu.quote'), icon: 'i-mdi-format-quote-close' },
+  { value: 'codeBlock', label: t('blockMenu.codeBlock'), icon: 'i-mdi-code-tags' },
+])
+
+function isBlockTypeActive(value: string): boolean {
+  const name = blockAnchorType.value
+  if (value === 'paragraph') return name === 'paragraph'
+  if (value === 'bulletList') return name === 'bulletList'
+  if (value === 'orderedList') return name === 'orderedList'
+  if (value === 'taskList') return name === 'taskList'
+  if (value === 'quote') return name === 'blockquote'
+  if (value === 'codeBlock') return name === 'codeBlock'
+  return false
+}
+
+function blockDomRect(pos: number): DOMRect | null {
+  const ed = editor.value
+  if (!ed) return null
+  const dom = ed.view.nodeDOM(pos)
+  return dom instanceof HTMLElement ? dom.getBoundingClientRect() : null
+}
+
+// 鼠标坐标 → 最外层那个块。posAtCoords 会给"最近的块"，落在块间空隙里也不会丢；
+// 拿到的位置统一归一到顶层块起点，块内、块边界两种结果都能处理。
+function resolveTopLevelBlock(clientX: number, clientY: number): { pos: number; node: any } | null {
+  const ed = editor.value
+  if (!ed || props.isLocked) return null
+  const view = ed.view
+  const root = view.dom as HTMLElement
+  const rootRect = root.getBoundingClientRect()
+  if (
+    clientX < rootRect.left - 8 ||
+    clientX > rootRect.right + 8 ||
+    clientY < rootRect.top - 8 ||
+    clientY > rootRect.bottom + 8
+  ) {
+    return null
+  }
+  const hit = view.posAtCoords({ left: clientX, top: clientY })
+  if (!hit) return null
+  const doc = view.state.doc
+  const $pos = doc.resolve(Math.max(0, Math.min(hit.pos, doc.content.size)))
+  const pos = $pos.depth >= 1 ? $pos.before(1) : 0
+  const node = doc.nodeAt(pos)
+  return node ? { pos, node } : null
+}
+
+// 直接改 style 把把手画上去：不等响应式，鼠标一动就是这一帧的位置
+function anchorWanted() {
+  return !!blockAnchorState && blockMenuEnabled.value && !props.isLocked
+}
+
+function setBlockHandleVisible(visible: boolean) {
+  const el = blockHandleEl.value
+  if (!el) return
+  if (visible) {
+    if (blockHideTimer) {
+      clearTimeout(blockHideTimer)
+      blockHideTimer = 0
+    }
+    el.classList.add('is-visible')
+    el.style.pointerEvents = 'auto'
+    return
+  }
+  el.style.pointerEvents = 'none'
+  el.classList.remove('is-visible')
+}
+
+// 收起走延迟：鼠标在块与块之间穿行时把手别闪
+function scheduleBlockHandleHide() {
+  if (blockHideTimer) clearTimeout(blockHideTimer)
+  blockHideTimer = window.setTimeout(() => {
+    blockHideTimer = 0
+    if (blockPointerDown || blockDragFromPos !== null || blockMenuOpen.value) return
+    setBlockHandleVisible(false)
+  }, BLOCK_HANDLE_HIDE_DELAY)
+}
+
+function paintBlockHandle() {
+  const el = blockHandleEl.value
+  if (!el) {
+    // 浮层还没挂上（刚开开关/刚解锁），等下一帧补画一次，别死循环重试
+    if (anchorWanted()) nextTick(paintBlockHandle)
+    return
+  }
+  const anchor = blockAnchorState
+  if (!anchor || !blockMenuEnabled.value || props.isLocked) {
+    setBlockHandleVisible(false)
+    return
+  }
+  const x = Math.round(anchor.left - BLOCK_HANDLE_GAP)
+  const y = Math.round(anchor.top)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    setBlockHandleVisible(false)
+    return
+  }
+  el.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)'
+  setBlockHandleVisible(true)
+}
+
+function paintBlockDropLine() {
+  const el = blockDropLineEl.value
+  if (!el) return
+  const line = blockDragLineState
+  if (!line) {
+    el.style.opacity = '0'
+    return
+  }
+  el.style.transform = 'translate3d(' + line.left + 'px,' + line.top + 'px,0)'
+  el.style.width = line.width + 'px'
+  el.style.opacity = '1'
+}
+
+function blockDomNode(pos: number): HTMLElement | null {
+  const dom = editor.value?.view.nodeDOM(pos)
+  return dom instanceof HTMLElement ? dom : null
+}
+
+// 把手对齐到块的第一行：标题、引用这些块比正文高，按块顶对齐会看着偏上
+function blockHandleTop(dom: HTMLElement, rect: DOMRect) {
+  const lineHeight = parseFloat(window.getComputedStyle(dom).lineHeight)
+  const box =
+    Number.isFinite(lineHeight) && lineHeight > 0
+      ? Math.min(lineHeight, rect.height)
+      : Math.min(rect.height, BLOCK_HANDLE_HEIGHT)
+  const offset = Math.max(0, (Math.min(box, 48) - BLOCK_HANDLE_HEIGHT) / 2)
+  return rect.top + offset
+}
+
+function showBlockAnchor(pos: number, typeName: string) {
+  const dom = blockDomNode(pos)
+  if (!dom) return
+  const rect = dom.getBoundingClientRect()
+  blockAnchorState = {
+    pos,
+    top: blockHandleTop(dom, rect),
+    bottom: rect.bottom,
+    left: rect.left,
+    width: rect.width,
+    typeName,
+  }
+  paintBlockHandle()
+  if (blockMenuOpen.value) placeBlockMenu()
+}
+
+function hideBlockAnchor() {
+  blockAnchorState = null
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  scheduleBlockHandleHide()
+}
+
+function refreshBlockAnchor() {
+  // 拖动中位置由拖动逻辑接管，不要再按旧坐标画一遍把手
+  if (blockDragFromPos !== null) return
+  const anchor = blockAnchorState
+  if (!anchor) return
+  const ed = editor.value
+  const node = ed ? ed.state.doc.nodeAt(anchor.pos) : null
+  if (!node) {
+    hideBlockAnchor()
+    return
+  }
+  showBlockAnchor(anchor.pos, node.type.name)
+}
+
+function openBlockMenu() {
+  if (!blockAnchorState) return
+  blockMenuOpen.value = true
+  placeBlockMenu()
+  // 第一帧菜单还没量到高度，量到后再夹一次位置
+  nextTick(placeBlockMenu)
+}
+
+// 菜单贴到把手下方；放不下就翻到上面，并夹在窗口内
+function placeBlockMenu() {
+  if (!blockMenuOpen.value) return
+  const anchor = blockAnchorState
+  if (!anchor) {
+    blockMenuOpen.value = false
+    return
+  }
+  const el = blockMenuEl.value
+  const height = el?.offsetHeight || BLOCK_MENU_ESTIMATED_HEIGHT
+  const width = el?.offsetWidth || BLOCK_MENU_WIDTH
+  const left = Math.max(8, Math.min(Math.round(anchor.left) - 6, window.innerWidth - width - 8))
+  const below = Math.round(anchor.top) + BLOCK_HANDLE_HEIGHT + BLOCK_MENU_OFFSET
+  const above = Math.round(anchor.top) - height - BLOCK_MENU_OFFSET
+  let top = below
+  if (below + height > window.innerHeight - 8) {
+    top = above >= 8 ? above : Math.max(8, window.innerHeight - height - 8)
+  }
+  blockMenuLeft.value = left
+  blockMenuTop.value = top
+  blockAnchorType.value = anchor.typeName
+}
+
+function startBlockDrag(event: MouseEvent) {
+  const anchor = blockAnchorState
+  if (!anchor) return
+  blockPointerDown = { x: event.clientX, y: event.clientY, pos: anchor.pos }
+  window.addEventListener('mouseup', finishBlockDrag)
+}
+
+function setDragSourceDim(pos: number, on: boolean) {
+  blockDomNode(pos)?.classList.toggle('is-block-drag-source', on)
+}
+
+// 松手闪一下：确认这次真的搬了 / 真的没搬家
+function flashBlock(pos: number) {
+  const el = blockDomNode(pos)
+  if (!el) return
+  el.classList.remove('is-block-just-moved')
+  void el.offsetWidth
+  el.classList.add('is-block-just-moved')
+  window.setTimeout(() => el.classList.remove('is-block-just-moved'), 520)
+}
+
+function blockScrollContainer(): HTMLElement | null {
+  const root = editor.value?.view.dom as HTMLElement | undefined
+  const wrap = root?.closest('.tiptap-wrapper')
+  return wrap instanceof HTMLElement ? wrap : null
+}
+
+// 拖动开始拍快照：此后每帧只比数字，不再读布局
+function snapshotBlockSlots(): BlockDragSlot[] {
+  const ed = editor.value
+  const slots: BlockDragSlot[] = []
+  if (!ed) return slots
+  const doc = ed.state.doc
+  let pos = 0
+  for (let i = 0; i < doc.childCount; i++) {
+    const node = doc.child(i)
+    const rect = blockDomRect(pos)
+    if (rect) {
+      slots.push({ pos, size: node.nodeSize, top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width })
+    }
+    pos += node.nodeSize
+  }
+  return slots
+}
+
+function buildDragGhost(from: number) {
+  const box = blockGhostEl.value
+  const inner = blockGhostInnerEl.value
+  if (!box || !inner) return
+  inner.innerHTML = ''
+  const dom = blockDomNode(from)
+  if (dom) {
+    const clone = dom.cloneNode(true) as HTMLElement
+    clone.removeAttribute('contenteditable')
+    clone.querySelectorAll('[contenteditable]').forEach((n) => n.removeAttribute('contenteditable'))
+    inner.appendChild(clone)
+  }
+  box.classList.add('is-visible')
+}
+
+function clearDragGhost() {
+  const box = blockGhostEl.value
+  const inner = blockGhostInnerEl.value
+  if (box) box.classList.remove('is-visible')
+  if (inner) inner.innerHTML = ''
+}
+
+// 幽灵块跟手：抓把手哪个位置，松手前就保持哪个相对位置
+// 横向不动：块只在纵向换位置，跟着鼠标左右飘反而晕
+function updateDragGhost(_clientX: number, clientY: number) {
+  const el = blockGhostEl.value
+  const slots = blockDragSlots
+  if (!el || !slots || blockDragFromPos === null) return
+  const slot = slots.find((s) => s.pos === blockDragFromPos)
+  if (!slot) return
+  el.style.width = Math.round(slot.width) + 'px'
+  el.style.transform = 'translate3d(' + Math.round(slot.left) + 'px,' + Math.round(clientY - blockDragGrabDy) + 'px,0)'
+}
+
+function beginBlockDrag(event: MouseEvent) {
+  const anchor = blockAnchorState
+  if (!anchor || !editor.value) return
+  const rect = blockDomRect(anchor.pos)
+  const wrap = blockScrollContainer()
+  blockDragFromPos = anchor.pos
+  blockDragNoop = false
+  blockDragSlots = snapshotBlockSlots()
+  blockDragScrollStart = wrap ? wrap.scrollTop : 0
+  blockDragGrabDy = rect ? Math.max(0, Math.min(rect.height, event.clientY - rect.top)) : BLOCK_HANDLE_HEIGHT / 2
+  blockDragPointer = { x: event.clientX, y: event.clientY }
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  // 拖动期间把手退场，反馈交给幽灵块和落点线
+  setBlockHandleVisible(false)
+  setDragSourceDim(anchor.pos, true)
+  buildDragGhost(anchor.pos)
+  updateDragGhost(event.clientX, event.clientY)
+  updateBlockDropTarget(event.clientY)
+  document.body.classList.add('block-dragging')
+  startBlockAutoScroll()
+}
+
+// 落点只用快照 + 滚动差值算，鼠标甩到窗口外也不会丢
+function updateBlockDropTarget(clientY: number) {
+  const ed = editor.value
+  const from = blockDragFromPos
+  const slots = blockDragSlots
+  if (!ed || from === null || !slots || slots.length === 0) return
+  const node = ed.state.doc.nodeAt(from)
+  if (!node) return
+  const wrap = blockScrollContainer()
+  const shift = wrap ? blockDragScrollStart - wrap.scrollTop : 0
+  let insertPos = 0
+  let lineTop: number | null = null
+  let ref: BlockDragSlot | null = null
+  for (const slot of slots) {
+    const top = slot.top + shift
+    const bottom = slot.bottom + shift
+    if (clientY < (top + bottom) / 2) {
+      insertPos = slot.pos
+      lineTop = top
+      ref = slot
+      break
+    }
+    insertPos = slot.pos + slot.size
+    lineTop = bottom
+    ref = slot
+  }
+  if (lineTop === null || !ref) return
+  blockDragInsertPos = insertPos
+  // 拖回自己身上：不画落点线，松手原地回弹，别让人以为要搬家
+  blockDragNoop = insertPos === from || insertPos === from + node.nodeSize
+  blockDragLineState = blockDragNoop
+    ? null
+    : { top: Math.round(lineTop) - 1, left: Math.round(ref.left), width: Math.round(ref.width) }
+  paintBlockDropLine()
+}
+
+// 拖到容器上下边缘自动滚，长笔记里才拖得动
+function startBlockAutoScroll() {
+  if (blockAutoScrollRaf) return
+  blockAutoScrollRaf = requestAnimationFrame(stepBlockAutoScroll)
+}
+
+function stopBlockAutoScroll() {
+  if (!blockAutoScrollRaf) return
+  cancelAnimationFrame(blockAutoScrollRaf)
+  blockAutoScrollRaf = 0
+}
+
+function stepBlockAutoScroll() {
+  blockAutoScrollRaf = 0
+  if (blockDragFromPos === null) return
+  const wrap = blockScrollContainer()
+  let scrolled = false
+  if (wrap) {
+    const rect = wrap.getBoundingClientRect()
+    const y = blockDragPointer.y
+    let dy = 0
+    if (y < rect.top + BLOCK_AUTOSCROLL_ZONE) {
+      dy = -Math.min(BLOCK_AUTOSCROLL_MAX, Math.ceil((rect.top + BLOCK_AUTOSCROLL_ZONE - y) / 3))
+    } else if (y > rect.bottom - BLOCK_AUTOSCROLL_ZONE) {
+      dy = Math.min(BLOCK_AUTOSCROLL_MAX, Math.ceil((y - (rect.bottom - BLOCK_AUTOSCROLL_ZONE)) / 3))
+    }
+    if (dy !== 0) {
+      const before = wrap.scrollTop
+      wrap.scrollTop = before + dy
+      scrolled = wrap.scrollTop !== before
+    }
+  }
+  if (scrolled) {
+    updateBlockDropTarget(blockDragPointer.y)
+    updateDragGhost(blockDragPointer.x, blockDragPointer.y)
+  }
+  blockAutoScrollRaf = requestAnimationFrame(stepBlockAutoScroll)
+}
+
+function finishBlockDrag() {
+  window.removeEventListener('mouseup', finishBlockDrag)
+  stopBlockAutoScroll()
+  const pointer = blockPointerDown
+  const from = blockDragFromPos
+  const insertPos = blockDragInsertPos
+  const noop = blockDragNoop
+  blockPointerDown = null
+  blockDragFromPos = null
+  blockDragInsertPos = null
+  blockDragLineState = null
+  blockDragSlots = null
+  blockDragNoop = false
+  document.body.classList.remove('block-dragging')
+  paintBlockDropLine()
+  clearDragGhost()
+  if (from !== null) setDragSourceDim(from, false)
+  if (pointer && from === null) {
+    // 只是点了一下把手，没拖动 → 开合块菜单
+    if (blockMenuOpen.value) {
+      blockMenuOpen.value = false
+      return
+    }
+    openBlockMenu()
+    return
+  }
+  if (from === null) return
+  if (insertPos === null || noop) {
+    // 拖回原地：闪一下，别让人以为没反应
+    const node = editor.value?.state.doc.nodeAt(from)
+    if (node) showBlockAnchor(from, node.type.name)
+    flashBlock(from)
+    return
+  }
+  const moved = moveBlockTo(from, insertPos)
+  if (moved !== null) {
+    flashBlock(moved)
+    return
+  }
+  // 没搬成（位置非法之类）也要把把手放回来，别让它凭空消失
+  const node = editor.value?.state.doc.nodeAt(from)
+  if (node) showBlockAnchor(from, node.type.name)
+}
+
+function handleBlockPointerMove(event: MouseEvent) {
+  if (!blockMenuEnabled.value) {
+    if (blockAnchorState) hideBlockAnchor()
+    return
+  }
+  if (props.isLocked) return
+  blockDragPointer = { x: event.clientX, y: event.clientY }
+  // 按住把手拖动 = 调整块顺序
+  if (blockPointerDown && blockDragFromPos === null) {
+    const dx = event.clientX - blockPointerDown.x
+    const dy = event.clientY - blockPointerDown.y
+    if (dx * dx + dy * dy >= BLOCK_DRAG_THRESHOLD * BLOCK_DRAG_THRESHOLD) beginBlockDrag(event)
+  }
+  if (blockDragFromPos !== null) {
+    updateDragGhost(event.clientX, event.clientY)
+    updateBlockDropTarget(event.clientY)
+    return
+  }
+  if (blockPointerDown) return
+  if (blockMenuOpen.value) return
+  // 在正文里拉选文字的时候把手让开
+  if (event.buttons !== 0) {
+    if (blockAnchorState) hideBlockAnchor()
+    return
+  }
+  const target = event.target instanceof Element ? event.target : null
+  if (target && target.closest('.block-handle, .block-menu')) return
+  // 沿着左侧留白走向把手的路上，把手别先消失
+  if (isInBlockHandleGutter(event.clientX, event.clientY)) return
+  const hit = resolveTopLevelBlock(event.clientX, event.clientY)
+  if (!hit) {
+    if (blockAnchorState) hideBlockAnchor()
+    return
+  }
+  if (blockAnchorState && blockAnchorState.pos === hit.pos) return
+  showBlockAnchor(hit.pos, hit.node.type.name)
+}
+
+function isInBlockHandleGutter(clientX: number, clientY: number) {
+  const anchor = blockAnchorState
+  if (!anchor) return false
+  return (
+    clientX >= anchor.left - BLOCK_HANDLE_GAP - 6 &&
+    clientX <= anchor.left + 4 &&
+    clientY >= anchor.top - 8 &&
+    clientY <= anchor.bottom + 6
+  )
+}
+
+function handleBlockDocMouseLeave() {
+  cancelBlockDrag()
+  hideBlockAnchor()
+}
+
+function cancelBlockDrag() {
+  if (!blockPointerDown && blockDragFromPos === null && blockDragInsertPos === null) return
+  const from = blockDragFromPos
+  window.removeEventListener('mouseup', finishBlockDrag)
+  stopBlockAutoScroll()
+  blockPointerDown = null
+  blockDragFromPos = null
+  blockDragInsertPos = null
+  blockDragLineState = null
+  blockDragSlots = null
+  blockDragNoop = false
+  paintBlockDropLine()
+  clearDragGhost()
+  if (from !== null) setDragSourceDim(from, false)
+  document.body.classList.remove('block-dragging')
+}
+
+function handleBlockGlobalMouseDown(event: MouseEvent) {
+  if (!blockMenuOpen.value) return
+  const target = event.target instanceof Element ? event.target : null
+  if (target && target.closest('.block-menu, .block-handle')) return
+  blockMenuOpen.value = false
+}
+
+function insertBlockBelow() {
+  const ed = editor.value
+  const anchor = blockAnchorState
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  if (!ed || !anchor) return
+  const node = ed.state.doc.nodeAt(anchor.pos)
+  if (!node) return
+  const insertAt = anchor.pos + node.nodeSize
+  ed.chain().focus().insertContentAt(insertAt, { type: 'paragraph' }).run()
+  nextTick(() => showBlockAnchor(insertAt, 'paragraph'))
+}
+
+function applyBlockType(type: string) {
+  const ed = editor.value
+  const anchor = blockAnchorState
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  if (!ed || !anchor) return
+  const node = ed.state.doc.nodeAt(anchor.pos)
+  if (!node) return
+  const name = node.type.name
+  if (['paragraph', 'heading', 'bulletList', 'orderedList', 'taskList', 'blockquote', 'codeBlock'].indexOf(name) < 0) {
+    showToast(t('blockMenu.convertFailed'))
+    return
+  }
+  const range = { from: anchor.pos + 1, to: anchor.pos + node.nodeSize - 1 }
+  let chain = ed.chain().focus().setTextSelection(range)
+  if (type === 'paragraph') {
+    if (name === 'bulletList') chain = chain.toggleBulletList()
+    else if (name === 'orderedList') chain = chain.toggleOrderedList()
+    else if (name === 'taskList') chain = chain.toggleTaskList()
+    else if (name === 'blockquote') chain = chain.toggleBlockquote()
+    chain = chain.setParagraph()
+  } else if (type === 'heading1') {
+    chain = chain.setHeading({ level: 1 })
+  } else if (type === 'heading2') {
+    chain = chain.setHeading({ level: 2 })
+  } else if (type === 'heading3') {
+    chain = chain.setHeading({ level: 3 })
+  } else if (type === 'bulletList') {
+    if (name === 'bulletList') return
+    chain = chain.toggleBulletList()
+  } else if (type === 'orderedList') {
+    if (name === 'orderedList') return
+    chain = chain.toggleOrderedList()
+  } else if (type === 'taskList') {
+    if (name === 'taskList') return
+    chain = chain.toggleTaskList()
+  } else if (type === 'quote') {
+    if (name === 'blockquote') return
+    chain = chain.toggleBlockquote()
+  } else if (type === 'codeBlock') {
+    if (name === 'codeBlock') return
+    chain = chain.toggleCodeBlock()
+  }
+  if (!chain.run()) {
+    showToast(t('blockMenu.convertFailed'))
+    return
+  }
+  // 换完类型块的高度变了，把手要在新坐标上重画，别当场消失
+  nextTick(() => {
+    const n = editor.value?.state.doc.nodeAt(anchor.pos)
+    if (n) showBlockAnchor(anchor.pos, n.type.name)
+  })
+}
+
+// insertPos 用的是「文档改动前」的坐标：把整段切出来再插到目标位置
+function moveBlockTo(from: number, insertPos: number): number | null {
+  const ed = editor.value
+  if (!ed) return null
+  const view = ed.view
+  const node = view.state.doc.nodeAt(from)
+  if (!node) return null
+  const to = from + node.nodeSize
+  if (insertPos > from && insertPos < to) return null
+  if (insertPos === from || insertPos === to) return null
+  const typeName = node.type.name
+  const tr = view.state.tr
+  const slice = tr.doc.slice(from, to)
+  tr.delete(from, to)
+  const target = Math.min(insertPos > to ? insertPos - (to - from) : insertPos, tr.doc.content.size)
+  tr.replace(target, target, slice)
+  view.dispatch(tr)
+  // 位置变了，把手得跟到新坐标上，否则会停在被顶过来的那一块旁边
+  nextTick(() => showBlockAnchor(target, typeName))
+  return target
+}
+
+function moveBlockBy(delta: number) {
+  const ed = editor.value
+  const anchor = blockAnchorState
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  if (!ed || !anchor) return
+  const doc = ed.state.doc
+  const node = doc.nodeAt(anchor.pos)
+  if (!node) return
+  const $pos = doc.resolve(anchor.pos)
+  const index = $pos.depth >= 1 ? $pos.index(0) : 0
+  const targetIndex = index + delta
+  if (targetIndex < 0 || targetIndex >= doc.childCount) return
+  const sibling = doc.child(targetIndex)
+  const insertPos = delta < 0 ? anchor.pos - sibling.nodeSize : anchor.pos + node.nodeSize + sibling.nodeSize
+  moveBlockTo(anchor.pos, insertPos)
+}
+
+function duplicateBlock() {
+  const ed = editor.value
+  const anchor = blockAnchorState
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  if (!ed || !anchor) return
+  const node = ed.state.doc.nodeAt(anchor.pos)
+  if (!node) return
+  const tr = ed.state.tr
+  const insertAt = anchor.pos + node.nodeSize
+  tr.insert(insertAt, node.copy(node.content))
+  ed.view.dispatch(tr)
+  nextTick(() => showBlockAnchor(insertAt, node.type.name))
+}
+
+function deleteBlock() {
+  const ed = editor.value
+  const anchor = blockAnchorState
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+  if (!ed || !anchor) return
+  const state = ed.state
+  const view = ed.view
+  const node = state.doc.nodeAt(anchor.pos)
+  if (!node) return
+  const tr =
+    state.doc.childCount === 1
+      ? state.tr.delete(anchor.pos + 1, anchor.pos + node.nodeSize - 1)
+      : state.tr.delete(anchor.pos, anchor.pos + node.nodeSize)
+  view.dispatch(tr)
+  hideBlockAnchor()
+}
+
+function handleBlockKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  // 拖到一半反悔：原地放下，文档一个字都不改
+  if (blockDragFromPos !== null || blockPointerDown) {
+    const anchor = blockAnchorState
+    cancelBlockDrag()
+    if (anchor) {
+      const node = editor.value?.state.doc.nodeAt(anchor.pos)
+      if (node) showBlockAnchor(anchor.pos, node.type.name)
+    }
+    event.preventDefault()
+    return
+  }
+  if (blockMenuOpen.value) blockMenuOpen.value = false
+}
+
+function bindBlockMenuListeners() {
+  window.addEventListener('mousemove', handleBlockPointerMove, { passive: true })
+  window.addEventListener('mousedown', handleBlockGlobalMouseDown, true)
+  window.addEventListener('keydown', handleBlockKeyDown, true)
+  window.addEventListener('resize', refreshBlockAnchor)
+  window.addEventListener('scroll', refreshBlockAnchor, true)
+  // 鼠标整个离开窗口时也得收起来（此时不会再有 mousemove）
+  document.addEventListener('mouseleave', handleBlockDocMouseLeave)
+  window.addEventListener('blur', cancelBlockDrag)
+}
+
+function unbindBlockMenuListeners() {
+  window.removeEventListener('mousemove', handleBlockPointerMove)
+  window.removeEventListener('mousedown', handleBlockGlobalMouseDown, true)
+  window.removeEventListener('keydown', handleBlockKeyDown, true)
+  window.removeEventListener('resize', refreshBlockAnchor)
+  window.removeEventListener('scroll', refreshBlockAnchor, true)
+  document.removeEventListener('mouseleave', handleBlockDocMouseLeave)
+  window.removeEventListener('blur', cancelBlockDrag)
+  window.removeEventListener('mouseup', finishBlockDrag)
+  blockPointerDown = null
+  blockDragFromPos = null
+  blockDragInsertPos = null
+  blockDragLineState = null
+  blockAnchorState = null
+  paintBlockHandle()
+  paintBlockDropLine()
+  document.body.classList.remove('block-dragging')
+}
+
+onMounted(() => {
+  bindBlockMenuListeners()
+})
+
+onUnmounted(() => {
+  unbindBlockMenuListeners()
+})
+
+watch(() => props.isLocked, (locked) => {
+  if (locked) hideBlockAnchor()
+})
+
+// 设置里一关掉，浮层立刻收起来
+watch(blockMenuEnabled, (enabled) => {
+  if (!enabled) hideBlockAnchor()
+})
+
 const editor = useEditor({
   editable: !props.isLocked,
   extensions: [
@@ -2537,6 +3298,76 @@ defineExpose({
       </div>
     </Teleport>
 
+    <!-- 块操作：把手 + 块菜单（设置里打开「块操作」才出现，默认关闭） -->
+    <Teleport to="body">
+      <div v-if="blockMenuEnabled && !isLocked" ref="blockHandleEl" class="block-handle">
+        <button
+          type="button"
+          class="block-handle-btn"
+          :title="$t('blockMenu.insertBelow')"
+          @mousedown.prevent
+          @click.stop="insertBlockBelow"
+        >
+          <i class="i-mdi-plus"></i>
+        </button>
+        <button
+          type="button"
+          class="block-handle-btn block-handle-grip"
+          :class="{ 'is-open': blockMenuOpen }"
+          :title="$t('blockMenu.openMenu')"
+          @mousedown.stop.prevent="startBlockDrag"
+        >
+          <i class="i-mdi-drag-vertical"></i>
+        </button>
+      </div>
+
+      <div v-if="blockMenuEnabled && !isLocked" ref="blockDropLineEl" class="block-drop-line" />
+
+      <!-- 拖动时跟着鼠标走的幽灵块（原位置的块同时淡出） -->
+      <div v-if="blockMenuEnabled && !isLocked" ref="blockGhostEl" class="block-drag-ghost">
+        <div ref="blockGhostInnerEl" class="tiptap"></div>
+      </div>
+
+      <div
+        v-if="blockMenuOpen && !isLocked"
+        ref="blockMenuEl"
+        class="block-menu"
+        :style="{ top: blockMenuTop + 'px', left: blockMenuLeft + 'px' }"
+        @mousedown.stop
+      >
+        <div class="block-menu-title">{{ $t('blockMenu.turnInto') }}</div>
+        <button
+          v-for="item in blockTypeItems"
+          :key="item.value"
+          type="button"
+          class="block-menu-item"
+          :class="{ 'is-active': isBlockTypeActive(item.value) }"
+          @click.stop="applyBlockType(item.value)"
+        >
+          <i :class="item.icon"></i>
+          <span>{{ item.label }}</span>
+        </button>
+        <div class="block-menu-sep"></div>
+        <button type="button" class="block-menu-item" @click.stop="moveBlockBy(-1)">
+          <i class="i-mdi-arrow-up"></i>
+          <span>{{ $t('blockMenu.moveUp') }}</span>
+        </button>
+        <button type="button" class="block-menu-item" @click.stop="moveBlockBy(1)">
+          <i class="i-mdi-arrow-down"></i>
+          <span>{{ $t('blockMenu.moveDown') }}</span>
+        </button>
+        <button type="button" class="block-menu-item" @click.stop="duplicateBlock">
+          <i class="i-mdi-content-duplicate"></i>
+          <span>{{ $t('blockMenu.duplicate') }}</span>
+        </button>
+        <div class="block-menu-sep"></div>
+        <button type="button" class="block-menu-item block-menu-item--danger" @click.stop="deleteBlock">
+          <i class="i-mdi-trash-can-outline"></i>
+          <span>{{ $t('blockMenu.delete') }}</span>
+        </button>
+      </div>
+    </Teleport>
+
     <!-- 代码块语言选择器：body 浮层，不进 ProseMirror 文档 -->
     <Teleport to="body">
       <template v-if="!isLocked">
@@ -3538,5 +4369,186 @@ defineExpose({
   border-radius: 2px;
   padding: 0 1px;
   box-shadow: 0 0 0 1px rgba(255, 160, 0, 0.5);
+}
+
+/* ===== 块操作把手 / 块菜单（设置 → 个性化 → 块操作 打开才出现） ===== */
+.block-handle {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 901;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.block-handle.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.block-handle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.block-handle-btn:hover,
+.block-handle-btn.is-open {
+  background: var(--color-hover, rgba(127, 127, 127, 0.18));
+  color: var(--color-text);
+}
+
+.block-handle-grip {
+  cursor: grab;
+}
+
+.block-handle-grip:active {
+  cursor: grabbing;
+}
+
+/* 拖动时的落点指示线：贴在被插入的那个块宽度上，跟手不闪 */
+.block-drop-line {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 902;
+  width: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: #4c8dff;
+  box-shadow: 0 0 0 1px rgba(76, 141, 255, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+  transition: opacity 110ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 拖动中的幽灵块：克隆跟着鼠标走，原位那块淡出 */
+.block-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 903;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition: opacity 90ms ease;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.16));
+}
+
+.block-drag-ghost.is-visible {
+  opacity: 0.94;
+}
+
+.block-drag-ghost > .tiptap {
+  height: auto;
+}
+
+/* 被拖走的原位块 */
+.tiptap .is-block-drag-source {
+  opacity: 0.25;
+}
+
+/* 松手后闪一下：确认这一下到底搬没搬 */
+.tiptap .is-block-just-moved {
+  border-radius: 4px;
+  animation: block-just-moved 480ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes block-just-moved {
+  0% { background-color: rgba(76, 141, 255, 0.16); }
+  100% { background-color: transparent; }
+}
+
+.block-menu {
+  position: fixed;
+  z-index: 10002;
+  width: 210px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--color-popup-bg, #2a2a2a);
+  border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  color: var(--color-popup-text, #e6e6e6);
+  transform-origin: top left;
+  animation: block-menu-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes block-menu-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.block-menu-title {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
+.block-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.block-menu-item:hover {
+  background: var(--color-popup-hover, rgba(255, 255, 255, 0.08));
+}
+
+.block-menu-item.is-active {
+  color: #4c8dff;
+}
+
+.block-menu-item--danger:hover {
+  color: #ff6b6b;
+}
+
+.block-menu-item i {
+  font-size: 15px;
+  opacity: 0.85;
+}
+
+.block-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--color-popup-border, rgba(255, 255, 255, 0.12));
+}
+
+/* 拖动排序时禁止选中文字 */
+/* 拖动排序时：抓住的手势 + 禁止选中文字 */
+body.block-dragging,
+body.block-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
 }
 </style>

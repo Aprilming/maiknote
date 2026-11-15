@@ -156,6 +156,7 @@ export interface AppSettings {
   pathClickAction: PathClickAction // 点击底部路径：复制完整路径 / 在文件管理器中打开
   treeOrder: TreeOrder // 文件树同级排序：文件夹在上 / 文件在上
   linkPreviewEnabled: boolean // 链接卡片预览：开=抓网页信息显示卡片，预览失败自动回退文字链接
+  blockMenuEnabled: boolean // 块操作：开=段落左侧浮出把手，可拖动排序、打开块菜单（类似 Notion）
   defaultNoteBackgroundColor: string // 新建笔记的默认背景色，空字符串=不设默认
   autoLaunch: boolean // 开机自启动
   closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
@@ -214,6 +215,7 @@ export const useSettingStore = defineStore('setting', () => {
     pathClickAction: 'copy',
     treeOrder: 'folders',
     linkPreviewEnabled: true,
+    blockMenuEnabled: false,
     defaultNoteBackgroundColor: '',
     autoLaunch: false,
     closeBehavior: 'hide',
@@ -346,6 +348,10 @@ export const useSettingStore = defineStore('setting', () => {
             typeof parsed.linkPreviewEnabled === 'boolean'
               ? parsed.linkPreviewEnabled
               : settings.value.linkPreviewEnabled,
+          blockMenuEnabled:
+            typeof parsed.blockMenuEnabled === 'boolean'
+              ? parsed.blockMenuEnabled
+              : settings.value.blockMenuEnabled,
           shortcuts: { ...settings.value.shortcuts, ...(parsed.shortcuts || {}) },
           customEditorStyle: {
             light: { ...(settings.value.customEditorStyle?.light || {}), ...(parsed.customEditorStyle?.light || {}) },
@@ -399,6 +405,7 @@ export const useSettingStore = defineStore('setting', () => {
       pathClickAction: 'copy',
       treeOrder: 'folders',
       linkPreviewEnabled: true,
+      blockMenuEnabled: false,
       defaultNoteBackgroundColor: '',
       autoLaunch: false,
       closeBehavior: 'hide',
