@@ -1280,13 +1280,19 @@ const codeLangQuery = ref('')
 const codeLangHoverPos = ref<number | null>(null)
 let codeLangSyncFrame = 0
 
+// 语言标签挂在代码块外面（块的右下角下方），不再压在块内：
+// 与块底边的间隙 + 标签自身高度，用来算“鼠标是否还停在标签区”，否则标签移出块外就无法点击
+const CODE_LANG_PILL_GAP = 2
+const CODE_LANG_PILL_HEIGHT = 20
+const CODE_LANG_PILL_ZONE = CODE_LANG_PILL_GAP + CODE_LANG_PILL_HEIGHT + 8
+
 const codeLangOptions = computed(() => searchLanguages(codeLangQuery.value))
 
 // 下拉往上还是往下展开：下方空间不够就翻到按钮上方
 const codeLangPopUp = computed(() => {
   const pill = codeLangPills.value.find((item) => item.pos === codeLangOpenPos.value)
   if (!pill) return false
-  return pill.box.bottom + 6 + 300 > window.innerHeight
+  return pill.box.bottom + CODE_LANG_PILL_ZONE + 6 + 300 > window.innerHeight
 })
 
 // 按当前文档重算每个代码块右下角的按钮坐标（视口坐标，fixed 定位直接用）
@@ -1365,13 +1371,26 @@ function applyCodeLang(language: string) {
 function handleCodeLangPointerMove(event: MouseEvent) {
   const { clientX: x, clientY: y } = event
   let hovered: number | null = null
+  // 标签在块外：先看指针是否落在某个块里（优先），否则再看是否落在块下方那一条标签区
+  let inBlock: number | null = null
+  let inPillZone: number | null = null
   for (const pill of codeLangPills.value) {
     const box = pill.box
     if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
-      hovered = pill.pos
+      inBlock = pill.pos
       break
     }
+    if (
+      inPillZone === null &&
+      x >= box.left &&
+      x <= box.right &&
+      y > box.bottom &&
+      y <= box.bottom + CODE_LANG_PILL_ZONE
+    ) {
+      inPillZone = pill.pos
+    }
   }
+  hovered = inBlock ?? inPillZone
   if (hovered !== codeLangHoverPos.value) codeLangHoverPos.value = hovered
 }
 
@@ -2526,7 +2545,7 @@ defineExpose({
           :key="pill.pos"
           class="code-lang-pill"
           :class="{ 'is-visible': pill.pos === codeLangHoverPos || pill.pos === codeLangOpenPos }"
-          :style="{ top: pill.box.bottom - 6 + 'px', left: pill.box.right - 10 + 'px' }"
+          :style="{ top: pill.box.bottom + CODE_LANG_PILL_GAP + 'px', left: pill.box.right + 'px' }"
           @mousedown.stop
           @click.stop
         >
@@ -3179,10 +3198,12 @@ defineExpose({
 }
 
 /* 代码块语言选择器：body 浮层（Teleport），坐标由代码块矩形算出 */
+/* 锚点是代码块的右下角外侧：横向右对齐块右边，纵向压在块底边下方，
+   和块内的复制按钮（右上角）彻底分开 */
 .code-lang-pill {
   position: fixed;
   z-index: 900;
-  transform: translate(-100%, -100%);
+  transform: translate(-100%, 0);
   /* 平时淡显（能看见、但点不到），鼠标进到代码块才实心可点 */
   opacity: 0.45;
   pointer-events: none;
@@ -3196,14 +3217,14 @@ defineExpose({
 }
 
 .code-lang-trigger {
-  padding: 4px 10px;
+  padding: 2px 8px;
   border: none;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.1);
   color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: 1.45;
   white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
