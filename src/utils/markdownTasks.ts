@@ -60,10 +60,52 @@ function installTaskList(md: MarkdownIt) {
   })
 }
 
-/** 建一个带任务列表支持的渲染器（每个窗口各建一份即可） */
-export function createPreviewMarkdown(): MarkdownIt {
+/**
+ * 代码块右上角的复制按钮。
+ *
+ * 编辑器里的复制按钮是 Tiptap 的 CodeBlock 扩展自己挂上去的，预览这边只有
+ * markdown-it 渲染出来的裸 `<pre><code>`，所以得自己补：把围栏代码包一层
+ * `.md-code-block`，塞一个按钮进去，点击由宿主组件做事件委托处理。
+ */
+const CODE_COPY_ICON =
+  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
+  '<rect x="5.5" y="5.5" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/>' +
+  '<path d="M10.5 4V3.2A1.2 1.2 0 0 0 9.3 2H3.2A1.2 1.2 0 0 0 2 3.2v6.1A1.2 1.2 0 0 0 3.2 10.5H4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>' +
+  '</svg>'
+
+const CODE_DONE_ICON =
+  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
+  '<path d="M3.5 8.5 6.5 11.5 12.5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '</svg>'
+
+function installCodeCopy(md: MarkdownIt, label: string) {
+  md.renderer.rules.fence = (tokens, idx) => {
+    const token = tokens[idx]
+    const info = token.info ? md.utils.escapeHtml(token.info.trim()) : ''
+    const lang = info.split(/\s+/)[0] as string
+    const langClass = lang ? ` class="language-${lang}"` : ''
+    const escaped = md.utils.escapeHtml(token.content)
+    const title = md.utils.escapeHtml(label)
+    return (
+      '<div class="md-code-block">' +
+      `<button class="md-code-copy" type="button" title="${title}" aria-label="${title}">` +
+      `<span class="md-code-copy-idle">${CODE_COPY_ICON}</span>` +
+      `<span class="md-code-copy-done">${CODE_DONE_ICON}</span>` +
+      '</button>' +
+      `<pre><code${langClass}>${escaped}</code></pre>` +
+      '</div>'
+    )
+  }
+}
+
+/**
+ * 建一个带任务列表支持的渲染器（每个窗口各建一份即可）。
+ * 传了 `codeCopyLabel` 就给代码块加复制按钮，按钮文案即这个参数（提示文字）。
+ */
+export function createPreviewMarkdown(options: { codeCopyLabel?: string } = {}): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: true, breaks: false })
   installTaskList(md)
+  if (options.codeCopyLabel) installCodeCopy(md, options.codeCopyLabel)
   return md
 }
 

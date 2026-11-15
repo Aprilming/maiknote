@@ -4,6 +4,7 @@ import TiptapEditor from './TiptapEditor.vue'
 import { useNoteStore, extractTitle } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useLinkStore } from '@/stores/linkStore'
 import { useAutoSave } from '@/composables/useAutoSave'
 import { useFileSystem } from '@/composables/useFileSystem'
 import { useSourceMode } from '@/composables/useSourceMode'
@@ -19,6 +20,23 @@ import { adaptNoteColor } from '@/utils/noteColorTheme'
 const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
 const settingStore = useSettingStore()
+const linkStore = useLinkStore()
+
+// 当前笔记的反向链接（谁引用了我）
+const backlinks = computed(() => linkStore.backlinksOf(currentNote.value?.id))
+const backlinksExpanded = ref(false)
+
+function openBacklink(noteId: string) {
+  if (noteId && noteId !== currentNote.value?.id) {
+    noteStore.selectNote(noteId)
+  }
+}
+
+// 笔记增删后立刻重算反链；编辑中的内容变化走防抖
+watch(
+  () => noteStore.notes.length,
+  () => linkStore.refreshNow(),
+)
 
 const { getICloudPath } = useFileSystem()
 const { isSourceMode, toggleSourceMode } = useSourceMode()
@@ -770,6 +788,8 @@ function handleEditorUpdate(md: string) {
   localContent.value = md
   if (currentNote.value) {
     noteStore.updateNote(currentNote.value.id, { content: md })
+    // 内容一变，反链和 [[ ]] 指向可能就变了，防抖重算
+    linkStore.refreshSoon()
   }
 }
 
@@ -779,6 +799,7 @@ function handleSourceInput(e: Event) {
   localContent.value = target.value
   if (currentNote.value) {
     noteStore.updateNote(currentNote.value.id, { content: target.value })
+    linkStore.refreshSoon()
   }
   if (searchVisible.value) {
     updateSourceSearchState()
@@ -877,6 +898,42 @@ function handleToggleSourceMode() {
           :note-bg-color="adaptedNoteBg"
           @update="handleEditorUpdate"
         />
+      </div>
+
+      <!-- 反向链接：内容下方一条可折叠面板，列出引用当前笔记的其他笔记 -->
+      <div
+        v-if="currentNote && backlinks.length"
+        class="backlinks-panel"
+        :class="{ 'is-open': backlinksExpanded }"
+        @click.stop
+      >
+        <button class="backlinks-toggle" @click="backlinksExpanded = !backlinksExpanded">
+          <i v-if="backlinksExpanded" class="i-mdi-chevron-down"></i>
+          <i v-else class="i-mdi-chevron-right"></i>
+          <span class="backlinks-title">{{ $t('backlinks.title') }}</span>
+          <span class="backlinks-count">{{ $t('backlinks.count', { count: backlinks.length }) }}</span>
+        </button>
+
+        <div v-if="backlinksExpanded" class="backlinks-list">
+          <template v-if="backlinks.length">
+            <button
+              v-for="item in backlinks"
+              :key="item.sourceId"
+              class="backlink-item"
+              @click="openBacklink(item.sourceId)"
+            >
+              <span class="backlink-source">
+                <i class="i-mdi-note-text-outline"></i>
+                {{ item.sourceTitle }}
+              </span>
+              <span v-if="item.snippet" class="backlink-snippet">{{ item.snippet }}</span>
+            </button>
+          </template>
+          <div v-else class="backlinks-empty">
+            <span>{{ $t('backlinks.empty') }}</span>
+            <span class="backlinks-hint">{{ $t('backlinks.hint') }}</span>
+          </div>
+        </div>
       </div>
 
       <!-- navigation hints -->
@@ -1074,6 +1131,112 @@ function handleToggleSourceMode() {
 .source-textarea:read-only {
   cursor: not-allowed;
   background: var(--color-surface);
+}
+
+/* 反向链接面板：钉在内容下方，展开时自己滚动，不挤压正文 */
+.backlinks-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 42vh;
+  border-top: 1px solid var(--color-border);
+  font-size: 12px;
+  /* 底部左下角浮着字数 / 调色盘 / 搜索三个控件，这里留出同样的高度，免得压住这一行字 */
+  padding-bottom: 36px;
+}
+
+.backlinks-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.backlinks-toggle:hover {
+  color: var(--color-text);
+}
+
+.backlinks-toggle i {
+  font-size: 14px;
+}
+
+.backlinks-panel.is-open .backlinks-title {
+  color: var(--color-text);
+}
+
+.backlinks-count {
+  color: var(--color-text-secondary);
+  opacity: 0.75;
+}
+
+.backlinks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.backlink-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.backlink-item:hover {
+  background: var(--color-surface);
+}
+
+.backlink-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.backlink-source i {
+  color: var(--color-primary);
+  font-size: 13px;
+}
+
+.backlink-snippet {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backlinks-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 8px 10px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.backlinks-hint {
+  opacity: 0.75;
 }
 
 .editor-content-wrapper {

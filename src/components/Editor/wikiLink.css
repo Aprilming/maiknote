@@ -1,0 +1,36 @@
+/* [[双向链接]] 在编辑态里的样子：正文仍是纯文本，这里只是着色。
+   两侧 [ 与 ] 保持淡化，标题部分加重，点击跳转由 WikiLinkExtension 处理。 */
+.ProseMirror .wiki-link {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.ProseMirror .wiki-link:hover {
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+
+.ProseMirror .wiki-link-label {
+  font-weight: 600;
+}
+
+/* 两侧方括号比标题淡一点 */
+.ProseMirror .wiki-link-bracket {
+  opacity: 0.55;
+}
+
+.ProseMirror .wiki-link.is-missing {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+
+.ProseMirror .wiki-link.is-missing:hover {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+}

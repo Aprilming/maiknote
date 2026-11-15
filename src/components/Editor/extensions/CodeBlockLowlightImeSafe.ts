@@ -1,5 +1,5 @@
 import CodeBlock, { type CodeBlockOptions } from '@tiptap/extension-code-block'
-import { findChildren } from '@tiptap/core'
+import { findChildren, type Editor } from '@tiptap/core'
 import type { Node as ProsemirrorNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
@@ -48,6 +48,71 @@ function registered(aliasOrLanguage: string) {
 
 function isImeComposing() {
   return Boolean((window as any).__imeComposing)
+}
+
+const IME_GUARD_WINDOW_MS = 500
+
+type KeyboardShortcutCommand = (props: { editor: Editor }) => boolean
+
+/** 代码块里的真实文本：排除复制按钮等 widget 节点自带的空白 */
+function codeBlockDomText(dom: HTMLElement): string {
+  const code = dom.querySelector('code') ?? dom
+  const clone = code.cloneNode(true) as HTMLElement
+
+  clone.querySelectorAll('button, img, br, [contenteditable="false"]').forEach((el) => el.remove())
+
+  return clone.textContent ?? ''
+}
+
+/** 代码块 DOM 里存在尚未进入文档的文本（输入法组合态只活在 DOM 中） */
+function hasUncommittedCodeBlockText(editor: Editor): boolean {
+  const { state, view } = editor
+  const { $head } = state.selection
+
+  if ($head.parent.type.name !== 'codeBlock') return false
+
+  const dom = view.nodeDOM($head.before($head.depth))
+  if (!(dom instanceof HTMLElement)) return false
+
+  return codeBlockDomText(dom).length > $head.parent.textContent.length
+}
+
+/** CodeBlock 自带的 Backspace 会销毁节点：光标在文档首的块首，或块内没有文本时 clearNodes() */
+function isCodeBlockDestructionTarget(editor: Editor): boolean {
+  const { $head, empty } = editor.state.selection
+
+  if ($head.parent.type.name !== 'codeBlock') return false
+  if (!empty) return false
+
+  return $head.pos === 1 || $head.parent.textContent.length === 0
+}
+
+function imeActiveRecently(): boolean {
+  const win = window as any
+  if (win.__imeComposing) return true
+
+  const endedAt = typeof win.__imeEndedAt === 'number' ? win.__imeEndedAt : 0
+
+  return Boolean(endedAt) && performance.now() - endedAt < IME_GUARD_WINDOW_MS
+}
+
+/**
+ * 输入法组合期间，组合文本往往只存在于 DOM、尚未进入文档，ProseMirror 眼里的代码块仍是「空块」。
+ * 此时 CodeBlock 自带的 Backspace（clearNodes）会把代码块换成段落，随后上屏的中文落进段落，
+ * 表现为「代码块没了，只剩字」。只有确认没有未提交文本时才允许这些销毁型快捷键。
+ */
+function imeProtectsCodeBlock(editor: Editor): boolean {
+  if (!isCodeBlockDestructionTarget(editor)) return false
+  if (imeActiveRecently()) return true
+
+  return hasUncommittedCodeBlockText(editor)
+}
+
+function withImeGuard(shortcut?: KeyboardShortcutCommand): KeyboardShortcutCommand {
+  return (props) => {
+    if (imeProtectsCodeBlock(props.editor)) return true
+    return shortcut ? shortcut(props) : false
+  }
 }
 
 function getActiveCodeBlockRange(doc: ProsemirrorNode, name: string, pos: number) {
@@ -209,6 +274,16 @@ export const CodeBlockLowlightImeSafe = CodeBlock.extend<CodeBlockLowlightImeSaf
       exitOnArrowDown: true,
       defaultLanguage: null,
       HTMLAttributes: {},
+    }
+  },
+
+  addKeyboardShortcuts() {
+    const parent = this.parent?.() || {}
+
+    return {
+      ...parent,
+      Backspace: withImeGuard(parent.Backspace),
+      ArrowDown: withImeGuard(parent.ArrowDown),
     }
   },
 

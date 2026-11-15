@@ -1,23 +1,43 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Editor } from '@tiptap/vue-3'
 import { invoke } from '@tauri-apps/api/core'
 import { emojiCategories, filterEmojis, type EmojiItem } from './emojiData'
 import { useSettingStore, normalizeIpApiUrl } from '@/stores/settingStore'
+import { useNoteStore } from '@/stores/noteStore'
+import { useLinkStore } from '@/stores/linkStore'
+import NotePicker from '../NotePicker.vue'
+import { sanitizeLinkTitle } from '@/composables/useNoteLinks'
 
 const props = defineProps<{
   command: (item: { title: string; command: string }) => void
   editor: Editor
   items: Array<{ title: string; command: string }>
   range?: { from: number; to: number }
+  onReposition?: () => void
 }>()
 
-type Mode = 'commands' | 'emoji'
+type Mode = 'commands' | 'emoji' | 'link'
 const mode = ref<Mode>('commands')
+
+const noteStore = useNoteStore()
+const linkStore = useLinkStore()
+const linkPickerRef = ref<InstanceType<typeof NotePicker> | null>(null)
+
+// /link 的候选笔记：排除当前笔记与回收站
+const linkCandidates = computed(() => linkStore.linkableNotes(noteStore.currentNote?.id))
 
 const selectedIndex = ref(0)
 const listRef = ref<HTMLElement>()
+
+// 弹窗尺寸一变（切到 /link、候选变多、进 emoji）就重新定位
+function repositionPopup() {
+  nextTick(() => props.onReposition?.())
+}
+
+watch(mode, () => repositionPopup())
+watch(linkCandidates, () => repositionPopup())
 const emojiSearchRef = ref<HTMLInputElement>()
 const emojiQuery = ref('')
 const { t } = useI18n()
@@ -47,41 +67,44 @@ const COMMAND_GROUPS = [
   {
     labelKey: 'slash.basicBlocks',
     items: [
-      { titleKey: 'slash.heading1', command: 'heading1', icon: 'H1' },
-      { titleKey: 'slash.heading2', command: 'heading2', icon: 'H2' },
-      { titleKey: 'slash.heading3', command: 'heading3', icon: 'H3' },
+      { titleKey: 'slash.heading1', command: 'heading1', keyword: 'h1', icon: 'H1' },
+      { titleKey: 'slash.heading2', command: 'heading2', keyword: 'h2', icon: 'H2' },
+      { titleKey: 'slash.heading3', command: 'heading3', keyword: 'h3', icon: 'H3' },
     ]
   },
   {
     labelKey: 'slash.lists',
     items: [
-      { titleKey: 'slash.bulletList', command: 'bulletList', icon: '•' },
-      { titleKey: 'slash.orderedList', command: 'orderedList', icon: '1.' },
-      { titleKey: 'slash.todo', command: 'todo', icon: '☑' },
+      { titleKey: 'slash.bulletList', command: 'bulletList', keyword: 'ul', icon: '•' },
+      { titleKey: 'slash.orderedList', command: 'orderedList', keyword: 'ol', icon: '1.' },
+      { titleKey: 'slash.todo', command: 'todo', keyword: 'todo', icon: '☑' },
     ]
   },
   {
     labelKey: 'slash.insert',
     items: [
-      { titleKey: 'slash.emoji', command: 'emoji', icon: '😊' },
-      { titleKey: 'slash.quote', command: 'blockquote', icon: '"' },
-      { titleKey: 'slash.code', command: 'code', icon: '<>' },
-      { titleKey: 'slash.table', command: 'table', icon: '⊞' },
-      { titleKey: 'slash.date', command: 'date', icon: '📅' },
-      { titleKey: 'slash.time', command: 'time', icon: '🕐' },
-      { titleKey: 'slash.datetime', command: 'datetime', icon: '🕒' },
+      { titleKey: 'slash.link', command: 'link', keyword: 'link', icon: '🔗' },
+      { titleKey: 'slash.emoji', command: 'emoji', keyword: 'emoji', icon: '😊' },
+      { titleKey: 'slash.quote', command: 'blockquote', keyword: 'quote', icon: '"' },
+      { titleKey: 'slash.code', command: 'code', keyword: 'code', icon: '<>' },
+      { titleKey: 'slash.table', command: 'table', keyword: 'table', icon: '⊞' },
+      { titleKey: 'slash.date', command: 'date', keyword: 'date', icon: '📅' },
+      { titleKey: 'slash.time', command: 'time', keyword: 'time', icon: '🕐' },
+      { titleKey: 'slash.datetime', command: 'datetime', keyword: 'datetime', icon: '🕒' },
     ]
   },
   {
     labelKey: 'slash.tools',
     items: [
-      { titleKey: 'slash.ipinfo', command: 'ipinfo', icon: '🌐' },
+      { titleKey: 'slash.ipinfo', command: 'ipinfo', keyword: 'ip', icon: '🌐' },
     ]
   }
 ]
 
 // 过滤后的命令项
-const filteredItems = ref<Array<{ titleKey: string; title: string; command: string; icon: string }>>([])
+const filteredItems = ref<
+  Array<{ titleKey: string; title: string; command: string; keyword: string; icon: string }>
+>([])
 
 function updateFilteredItems(query: string) {
   if (!query) {
@@ -92,7 +115,15 @@ function updateFilteredItems(query: string) {
   } else {
     filteredItems.value = COMMAND_GROUPS
       .flatMap(g => g.items)
-      .filter(item => t(item.titleKey).toLowerCase().includes(query.toLowerCase()))
+      // 中文标题里没有英文单词，所以关键词和命令名也参与匹配（敲 /h1、/link 都能命中）
+      .filter(item => {
+        const q = query.toLowerCase()
+        return (
+          t(item.titleKey).toLowerCase().includes(q) ||
+          item.keyword.toLowerCase().includes(q) ||
+          item.command.toLowerCase().includes(q)
+        )
+      })
       .map(item => ({ ...item, title: t(item.titleKey) }))
   }
   selectedIndex.value = 0
@@ -277,6 +308,13 @@ function selectItem(index: number) {
   const item = filteredItems.value[index]
   if (!item) return
 
+  if (item.command === 'link') {
+    // 进入笔记选择模式，暂不删除 range（取消时原文还在）
+    mode.value = 'link'
+    selectedIndex.value = 0
+    return
+  }
+
   if (item.command === 'emoji') {
     // 切换到 emoji 模式，暂不删除 range
     mode.value = 'emoji'
@@ -295,6 +333,35 @@ function selectItem(index: number) {
     editor.chain().focus().deleteRange(props.range).run()
   }
   runCommand(item.command)
+}
+
+// /link 选中一篇笔记：删掉 /link 输入，写入 [[标题]]
+function handleLinkPick(title: string) {
+  const editor = props.editor
+  if (!editor) return
+
+  const clean = sanitizeLinkTitle(title)
+  if (!clean) {
+    mode.value = 'commands'
+    updateFilteredItems('')
+    return
+  }
+
+  if (props.range) {
+    editor.chain().focus().deleteRange(props.range).insertContent(`[[${clean}]]`).run()
+  } else {
+    editor.chain().focus().insertContent(`[[${clean}]]`).run()
+  }
+
+  mode.value = 'commands'
+  updateFilteredItems('')
+}
+
+// 取消 /link：恢复命令列表，原文（/link）保留
+function cancelLink() {
+  mode.value = 'commands'
+  nextTick(() => props.editor?.commands?.focus())
+  updateFilteredItems('')
 }
 
 // 选择 emoji
@@ -324,6 +391,12 @@ function emojiRowColToIndex(row: number, col: number): number {
 // 暴露方法给外部
 defineExpose({
   onKeyDown: (event: KeyboardEvent) => {
+    if (mode.value === 'link') {
+      const handled = linkPickerRef.value?.onKeyDown?.(event) ?? false
+      // 选择器内部的 Backspace 交给它自己处理，避免编辑器吃掉
+      if (handled) event.preventDefault()
+      return handled
+    }
     if (mode.value === 'emoji') {
       return handleEmojiKeyDown(event)
     }
@@ -467,8 +540,29 @@ updateFilteredItems('')
         >
           <span class="slash-icon">{{ item.icon }}</span>
           <span class="slash-title">{{ item.title }}</span>
+          <span class="slash-keyword">/{{ item.keyword }}</span>
         </button>
       </template>
+    </div>
+
+    <!-- 笔记链接选择模式（/link） -->
+    <div v-else-if="mode === 'link'" class="link-picker">
+      <div class="link-picker-header">
+        <span class="link-picker-title">{{ $t('slash.linkTitle') }}</span>
+        <button class="emoji-back-btn" :title="$t('slash.backToCommands')" @click="cancelLink">
+          <i class="i-mdi-arrow-left"></i>
+        </button>
+      </div>
+      <NotePicker
+        ref="linkPickerRef"
+        :notes="linkCandidates"
+        :placeholder="$t('slash.linkSearch')"
+        :empty-text="$t('slash.linkEmpty')"
+        :create-label="$t('slash.linkNew')"
+        @select="handleLinkPick"
+        @cancel="cancelLink"
+        @resize="repositionPopup"
+      />
     </div>
 
     <!-- Emoji 选择模式 -->
@@ -546,9 +640,37 @@ updateFilteredItems('')
   overflow: hidden;
 }
 
+.link-picker {
+  width: 288px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.link-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 2px 10px;
+}
+
+.link-picker-title {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 选择器自带的边框/阴影在弹出框里是双层的，这里抹掉 */
+.link-picker :deep(.note-picker) {
+  width: 100%;
+  max-height: min(300px, 60vh);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .slash-command-list {
   padding: 6px;
-  min-width: 180px;
+  min-width: 230px;
   max-height: 320px;
   overflow-y: auto;
 }
@@ -590,6 +712,25 @@ updateFilteredItems('')
 
 .slash-title {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 命令关键词：右侧灰字提示，告诉用户可以直接敲 /keyword */
+.slash-keyword {
+  flex-shrink: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  letter-spacing: 0.2px;
+}
+
+.slash-item.is-selected .slash-keyword,
+.slash-item:hover .slash-keyword {
+  opacity: 1;
 }
 
 .slash-empty {

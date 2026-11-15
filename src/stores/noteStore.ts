@@ -6,6 +6,7 @@ import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { directoryRelPath, directoryIdFromRelPath, fileNameForTitle, sanitizePathSegment } from '@/utils/notePath'
+import { replaceWikiLinkTitle } from '@/composables/useNoteLinks'
 import i18n from '@/i18n'
 
 const TITLE_MAX_LENGTH = 50
@@ -679,15 +680,42 @@ export const useNoteStore = defineStore('note', () => {
     return newNote
   }
 
+  /**
+   * 笔记改名后，把其它笔记里指向旧标题的 [[旧标题]] 一起改成新标题，
+   * 双向链接不会因为改名而断掉。
+   */
+  function rewriteIncomingLinks(fromTitle: string, toTitle: string, excludeId: string) {
+    const from = (fromTitle || '').trim()
+    const to = (toTitle || '').trim()
+    if (!from || !to || from === to) return
+
+    for (const other of notes.value) {
+      if (other.id === excludeId || other.trashedAt) continue
+      const next = replaceWikiLinkTitle(other.content, from, to)
+      if (next !== other.content) {
+        other.content = next
+        other.updatedAt = Date.now()
+        scheduleSave(other)
+      }
+    }
+  }
+
   function updateNote(id: string, updates: Partial<Omit<Note, 'id' | 'createdAt'>>) {
     const index = notes.value.findIndex(n => n.id === id)
     if (index !== -1) {
       const note = notes.value[index]
+      const previousTitle = note.title
       // 原地更新字段而非替换数组元素，避免每次内容变化都触发所有依赖 notes 的计算属性重算
       Object.assign(note, updates, { updatedAt: Date.now() })
       // Update title if content changed
       if (updates.content) {
-        note.title = extractTitle(updates.content)
+        const nextTitle = extractTitle(updates.content)
+        if (nextTitle && nextTitle !== note.title) {
+          note.title = nextTitle
+          rewriteIncomingLinks(previousTitle, nextTitle, id)
+        } else if (!nextTitle) {
+          note.title = ''
+        }
       }
 
       // Schedule save to iCloud (debounced)

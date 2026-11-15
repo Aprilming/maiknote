@@ -186,7 +186,7 @@ function markCopied(id: string) {
 }
 
 /** 复制整条笔记正文 */
-const md = createPreviewMarkdown()
+const md = createPreviewMarkdown({ codeCopyLabel: t('edge.copyCode') })
 const mdCache = new Map<string, string>()
 
 function renderMarkdown(content: string | undefined | null): string {
@@ -212,6 +212,14 @@ let suppressExpandUntil = 0
 function onContentClick(note: EdgeNotePayload, event: MouseEvent) {
   const target = event.target as HTMLElement | null
   if (!target) return
+  // 代码块右上角的复制按钮：复制该块源码
+  const codeCopyBtn = target.closest('.md-code-copy')
+  if (codeCopyBtn) {
+    event.preventDefault()
+    event.stopPropagation()
+    void copyCodeBlock(note, codeCopyBtn as HTMLElement)
+    return
+  }
   const anchor = target.closest('a')
   if (anchor) {
     event.preventDefault()
@@ -309,6 +317,17 @@ async function copySelectionOnSelect(event: MouseEvent) {
   const ok = await writeClipboard(text)
   const noteId = card?.dataset.noteId
   if (ok && noteId) flashNote(noteId, t('edge.selectionCopied'))
+}
+
+/** 复制单个代码块的源码（按钮点完自己亮一下勾，卡片再闪一下「已复制」） */
+async function copyCodeBlock(note: EdgeNotePayload, button: HTMLElement) {
+  const block = button.closest('.md-code-block')
+  const text = block?.querySelector('code')?.textContent ?? ''
+  if (!text.trim()) return
+  if (!(await writeClipboard(text))) return
+  button.classList.add('is-copied')
+  window.setTimeout(() => button.classList.remove('is-copied'), 1400)
+  markCopied(note.id)
 }
 
 async function copyNote(note: EdgeNotePayload) {
@@ -569,8 +588,29 @@ onUnmounted(() => {
           <span class="card-accent" :style="{ background: note.color || 'var(--color-primary)' }" />
           <div class="card-main">
             <div class="card-head">
-              <button class="card-title" type="button" :title="t('edge.open')" @click="openNote(note)">
-                {{ note.title }}
+              <button
+                class="card-copy card-open"
+                type="button"
+                :title="t('edge.open')"
+                @click.stop="openNote(note)"
+              >
+                <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                  <path
+                    d="M6 3h7v7M13 3L5 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                  <path
+                    d="M11 9.5V12a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V6.5A1.5 1.5 0 0 1 4 5h2.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                    stroke-linecap="round"
+                  />
+                </svg>
               </button>
               <button
                 class="card-copy"
@@ -621,7 +661,6 @@ onUnmounted(() => {
             <div
               v-else
               class="card-content md"
-              @dblclick="beginEdit(note, $event)"
               @click="onContentClick(note, $event)"
               v-html="renderMarkdown(note.content)"
             ></div>
@@ -965,27 +1004,15 @@ onUnmounted(() => {
   gap: 6px;
 }
 
-.card-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--color-text);
-  text-align: left;
-  word-break: break-word;
-  cursor: pointer;
-  user-select: text;
+/* 卡片不再显示笔记名称（正文里本来就有标题），左上角只留一个「打开笔记」的图标 */
+.card-copy.card-open {
+  margin-right: auto;
+  padding: 2px 5px;
 }
 
-.card-title:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+.card-copy.card-open:hover {
+  color: var(--color-primary, #3b82f6);
+  border-color: var(--color-primary, #3b82f6);
 }
 
 .card-copy {
@@ -1156,6 +1183,56 @@ onUnmounted(() => {
   padding: 0;
   background: none;
   font-size: 10.5px;
+}
+
+/* 代码块复制按钮：markdown-it 只吐裸 pre，按钮由预览渲染器挂上去，悬停代码块才露出来 */
+.card-content.md :deep(.md-code-block) {
+  position: relative;
+}
+
+.card-content.md :deep(.md-code-copy) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.card-content.md :deep(.md-code-block:hover .md-code-copy),
+.card-content.md :deep(.md-code-copy.is-copied) {
+  display: inline-flex;
+}
+
+.card-content.md :deep(.md-code-copy:hover) {
+  color: var(--color-primary, #3b82f6);
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.card-content.md :deep(.md-code-copy-done) {
+  display: none;
+}
+
+.card-content.md :deep(.md-code-copy.is-copied) {
+  color: var(--color-primary, #3b82f6);
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.card-content.md :deep(.md-code-copy.is-copied .md-code-copy-idle) {
+  display: none;
+}
+
+.card-content.md :deep(.md-code-copy.is-copied .md-code-copy-done) {
+  display: inline-flex;
 }
 
 .card-content.md :deep(blockquote) {

@@ -14,6 +14,7 @@ import { TREE_DARK_COLORS, TREE_LIGHT_COLORS } from '@/utils/treeColors'
 import { useWorkspaceTransfer } from '@/composables/useWorkspaceTransfer'
 import WorkspaceTransferDialog from '@/components/Sidebar/WorkspaceTransferDialog.vue'
 import WorkspaceSwitcher from '@/components/Sidebar/WorkspaceSwitcher.vue'
+import ContributionGraph from '@/components/Sidebar/ContributionGraph.vue'
 
 const props = withDefaults(defineProps<{
   width?: number
@@ -1219,6 +1220,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </Transition>
+
+    <!-- 写作足迹：一年热力图，看哪天动过笔记 -->
+    <ContributionGraph />
 
     <footer class="tree-foot">
       <button

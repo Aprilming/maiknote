@@ -26,11 +26,16 @@ import Link from '@tiptap/extension-link'
 import { Fragment } from '@tiptap/pm/model'
 import { defaultMarkdownSerializer } from 'prosemirror-markdown'
 import { CodeBlockCopyExtension } from './extensions/CodeBlockCopyExtension'
-import { CodeBlockLanguageExtension } from './extensions/CodeBlockLanguageExtension'
+import { searchLanguages, displayNameOf } from './extensions/CodeBlockLanguageExtension'
 import { CodeBlockLowlightImeSafe, refreshLowlightAfterImeMeta } from './extensions/CodeBlockLowlightImeSafe'
 import { InlineSearchExtension, searchPluginKey } from './extensions/InlineSearchExtension'
 import { LinkPreviewExtension, refreshLinkPreview } from './extensions/LinkPreviewExtension'
+import { WikiLinkExtension, refreshWikiLinks } from './extensions/WikiLinkExtension'
+import { createNoteLinkSuggestion } from './extensions/NoteLinkSuggestion'
+import { useNoteStore } from '@/stores/noteStore'
+import { useLinkStore } from '@/stores/linkStore'
 import './linkPreview.css'
+import './wikiLink.css'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
@@ -49,6 +54,8 @@ const lowlight = createLowlight(all)
 
 const settingStore = useSettingStore()
 const assistantsStore = useAssistantsStore()
+const noteStore = useNoteStore()
+const linkStore = useLinkStore()
 const fileSystem = useFileSystem()
 const { t } = useI18n()
 
@@ -381,6 +388,74 @@ const scheduleImeUpdate = () => {
     imeUpdateTimer = null
     if (pendingImeUpdate) emitEditorUpdate()
   }, 120)
+}
+
+// 输入法上屏时，WebKit 有可能把「空代码块」整个顶掉（节点被换成段落，中文落进段落）。
+// 组合开始时记下这个空代码块，一旦发现它被换成段落就原地复原。
+const IME_CODEBLOCK_GUARD_MS = 1500
+let imeCodeBlockGuard: { pos: number; attrs: Record<string, unknown>; at: number } | null = null
+
+const captureImeCodeBlockGuard = (view: any) => {
+  const { $head } = view.state.selection
+  if ($head.parent.type.name !== 'codeBlock') return null
+  if ($head.parent.textContent.length > 0) return null
+
+  return { pos: $head.before($head.depth), attrs: { ...$head.parent.attrs }, at: performance.now() }
+}
+
+const restoreCodeBlockAfterIme = () => {
+  const guard = imeCodeBlockGuard
+  if (!guard) return
+
+  const ed = editor.value
+  if (!ed || ed.isDestroyed) return
+
+  if (performance.now() - guard.at > IME_CODEBLOCK_GUARD_MS) {
+    imeCodeBlockGuard = null
+    return
+  }
+
+  const doc = ed.state.doc
+  if (guard.pos >= doc.content.size) {
+    imeCodeBlockGuard = null
+    return
+  }
+
+  const node = doc.nodeAt(guard.pos)
+  if (!node) return
+  if (node.type.name === 'codeBlock') return
+  if (node.type.name !== 'paragraph') {
+    imeCodeBlockGuard = null
+    return
+  }
+
+  imeDebug('codeblock recover', {
+    pos: guard.pos,
+    fromText: node.textContent,
+    ageMs: Math.round(performance.now() - guard.at),
+  })
+
+  const tr = ed.state.tr.setBlockType(guard.pos, guard.pos + node.nodeSize, ed.schema.nodes.codeBlock, guard.attrs)
+  tr.setSelection(TextSelection.near(tr.doc.resolve(guard.pos + 1 + node.content.size)))
+  ed.view.dispatch(tr)
+  imeCodeBlockGuard = null
+}
+
+// 组合结束后多次重试：上屏文本有的在 compositionend 之前落地，有的在其之后。
+const scheduleCodeBlockRecovery = () => {
+  const run = () => {
+    if (!imeCodeBlockGuard) return
+    if ((window as any).__imeComposing) return
+    restoreCodeBlockAfterIme()
+  }
+  run()
+  requestAnimationFrame(run)
+  window.setTimeout(run, 80)
+  window.setTimeout(run, 250)
+  window.setTimeout(() => {
+    run()
+    imeCodeBlockGuard = null
+  }, 600)
 }
 
 type CodeBlockRangeSnapshot = { from: number; to: number; text: string }
@@ -1187,6 +1262,131 @@ const copyContextMenuLink = async () => {
   if (await copyText(href)) showToast(t('toast.copied'))
 }
 
+/* ----- 代码块语言选择器（浮层，不放进 ProseMirror 文档） ----- */
+// 之前的实现用 Decoration.widget 把按钮塞进代码块内部：空代码块里就只剩一个
+// 不可编辑的按钮，光标落不进代码块，点击也被按钮吃掉。改成挂在 body 上的浮层后，
+// 代码块 DOM 里只有正文，光标和点击都恢复正常。
+
+interface CodeLangPill {
+  pos: number
+  language: string
+  /** 代码块在视口里的矩形：算按钮锚点 + 判断鼠标是否停在该块上 */
+  box: { top: number; left: number; right: number; bottom: number }
+}
+
+const codeLangPills = ref<CodeLangPill[]>([])
+const codeLangOpenPos = ref<number | null>(null)
+const codeLangQuery = ref('')
+const codeLangHoverPos = ref<number | null>(null)
+let codeLangSyncFrame = 0
+
+const codeLangOptions = computed(() => searchLanguages(codeLangQuery.value))
+
+// 下拉往上还是往下展开：下方空间不够就翻到按钮上方
+const codeLangPopUp = computed(() => {
+  const pill = codeLangPills.value.find((item) => item.pos === codeLangOpenPos.value)
+  if (!pill) return false
+  return pill.box.bottom + 6 + 300 > window.innerHeight
+})
+
+// 按当前文档重算每个代码块右下角的按钮坐标（视口坐标，fixed 定位直接用）
+function syncCodeLangPills() {
+  const ed = editor.value
+  if (!ed || !ed.view || !ed.view.dom) {
+    if (codeLangPills.value.length) codeLangPills.value = []
+    return
+  }
+  const next: CodeLangPill[] = []
+  ed.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'codeBlock') return true
+    const dom = ed.view.nodeDOM(pos)
+    if (!(dom instanceof HTMLElement)) return false
+    const rect = dom.getBoundingClientRect()
+    // 视口外的代码块不生成按钮
+    if (rect.bottom < -40 || rect.top > window.innerHeight + 40) return false
+    next.push({
+      pos,
+      language: (node.attrs.language as string) || 'plaintext',
+      box: { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom },
+    })
+    return false
+  })
+  codeLangPills.value = next
+  // 按钮对应的代码块没了（删块 / 换笔记），顺手关掉下拉
+  if (codeLangOpenPos.value !== null && !next.some((item) => item.pos === codeLangOpenPos.value)) {
+    codeLangOpenPos.value = null
+    codeLangQuery.value = ''
+  }
+}
+
+function scheduleCodeLangSync() {
+  if (codeLangSyncFrame) return
+  codeLangSyncFrame = requestAnimationFrame(() => {
+    codeLangSyncFrame = 0
+    syncCodeLangPills()
+  })
+}
+
+function closeCodeLangPill() {
+  codeLangOpenPos.value = null
+  codeLangQuery.value = ''
+}
+
+function toggleCodeLangPill(pos: number) {
+  if (codeLangOpenPos.value === pos) {
+    closeCodeLangPill()
+    return
+  }
+  codeLangOpenPos.value = pos
+  codeLangQuery.value = ''
+  nextTick(() => {
+    const input = document.querySelector('.code-lang-pop .code-lang-search') as HTMLInputElement | null
+    input?.focus()
+  })
+}
+
+// 改语言：直接改节点属性，Markdown 的 ```lang 与高亮都会跟着变
+function applyCodeLang(language: string) {
+  const ed = editor.value
+  const pos = codeLangOpenPos.value
+  closeCodeLangPill()
+  if (!ed || pos === null) return
+  const node = ed.state.doc.nodeAt(pos)
+  if (!node || node.type.name !== 'codeBlock') return
+  if (node.attrs.language === language) return
+  ed.view.dispatch(ed.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, language }))
+  emitEditorUpdate(ed)
+  scheduleCodeLangSync()
+}
+
+// 用坐标判断鼠标是否停在某个代码块上。
+// 不能用 pre 上的 mousemove：按钮是 body 里的浮层，鼠标一移到按钮上就会触发
+// pre 的 mouseleave，按钮闪烁甚至点不到。坐标判定不受 DOM 层级影响。
+function handleCodeLangPointerMove(event: MouseEvent) {
+  const { clientX: x, clientY: y } = event
+  let hovered: number | null = null
+  for (const pill of codeLangPills.value) {
+    const box = pill.box
+    if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
+      hovered = pill.pos
+      break
+    }
+  }
+  if (hovered !== codeLangHoverPos.value) codeLangHoverPos.value = hovered
+}
+
+function handleCodeLangOutsideMouseDown(event: MouseEvent) {
+  if (codeLangOpenPos.value === null) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest?.('.code-lang-pill') || target?.closest?.('.code-lang-pop')) return
+  closeCodeLangPill()
+}
+
+function handleCodeLangEsc(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || codeLangOpenPos.value === null) return
+  closeCodeLangPill()
+}
+
 const editor = useEditor({
   editable: !props.isLocked,
   extensions: [
@@ -1239,12 +1439,29 @@ const editor = useEditor({
     }),
     TextStyle,
     createSlashCommand(),
+    // [[ 输入补全：和 /link 共用同一个笔记选择器
+    createNoteLinkSuggestion({
+      getNotes: () => linkStore.linkableNotes(noteStore.currentNote?.id),
+    }),
+    // [[标题]] 的着色与点击跳转（纯文本存储，不改 Markdown）
+    WikiLinkExtension.configure({
+      resolve: (title: string) => {
+        const note = linkStore.resolve(title)
+        return note ? { id: note.id } : null
+      },
+      openNote: (id: string) => {
+        void noteStore.selectNote(id)
+      },
+      createNote: (title: string) => {
+        void noteStore.createNoteWithContent(title, '')
+      },
+      enabled: () => true,
+    }),
     Color,
     Highlight.configure({ multicolor: true }),
     Underline,
     FontFamily,
     CodeBlockCopyExtension,
-    CodeBlockLanguageExtension,
     InlineSearchExtension,
     LinkPreviewExtension.configure({
       // 通用设置里的「链接卡片预览」：关掉就只显示文字链接
@@ -1285,6 +1502,7 @@ const editor = useEditor({
         imeHandledFinalCommit = false
         imeSawCommitBoundary = false
         imeSuppressCleanupUntil = 0
+        imeCodeBlockGuard = captureImeCodeBlockGuard(_view)
         ;(window as any).__imeComposing = true
         imeDebug('dom compositionstart', {
           data: (event as CompositionEvent).data,
@@ -1325,6 +1543,8 @@ const editor = useEditor({
           resetImeCompositionState()
         })
         scheduleImeUpdate()
+        // 上屏后在多个时间点重试复原（PM 有时在 compositionend 之后才应用 DOM 变更）
+        scheduleCodeBlockRecovery()
         return false
       },
       beforeinput: (_view, event) => {
@@ -1383,6 +1603,17 @@ const editor = useEditor({
         const { state, dispatch } = view
         const { from, to } = state.selection
         dispatch(state.tr.insertText(createRichTabInsertText(settingStore.settings.tabSize), from, to).scrollIntoView())
+        return true
+      }
+
+      // 输入法组合中/刚提交时的上下键属于候选词导航，不参与块级移动
+      if (
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+        (
+          (window as any).__imeComposing ||
+          performance.now() - ((window as any).__imeEndedAt || 0) < 100
+        )
+      ) {
         return true
       }
 
@@ -1494,6 +1725,13 @@ const editor = useEditor({
       // 只处理左键点击，右键点击保持选择状态
       if (event.button !== 0) {
         return true
+      }
+
+      // [[双向链接]] 的点击交给 WikiLinkExtension 处理：
+      // editorProps 里的 handleClick 会先于插件 props 跑，这里吃掉就等于插件永远收不到事件
+      const clickTarget = event.target as HTMLElement | null
+      if (clickTarget?.closest?.('[data-wiki-title]')) {
+        return false
       }
 
       const coords = { left: event.clientX, top: event.clientY }
@@ -1657,6 +1895,7 @@ const editor = useEditor({
     },
   },
   onUpdate: ({ editor }) => {
+    scheduleCodeLangSync()
     if (isImeEditing()) {
       imeDebug('tiptap onUpdate deferred', {
         markdown: getEditorMarkdown(editor),
@@ -1671,6 +1910,8 @@ const editor = useEditor({
     emitEditorUpdate(editor)
   },
   onTransaction: ({ editor, transaction }) => {
+    // 组合进行中绝不改文档（会打断输入法）；等上屏后再由 scheduleCodeBlockRecovery 收尾
+    if (!(window as any).__imeComposing && imeCodeBlockGuard) restoreCodeBlockAfterIme()
     const activeCodeBlock = getActiveCodeBlockSnapshot(editor)?.codeBlock
     if (!activeCodeBlock && !isImeEditing() && !transaction.docChanged) return
 
@@ -1694,6 +1935,12 @@ const editor = useEditor({
     })
   }
 })
+
+// 双向链接：笔记新建 / 改名 / 删除后，重算 [[ ]] 的着色与「待创建」状态
+watch(
+  () => linkStore.revision,
+  () => refreshWikiLinks(editor.value?.view),
+)
 
 // 获取规格化的 Markdown：将 <url> 自动链接转为 [url](url) 显式链接
 const getNormalizedMarkdown = (): string => {
@@ -1777,6 +2024,93 @@ onMounted(async () => {
   // Esc 关闭 AI 预览面板
   window.addEventListener('keydown', handleAiPreviewEsc, true)
 
+  /* ----- TEMP: 中文输入法下代码块被销毁的现场抓取（定位后删除） ----- */
+  const imeTrace: any[] = []
+  const tracePush = (kind: string, extra: Record<string, unknown> = {}) => {
+    imeTrace.push({ at: Math.round(performance.now()), kind, ime: (window as any).__imeComposing === true, ...extra })
+    if (imeTrace.length > 150) imeTrace.shift()
+  }
+  const docOutline = (doc: any) => {
+    const out: string[] = []
+    doc.descendants((n: any, p: number) => {
+      out.push(n.type.name + '@' + p + (n.isText ? '=' + JSON.stringify(n.text) : ''))
+      return true
+    })
+    return out
+  }
+  const countCodeBlocks = (doc: any) => {
+    let n = 0
+    doc.descendants((node: any) => {
+      if (node.type.name === 'codeBlock') n += 1
+      return true
+    })
+    return n
+  }
+  let lastCodeBlockCount = -1
+  const dumpImeTrace = (reason: string, extra: Record<string, unknown> = {}) => {
+    const ed = editor.value
+    if (!ed) return
+    const payload = {
+      reason,
+      at: new Date().toISOString(),
+      outline: docOutline(ed.state.doc),
+      html: (ed.view.dom as HTMLElement).innerHTML.slice(0, 4000),
+      trace: imeTrace.slice(-90),
+      ...extra,
+    }
+    console.warn('[ime-trace] ' + reason, JSON.stringify(payload))
+  }
+  ;['keydown', 'compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input'].forEach((name) => {
+    document.addEventListener(
+      name,
+      (event: any) => {
+        tracePush(name, {
+          key: event.key,
+          keyCode: event.keyCode,
+          isComposing: event.isComposing,
+          data: typeof event.data === 'string' ? event.data : null,
+          inputType: event.inputType,
+          target: event.target?.nodeName,
+        })
+      },
+      true
+    )
+  })
+  const imeTraceHandler = ({ editor: ed, transaction }: any) => {
+    void transaction
+    const now = countCodeBlocks(ed.state.doc)
+    if (lastCodeBlockCount >= 0 && now < lastCodeBlockCount) {
+      dumpImeTrace('codeblock-drop', { before: lastCodeBlockCount, after: now })
+    }
+    lastCodeBlockCount = now
+  }
+  editor.value?.on('transaction', imeTraceHandler)
+  const imeDomCheck = window.setInterval(() => {
+    const ed = editor.value
+    if (!ed) return
+    const docCount = countCodeBlocks(ed.state.doc)
+    const domCount = ed.view.dom.querySelectorAll('pre').length
+    if (docCount !== domCount) {
+      tracePush('dom-mismatch', { docCount, domCount })
+      dumpImeTrace('dom-mismatch', { docCount, domCount })
+    }
+  }, 1200)
+  ;(window as any).__editor = editor.value
+  ;(window as any).__imeTraceDump = () => dumpImeTrace('manual')
+  ;(window as any).__imeTraceStop = () => {
+    window.clearInterval(imeDomCheck)
+    editor.value?.off('transaction', imeTraceHandler)
+  }
+
+  // 代码块语言按钮浮层：内容变化后重算坐标，滚动/缩放时也要重算
+  document.addEventListener('mousedown', handleCodeLangOutsideMouseDown, true)
+  window.addEventListener('mousemove', handleCodeLangPointerMove, { passive: true })
+  window.addEventListener('keydown', handleCodeLangEsc, true)
+  window.addEventListener('scroll', scheduleCodeLangSync, true)
+  window.addEventListener('resize', scheduleCodeLangSync)
+  await nextTick()
+  syncCodeLangPills()
+
   // 编辑器 DOM 上 capture 阶段拦截右键 mousedown，保存 ProseMirror 选区快照
   // 不调用 preventDefault/stopImmediatePropagation，让事件自然传播
   // macOS WebKit 会在 JS 事件分发前后通过原生层面修改 DOM 选区，
@@ -1791,21 +2125,6 @@ onMounted(async () => {
     editor.value.view.dom.addEventListener('mousedown', saveSelectionOnRightMousedown, true)
     ;(editor.value.view.dom as any)._saveSelectionOnRightMousedown = saveSelectionOnRightMousedown
   }
-
-  // 监听代码块语言变更
-  document.addEventListener('codeblock-language-change', ((e: CustomEvent) => {
-    const { pos, language } = e.detail
-    if (editor.value) {
-      const node = editor.value.state.doc.nodeAt(pos)
-      if (node && node.type.name === 'codeBlock') {
-        const tr = editor.value.state.tr.setNodeMarkup(pos, undefined, {
-          ...node.attrs,
-          language: language,
-        })
-        editor.value.view.dispatch(tr)
-      }
-    }
-  }) as EventListener)
 
   // 直接监听背景色变化并设置DOM样式（同时依赖 currentTheme，主题切换后要重算）
   watchEffect(() => {
@@ -1839,6 +2158,15 @@ onUnmounted(() => {
   document.removeEventListener('click', hideContextMenu)
   document.removeEventListener('mousedown', hideLinkPanelOnOutsideClick, true)
   window.removeEventListener('keydown', handleAiPreviewEsc, true)
+  document.removeEventListener('mousedown', handleCodeLangOutsideMouseDown, true)
+  window.removeEventListener('mousemove', handleCodeLangPointerMove)
+  window.removeEventListener('keydown', handleCodeLangEsc, true)
+  window.removeEventListener('scroll', scheduleCodeLangSync, true)
+  window.removeEventListener('resize', scheduleCodeLangSync)
+  if (codeLangSyncFrame) {
+    cancelAnimationFrame(codeLangSyncFrame)
+    codeLangSyncFrame = 0
+  }
 })
 
 defineExpose({
@@ -1879,7 +2207,12 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-wrapper" :class="{ 'is-locked': isLocked }" :style="adaptedNoteBg ? { '--note-bg': adaptedNoteBg } : undefined" @click="handleWrapperClick">
+  <div
+    class="tiptap-wrapper"
+    :class="{ 'is-locked': isLocked }"
+    :style="adaptedNoteBg ? { '--note-bg': adaptedNoteBg } : undefined"
+    @click="handleWrapperClick"
+  >
     <!-- AI 结果预览：先生成到面板，确认后才写入笔记 -->
     <Teleport to="body">
       <div v-if="aiPreviewVisible" class="ai-preview">
@@ -2183,6 +2516,52 @@ defineExpose({
         <button class="link-panel-btn link-panel-btn--primary" @click="applyLink">{{ $t('editor.linkConfirm') }}</button>
         <button class="link-panel-btn" @click="closeLinkPanel">{{ $t('common.cancel') }}</button>
       </div>
+    </Teleport>
+
+    <!-- 代码块语言选择器：body 浮层，不进 ProseMirror 文档 -->
+    <Teleport to="body">
+      <template v-if="!isLocked">
+        <div
+          v-for="pill in codeLangPills"
+          :key="pill.pos"
+          class="code-lang-pill"
+          :class="{ 'is-visible': pill.pos === codeLangHoverPos || pill.pos === codeLangOpenPos }"
+          :style="{ top: pill.box.bottom - 6 + 'px', left: pill.box.right - 10 + 'px' }"
+          @mousedown.stop
+          @click.stop
+        >
+          <button
+            type="button"
+            class="code-lang-trigger"
+            @mousedown.stop.prevent="toggleCodeLangPill(pill.pos)"
+          >{{ displayNameOf(pill.language) }}</button>
+          <div
+            v-if="pill.pos === codeLangOpenPos"
+            class="code-lang-pop"
+            :class="{ 'is-up': codeLangPopUp }"
+            @mousedown.stop
+            @click.stop
+          >
+            <input
+              v-model="codeLangQuery"
+              class="code-lang-search"
+              type="text"
+              spellcheck="false"
+              placeholder="搜索语言..."
+              @keydown.esc.prevent.stop="closeCodeLangPill"
+            />
+            <div class="code-lang-list">
+              <div
+                v-for="lang in codeLangOptions"
+                :key="lang.id"
+                class="code-lang-item"
+                :class="{ 'is-active': lang.id === pill.language }"
+                @click="applyCodeLang(lang.id)"
+              >{{ lang.name }}</div>
+            </div>
+          </div>
+        </div>
+      </template>
     </Teleport>
   </div>
 </template>
@@ -2799,15 +3178,24 @@ defineExpose({
   display: block;
 }
 
-/* 代码块语言选择器样式 */
-:deep(.code-block-language-selector) {
-  position: absolute;
-  bottom: -32px;
-  right: 0;
-  z-index: 10;
+/* 代码块语言选择器：body 浮层（Teleport），坐标由代码块矩形算出 */
+.code-lang-pill {
+  position: fixed;
+  z-index: 900;
+  transform: translate(-100%, -100%);
+  /* 平时淡显（能看见、但点不到），鼠标进到代码块才实心可点 */
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
-:deep(.code-block-lang-btn) {
+/* 悬停代码块或下拉展开时才显示，避免遮挡代码 */
+.code-lang-pill.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.code-lang-trigger {
   padding: 4px 10px;
   border: none;
   border-radius: 4px;
@@ -2815,36 +3203,38 @@ defineExpose({
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
-:deep(.tiptap pre:hover .code-block-lang-btn) {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-:deep(.code-block-lang-btn:hover) {
+.code-lang-trigger:hover {
   background: rgba(255, 255, 255, 0.2);
   color: var(--color-text);
 }
 
-:deep(.code-block-lang-dropdown) {
+.code-lang-pop {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 6px);
   right: 0;
-  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-height: 300px;
+  overflow: hidden;
   background: var(--color-popup-bg, #2a2a2a);
   border: 1px solid var(--color-popup-border, rgba(255, 255, 255, 0.1));
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-  min-width: 200px;
-  max-height: 300px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
-:deep(.code-block-lang-search) {
+/* 下方空间不够时翻到按钮上方 */
+.code-lang-pop.is-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.code-lang-search {
   padding: 8px 12px;
   border: none;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -2855,17 +3245,17 @@ defineExpose({
   width: 100%;
 }
 
-:deep(.code-block-lang-search::placeholder) {
+.code-lang-search::placeholder {
   color: var(--color-text-secondary);
 }
 
-:deep(.code-block-lang-list) {
+.code-lang-list {
   overflow-y: auto;
   max-height: 250px;
   padding: 4px 0;
 }
 
-:deep(.code-block-lang-item) {
+.code-lang-item {
   padding: 6px 12px;
   cursor: pointer;
   font-size: 13px;
@@ -2873,11 +3263,11 @@ defineExpose({
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-:deep(.code-block-lang-item:hover) {
+.code-lang-item:hover {
   background: var(--color-popup-hover, rgba(255, 255, 255, 0.1));
 }
 
-:deep(.code-block-lang-item.active) {
+.code-lang-item.is-active {
   background: var(--color-primary);
   color: white;
 }
@@ -2949,8 +3339,7 @@ defineExpose({
 
 /* 锁定状态下隐藏悬浮条和代码块按钮 */
 .tiptap-wrapper.is-locked .bubble-menu,
-.tiptap-wrapper.is-locked .code-block-copy-btn,
-.tiptap-wrapper.is-locked .code-block-lang-btn {
+.tiptap-wrapper.is-locked .code-block-copy-btn {
   display: none !important;
 }
 

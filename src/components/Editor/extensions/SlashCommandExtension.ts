@@ -15,7 +15,7 @@ const POPUP_GAP = 8
 // 更新弹出框位置的辅助函数
 // 光标靠近窗口底部时，菜单会被窗口下沿裁掉，所以下方放不下就翻到光标上方，
 // 上下都放不下时再夹在可视区内（同时限高，超出的部分在菜单内部滚动）。
-function updatePopupPosition(popup: HTMLElement | null, props: any) {
+export function updatePopupPosition(popup: HTMLElement | null, props: any) {
   if (!popup) return
 
   const { clientRect } = props
@@ -27,19 +27,35 @@ function updatePopupPosition(popup: HTMLElement | null, props: any) {
   const viewportW = window.innerWidth
   const viewportH = window.innerHeight
 
+  const viewportMax = Math.max(160, viewportH - POPUP_GAP * 2)
+
   popup.style.position = 'fixed'
   popup.style.zIndex = '9999'
-  popup.style.maxHeight = `${Math.max(120, viewportH - POPUP_GAP * 2)}px`
+  popup.style.maxHeight = `${viewportMax}px`
+  // 空间实在不够时让弹窗自己能滚，而不是被裁掉看不见
+  popup.style.overflowY = 'auto'
+  popup.style.overflowX = 'hidden'
 
   // 首次定位时内容刚挂上去，量一次实际尺寸
   const width = popup.offsetWidth || 240
   const height = popup.offsetHeight || 260
 
-  let top = rect.bottom + POPUP_GAP
-  if (top + height > viewportH - POPUP_GAP) {
-    const above = rect.top - POPUP_GAP - height
-    top = above >= POPUP_GAP ? above : Math.max(POPUP_GAP, viewportH - POPUP_GAP - height)
+  const spaceBelow = viewportH - POPUP_GAP - (rect.bottom + POPUP_GAP)
+  const spaceAbove = rect.top - POPUP_GAP * 2
+
+  let top: number
+  let available: number
+  // 下方放得下（或下方更宽敞）就往下弹，否则翻到上方，并把高度限在这一侧的空间内
+  if (spaceBelow >= Math.min(height, 320) || spaceBelow >= spaceAbove) {
+    available = spaceBelow
+    top = rect.bottom + POPUP_GAP
+  } else {
+    available = spaceAbove
+    const h = Math.min(height, Math.max(160, spaceAbove))
+    top = Math.max(POPUP_GAP, rect.top - POPUP_GAP - h)
   }
+
+  popup.style.maxHeight = `${Math.max(160, Math.min(available, viewportMax))}px`
 
   const left = Math.min(
     Math.max(POPUP_GAP, rect.left),
@@ -48,6 +64,13 @@ function updatePopupPosition(popup: HTMLElement | null, props: any) {
 
   popup.style.left = `${left}px`
   popup.style.top = `${top}px`
+}
+
+// 最近一次 suggestion 的位置信息（含 clientRect），供菜单内部换模式后重新定位
+let lastSuggestionProps: any = null
+
+export function getSlashPopupAnchor(): any {
+  return lastSuggestionProps
 }
 
 export function createSlashCommand() {
@@ -99,6 +122,7 @@ export function createSlashCommand() {
 
             return {
               onStart: (props: any) => {
+                lastSuggestionProps = props
                 // 创建容器
                 popup = document.createElement('div')
                 popup.className = 'slash-command-popup'
@@ -109,6 +133,8 @@ export function createSlashCommand() {
                   props: {
                     ...props,
                     range: props.range,
+                    // 换模式 / 列表高度变化后重新量一次，弹窗才不会顶出窗口下沿
+                    onReposition: () => updatePopupPosition(popup, lastSuggestionProps ?? props),
                   },
                   editor: props.editor,
                 })
@@ -124,10 +150,12 @@ export function createSlashCommand() {
               },
 
               onUpdate: (props: any) => {
+                lastSuggestionProps = props
                 // 更新props，包括range
                 component?.updateProps({
                   ...props,
                   range: props.range,
+                  onReposition: () => updatePopupPosition(popup, lastSuggestionProps ?? props),
                 })
                 // 通知组件更新过滤
                 component?.ref?.onQueryUpdate?.(props.query)
