@@ -216,6 +216,10 @@ export default {
   'settings.downloading': '下载中 {progress}%',
   'settings.upToDate': '已是最新版本 (v{version})',
   'settings.versionTags': '版本标签',
+  'settings.userGuide': '使用教程',
+  'guide.hint': '第一次用？第 1、2 节三分钟看完就能上手，剩下的按需回来翻。',
+  'guide.foot': '随时可以重看：设置 → 关于 → 使用教程',
+  'guide.close': '知道了',
 
   'settings.privacyTitle': '隐私与承诺',
   'settings.privacyIntro': 'MaikNote 是本地优先的笔记工具，下面这些不是宣传语，是会一直守住的底线：',

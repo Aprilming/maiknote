@@ -25,6 +25,7 @@ import SearchPage from '@/components/Search/SearchPage.vue'
 import FileTree from '@/components/Sidebar/FileTree.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import PrivacyWelcome from '@/components/common/PrivacyWelcome.vue'
+import GuidePanel from '@/components/Guide/GuidePanel.vue'
 
 // Initialize stores and composables
 const noteStore = useNoteStore()
@@ -69,6 +70,27 @@ function acknowledgePrivacy() {
   settingStore.updateSettings('privacyAcknowledged', true)
 }
 
+/** 内置使用教程：第一次启动自动弹一次；设置 → 关于 → 使用教程 可随时再看 */
+const showGuide = ref(false)
+
+function closeGuide() {
+  showGuide.value = false
+  settingStore.updateSettings('guideSeen', true)
+}
+
+function openGuide() {
+  showGuide.value = true
+}
+
+// 隐私承诺先看完，再看教程，两个弹层不叠在一起
+watch(
+  () => settingStore.settings.privacyAcknowledged,
+  (acknowledged) => {
+    if (acknowledged && !settingStore.settings.guideSeen) showGuide.value = true
+  },
+  { immediate: true },
+)
+
 function handleSidebarResize(width: number) {
   sidebarWidth.value = clampSidebarWidth(width)
   localStorage.setItem('sidebar.width', String(sidebarWidth.value))
@@ -80,9 +102,11 @@ function handleToggleSidebarEvent() {
 }
 onMounted(() => {
   window.addEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
+  window.addEventListener('marknote:open-guide', openGuide)
 })
 onUnmounted(() => {
   window.removeEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
+  window.removeEventListener('marknote:open-guide', openGuide)
 })
 // 初始化完成标志，防止开机自启时iCloud未准备好导致空白
 const isAppReady = ref(false)
@@ -346,6 +370,9 @@ onUnmounted(() => {
       v-if="!settingStore.settings.privacyAcknowledged"
       @acknowledge="acknowledgePrivacy"
     />
+
+    <!-- 内置使用教程：第一次启动自动弹一次，关掉后不再自动出现 -->
+    <GuidePanel v-if="showGuide" @close="closeGuide" />
 
     <!-- 应用内确认框：WKWebView 不支持 window.confirm，统一走这里 -->
     <ConfirmDialog />

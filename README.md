@@ -22,6 +22,10 @@
 
 官网与下载：[maiknote.91kfc.vip](https://maiknote.91kfc.vip)
 
+📘 **使用教程**：[在线版 maiknote.91kfc.vip/guide.html](https://maiknote.91kfc.vip/guide.html) · [仓库内 TUTORIAL.md](TUTORIAL.md) — 一页看完：快捷键、收藏、置顶、AI。
+
+> 教程也内置在 App 里：**第一次启动会自动弹出**，之后随时从 **设置 → 关于 → 使用教程** 再看。
+
 ## 设计理念
 
 **召之即来，挥之即去** · 全局快捷键随时唤起 / 隐藏 ｜ **所见即所得** · 实时渲染 Markdown，无需切换预览 ｜ **如无必要，勿增实体** · 极简界面，专注内容本身

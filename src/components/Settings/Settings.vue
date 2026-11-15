@@ -690,6 +690,11 @@ function openBaiduKeyPage() {
   openUrl('https://www.mcpworld.com/zh/detail/cKWidcA4kbFuEMzK9HrbP6')
 }
 
+/** 打开内置使用教程：面板挂在 App.vue 上，这里只派发事件 */
+function openUserGuide() {
+  window.dispatchEvent(new Event('marknote:open-guide'))
+}
+
 function getPromptPreview(prompt: string): string {
   const chars = [...prompt]
   return chars.length > 50 ? chars.slice(0, 50).join('') + '...' : prompt
@@ -2023,6 +2028,11 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
           </div>
 
           <div class="setting-item links-item">
+            <a href="#" class="link-item" @click.prevent="openUserGuide">
+              <i class="i-mdi-book-open-variant"></i>
+              <span>{{ $t('settings.userGuide') }}</span>
+              <i class="i-mdi-chevron-right link-icon"></i>
+            </a>
             <a :href="tagsUrl" target="_blank" class="link-item">
               <i class="i-mdi-tag-outline"></i>
               <span>{{ $t('settings.versionTags') }}</span>

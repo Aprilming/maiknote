@@ -144,6 +144,7 @@ export interface AppSettings {
   edgeStripColor: string // 贴边小白条的颜色（#rrggbb）
   edgeCopyOnSelect: boolean // 边缘面板里选中文字后是否自动复制
   privacyAcknowledged: boolean // 首次启动的隐私承诺页是否已确认（只用于判断要不要再弹一次）
+  guideSeen: boolean // 首次启动内置使用教程是否已经自动弹过（只用于判断要不要再弹一次）
   desktopNotes: string[] // 钉在桌面上的笔记 id（每篇一个常驻桌面卡片窗口）
   desktopNoteLevel: DesktopNoteLevel // 桌面卡片层级：top=浮在最上层 / normal=普通图层 / desktop=贴桌面
   desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
@@ -203,6 +204,7 @@ export const useSettingStore = defineStore('setting', () => {
     edgeStripColor: '#ffffff',
     edgeCopyOnSelect: true,
     privacyAcknowledged: false,
+    guideSeen: false,
     desktopNotes: [],
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
@@ -393,6 +395,7 @@ export const useSettingStore = defineStore('setting', () => {
       edgeStripColor: '#ffffff',
       edgeCopyOnSelect: true,
     privacyAcknowledged: false,
+    guideSeen: false,
       desktopNotes: [],
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},

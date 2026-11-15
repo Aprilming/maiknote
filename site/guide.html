@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<!-- 由 scripts/build-guide.mjs 从 TUTORIAL.md 生成，改内容请改 TUTORIAL.md 后重新生成 -->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MaikNote 快速上手 — MaikNote</title>
+<meta name="description" content="MaikNote 使用教程：安装、上手、写笔记、窗口玩法、AI、数据位置、设置与快捷键，随时回来翻。" />
+<link rel="icon" href="assets/img/icon-32.png" />
+<link rel="apple-touch-icon" href="assets/img/icon-128.png" />
+<link rel="stylesheet" href="assets/styles.css?v=3" />
+<style>
+  .doc-shell {
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);
+    gap: 52px;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 44px 24px 120px;
+  }
+  .doc-toc { position: sticky; top: 78px; align-self: start; font-size: 14px; }
+  .doc-toc-title {
+    margin: 0 0 10px; padding: 0 10px;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
+  }
+  .doc-toc nav { display: flex; flex-direction: column; gap: 2px; }
+  .doc-toc a {
+    display: block; padding: 6px 10px; border-radius: 9px;
+    color: var(--muted); line-height: 1.45;
+    border-left: 2px solid transparent;
+    transition: color .18s, background .18s, border-color .18s;
+  }
+  .doc-toc a:hover { color: var(--text); background: var(--panel); }
+  .doc-toc a.is-active { color: var(--text); border-left-color: var(--accent); background: var(--panel); }
+  .doc-top {
+    display: inline-block; margin: 18px 0 0 10px; font-size: 13px; color: var(--faint);
+  }
+  .doc-top:hover { color: var(--accent); }
+
+  .doc { min-width: 0; }
+  .doc h1 { font-size: 34px; line-height: 1.25; margin: 0 0 10px; letter-spacing: -.01em; }
+  .doc h2 {
+    font-size: 22px; margin: 46px 0 14px; padding-top: 22px;
+    border-top: 1px solid var(--line-soft); scroll-margin-top: 84px;
+  }
+  .doc h2:first-of-type { border-top: none; padding-top: 0; margin-top: 34px; }
+  .doc h3 { font-size: 16.5px; margin: 26px 0 10px; color: var(--text); }
+  .doc p { margin: 12px 0; color: var(--muted); }
+  .doc li { color: var(--muted); margin: 5px 0; }
+  .doc li > strong, .doc p > strong { color: var(--text); }
+  .doc ul, .doc ol { padding-left: 22px; margin: 12px 0; }
+  .doc a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .doc a:hover { text-decoration-color: var(--accent); }
+  .doc code {
+    background: rgba(255, 255, 255, .07); border: 1px solid var(--line-soft);
+    padding: 1px 6px; border-radius: 6px; color: var(--text); white-space: nowrap;
+  }
+  html[data-theme="light"] .doc code { background: rgba(0, 0, 0, .05); }
+  .doc pre {
+    background: #0b0d12; border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 18px; overflow-x: auto; margin: 16px 0; font-size: 13px; line-height: 1.6;
+  }
+  html[data-theme="light"] .doc pre { background: #f2f3f6; }
+  .doc pre code { background: none; border: none; padding: 0; white-space: pre; }
+  .doc blockquote {
+    margin: 16px 0; padding: 12px 18px; border-left: 3px solid var(--accent);
+    background: var(--panel); border-radius: 0 12px 12px 0; color: var(--muted);
+  }
+  .doc blockquote p { margin: 4px 0; }
+  .doc-table { overflow-x: auto; margin: 16px 0; }
+  .doc table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  .doc th, .doc td { border-bottom: 1px solid var(--line-soft); padding: 9px 12px; text-align: left; color: var(--muted); }
+  .doc th { color: var(--text); font-weight: 600; white-space: nowrap; }
+  .doc tr:last-child td { border-bottom: none; }
+  .doc hr { border: none; border-top: 1px solid var(--line-soft); margin: 28px 0; }
+
+  @media (max-width: 900px) {
+    .doc-shell { grid-template-columns: 1fr; gap: 26px; padding-top: 26px; }
+    .doc-toc { position: static; border: 1px solid var(--line); border-radius: 14px; padding: 14px 10px; background: var(--panel); }
+    .doc-toc nav { flex-direction: row; flex-wrap: wrap; }
+    .doc-toc a { border-left: none; background: var(--panel-solid); }
+    .doc h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body class="doc-body">
+
+<header class="nav" id="nav">
+  <a class="brand" href="index.html">
+    <img src="assets/img/icon-128.png" alt="MaikNote 图标" width="26" height="26" />
+    <span>MaikNote</span>
+  </a>
+  <nav class="nav-links">
+    <a href="index.html#features">功能</a>
+    <a href="index.html#ai">AI</a>
+    <a href="index.html#shortcuts">快捷键</a>
+    <a href="index.html#download">下载</a>
+    <a href="guide.html" class="is-current">教程</a>
+  </nav>
+  <div class="nav-actions">
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题" title="切换浅色 / 深色">
+      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path class="i-moon" d="M12.7 3a8.5 8.5 0 1 0 8.3 10.6 6.8 6.8 0 0 1-8.3-10.6Z" fill="currentColor"/><circle class="i-sun" cx="12" cy="12" r="4.2" fill="currentColor"/></svg>
+    </button>
+    <a class="btn btn-sm" href="index.html#download">下载</a>
+  </div>
+</header>
+
+<main class="doc-shell">
+  <aside class="doc-toc">
+    <p class="doc-toc-title">目录</p>
+    <nav id="docToc">
+        <a href="#guide-s1">1. 一个键叫出来</a>
+        <a href="#guide-s2">2. 快捷键</a>
+        <a href="#guide-s3">3. 收藏</a>
+        <a href="#guide-s4">4. 置顶（Pin）</a>
+        <a href="#guide-s5">5. AI</a>
+    </nav>
+    <a class="doc-top" href="#top">↑ 回到顶部</a>
+  </aside>
+
+  <article class="doc" id="top">
+<blockquote>
+<p>一页看完：<strong>快捷键、收藏、置顶（Pin）、AI</strong>。剩下的自己摸，忘了回来翻。</p>
+<p>三种看法一样：App 内「设置 → 关于 → 使用教程」（第一次启动自动弹）、网页版 <a href="https://maiknote.91kfc.vip/guide.html">https://maiknote.91kfc.vip/guide.html</a>、仓库里的 <a href="https://github.com/Aprilming/maiknote/blob/main/TUTORIAL.md">TUTORIAL.md</a>。</p>
+</blockquote>
+<h2 id="guide-s1">1. 一个键叫出来</h2>
+<p><code>Option + Cmd + A</code>：唤出 / 收起。别处点一下它就自动收走，不留窗口在桌面上。</p>
+<h2 id="guide-s2">2. 快捷键</h2>
+<p>记这 8 个就够了，全部可在 <strong>设置 → 快捷键</strong> 改：</p>
+<div class="doc-table"><table>
+<thead>
+<tr>
+<th>快捷键</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Option + Cmd + A</code></td>
+<td>显示 / 隐藏（全局，应用在后台也生效）</td>
+</tr>
+<tr>
+<td><code>Cmd + N</code></td>
+<td>新建笔记</td>
+</tr>
+<tr>
+<td><code>Cmd + F</code></td>
+<td>搜标题和正文</td>
+</tr>
+<tr>
+<td><code>Cmd + [</code> / <code>Cmd + ]</code></td>
+<td>上一条 / 下一条笔记（触摸板双指左右滑动同效）</td>
+</tr>
+<tr>
+<td><code>Cmd + Shift + P</code></td>
+<td>置顶 / 取消置顶</td>
+</tr>
+<tr>
+<td><code>Cmd + Shift + D</code></td>
+<td>钉到桌面 / 收回</td>
+</tr>
+<tr>
+<td><code>Cmd + Backspace</code></td>
+<td>删除（进回收站，能捞回来）</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>关搜索、从设置返回</td>
+</tr>
+</tbody>
+</table></div>
+<p>顺手记两个不是快捷键的：<strong>行首输 <code>/</code></strong> 出命令菜单，<strong><code>[[</code></strong> 插笔记链接。</p>
+<h2 id="guide-s3">3. 收藏</h2>
+<ul>
+<li>左边文件列表里<strong>右键笔记 → 收藏</strong>；</li>
+<li>收藏的笔记集中在侧栏顶部「收藏笔记」分组，随点随开；</li>
+<li>鼠标贴到屏幕边缘的白条上，会滑出收藏面板（快捷键默认没设，想用去设置里绑一个）。</li>
+</ul>
+<h2 id="guide-s4">4. 置顶（Pin）</h2>
+<ul>
+<li><code>Cmd + Shift + P</code> 或标题栏那个图钉：置顶后窗口<strong>不再失焦自动收起</strong>，适合边查边写；</li>
+<li>取消置顶后是「继续显示」还是「直接隐藏」，在 <strong>设置 → 窗口</strong> 里选；</li>
+<li>想让笔记常驻桌面当便签：<code>Cmd + Shift + D</code> 钉成桌面卡片，能在桌面上勾待办。</li>
+</ul>
+<h2 id="guide-s5">5. AI</h2>
+<p><strong>先配一次</strong>：设置 → AI 设置，填 API URL（默认 DeepSeek，OpenAI 格式都兼容）、API Key、模型。</p>
+<p><strong>怎么用</strong></p>
+<ol>
+<li>选中文字再唤 AI，只改这一段；不选就处理整篇。</li>
+<li>右键 → 挑一个助手（自带「AI 优化」等模板，也能自己加）。</li>
+<li>结果先给你看，再决定：插入原文之后 / 替换选中 / 替换全文 / 丢掉。</li>
+<li>已经写进去的，<code>Cmd + Z</code> 能撤。</li>
+</ol>
+<p><strong>进阶两句</strong></p>
+<ul>
+<li>自定义助手：设置 → AI 设置 → 添加助手，写名称 + 提示词，需要查资料就勾联网（要百度 AppBuilder Key）。</li>
+<li>空行输 <code>/ip</code>，直接插入本机地址和出口 IP 归属地。</li>
+</ul>
+  </article>
+</main>
+
+<footer class="wrap" style="padding: 0 24px 60px; color: var(--faint); font-size: 13px;">
+  <p>教程内容与 App 版本同步更新；发现对不上的地方，直接在 GitHub 提 issue。</p>
+</footer>
+
+<script src="assets/main.js"></script>
+<script>
+  (() => {
+    const links = Array.from(document.querySelectorAll('#docToc a'));
+    const heads = links.map((a) => document.getElementById(a.getAttribute('href').slice(1))).filter(Boolean);
+    if (!heads.length || !('IntersectionObserver' in window)) return;
+    const mark = (id) => links.forEach((a) => a.classList.toggle('is-active', a.getAttribute('href') === '#' + id));
+    const io = new IntersectionObserver((entries) => {
+      const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length) mark(visible[0].target.id);
+    }, { rootMargin: '-84px 0px -70% 0px', threshold: 0 });
+    heads.forEach((h) => io.observe(h));
+  })();
+</script>
+</body>
+</html>

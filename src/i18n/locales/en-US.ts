@@ -216,6 +216,10 @@ export default {
   'settings.downloading': 'Downloading {progress}%',
   'settings.upToDate': 'Up to date (v{version})',
   'settings.versionTags': 'Version Tags',
+  'settings.userGuide': 'User Guide',
+  'guide.hint': 'New here? Sections 1 and 2 take three minutes; come back for the rest when you need it.',
+  'guide.foot': 'Reopen anytime: Settings → About → User Guide',
+  'guide.close': 'Got it',
 
   'settings.privacyTitle': 'Privacy & Promises',
   'settings.privacyIntro': 'MaikNote is a local-first notebook. These are not slogans — they are lines that will not move:',

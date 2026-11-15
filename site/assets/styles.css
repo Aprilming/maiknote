@@ -99,6 +99,7 @@ code, kbd, pre {
 .nav-links { display: flex; gap: 22px; font-size: 13.5px; color: var(--muted); }
 .nav-links a { transition: color .18s ease; }
 .nav-links a:hover { color: var(--text); }
+.nav-links a.is-current { color: var(--text); font-weight: 600; }
 
 .nav-actions { display: flex; align-items: center; gap: 10px; }
 
