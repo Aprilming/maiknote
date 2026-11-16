@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/settingStore'
 import type { EdgeNotePayload } from '@/composables/useEdgePanel'
 import { createPreviewMarkdown, toggleTaskLine } from '@/utils/markdownTasks'
+import { sanitizeHtml } from '@/utils/sanitizeHtml'
 
 const { t, locale } = useI18n()
 const settingStore = useSettingStore()
@@ -196,7 +197,7 @@ function renderMarkdown(content: string | undefined | null): string {
   if (mdCache.size > 80) mdCache.clear()
   let html: string
   try {
-    html = md.render(source)
+    html = sanitizeHtml(md.render(source))
   } catch {
     // 渲染炸了也别让整个面板空白，退化成纯文本
     html = `<pre>${source.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string)}</pre>`
@@ -248,6 +249,8 @@ async function toggleTask(note: EdgeNotePayload, checkbox: HTMLInputElement, eve
 }
 
 async function beginEdit(note: EdgeNotePayload, event?: MouseEvent) {
+  // 已锁定的笔记不允许在速记栏里改
+  if (note.isLocked) return
   // 双击任务复选框不算「进入编辑」，否则勾一下就把卡片变成编辑态
   if ((event?.target as HTMLElement | null)?.closest('input.md-task')) return
   event?.preventDefault()
@@ -281,10 +284,12 @@ async function commitEdit(note: EdgeNotePayload, event: FocusEvent) {
   contentDirty = false
   const el = event.target as HTMLElement | null
   if (!el) return
-  const text = (el.innerText || '').replace(/\u00a0/g, ' ').replace(/\s+$/, '')
+  // 编辑区里显示的是整段正文，提交时必须整段替换；
+  // 用 paste + selection 在正文被别处改过时匹配不到，就会把整篇追加到末尾（内容翻倍）
+  const text = (el.innerText || '').replace(/\u00a0/g, ' ')
   const current = note.content || ''
-  if (!text || text === current) return
-  await emit('maiknote:edit-note', { id: note.id, op: 'paste', text, selection: current })
+  if (text === current) return
+  await emit('maiknote:edit-note', { id: note.id, op: 'replace', text })
 }
 
 function cancelEdit(note: EdgeNotePayload, event: KeyboardEvent) {
@@ -1220,6 +1225,11 @@ onUnmounted(() => {
 
 .card-content.md :deep(.md-code-copy-done) {
   display: none;
+}
+
+.card-content.md :deep(.md-code-copy .md-code-copy-icon) {
+  width: 12px;
+  height: 12px;
 }
 
 .card-content.md :deep(.md-code-copy.is-copied) {

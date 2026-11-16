@@ -119,6 +119,10 @@ export const useNoteStore = defineStore('note', () => {
   const searchQuery = ref('')
   const navigationHint = ref<{ message: string; visible: boolean }>({ message: '', visible: false })
   const isLoading = ref(false)
+  // 连点切换空间时上一轮还没读完：等它结束再补读一轮，否则两次 reload 会互相吞掉
+  let reloadPending = false
+  // 当前 notes 属于哪个工作空间（loadNotes 结束时写入）：切空间时用来判断数据是否已经换成新空间的
+  const loadedWorkspaceId = ref<string>('')
   const loadError = ref<Error | null>(null)
   const filterDirectoryId = ref<string | null>(null) // null = root 目录
   const deletingNoteId = ref<string | null>(null) // 正在播放删除动画的笔记 ID
@@ -245,7 +249,10 @@ export const useNoteStore = defineStore('note', () => {
       clearTimeout(saveTimeout)
     }
 
-    saveTimeout = setTimeout(() => void runPendingSave(), 500) as unknown as number
+    // 保存节流跟随设置里的自动保存间隔，不再写死 500ms
+    const autoSaveInterval = useSettingStore().settings.autoSaveInterval
+    const delay = autoSaveInterval > 0 ? autoSaveInterval : 500
+    saveTimeout = setTimeout(() => void runPendingSave(), delay) as unknown as number
   }
 
   /** 立刻把待保存内容落盘（切换工作空间前必须调用，否则会写进新空间的目录） */
@@ -258,32 +265,72 @@ export const useNoteStore = defineStore('note', () => {
     await runPendingSave()
   }
 
+  // 正在跑的那一轮落盘。同一时刻只允许一轮：两轮并行会把同一个 metadata.json 写花
+  let saveRunning: Promise<void> | null = null
+
   async function runPendingSave(): Promise<void> {
     saveTimeout = null
-    // Save all pending notes
-    const notesToSave = Array.from(pendingSaveNotes)
-      .map(id => notes.value.find(n => n.id === id))
-      .filter((n): n is Note => n !== undefined)
 
-    for (const note of notesToSave) {
-      try {
-        await syncNoteFileToDisk(note)
-      } catch (e) {
-        console.error('Failed to save note to iCloud:', e)
-      }
+    if (saveRunning) {
+      // 已经有一轮在写：等它写完再接着排，绝不并发进同一个文件
+      await saveRunning
+      if (pendingSaveNotes.size === 0 && !metadataSavePending) return
+      return runPendingSave()
     }
 
-    // Save metadata if any note changed or metadata explicitly requested
-    if (notesToSave.length > 0 || metadataSavePending) {
-      try {
-        await saveMetadataToCloud()
-      } catch (e) {
-        console.error('Failed to save metadata to iCloud:', e)
+    saveRunning = (async () => {
+      // 每轮开头先把待写清单摘空再 await：await 期间新进来的改动留在集合里，
+      // 由下一圈循环接手，不会被这一轮的清理动作抹掉
+      while (pendingSaveNotes.size > 0 || metadataSavePending) {
+        const ids = Array.from(pendingSaveNotes)
+        pendingSaveNotes.clear()
+        const notesToSave = ids
+          .map(id => notes.value.find(n => n.id === id))
+          .filter((n): n is Note => n !== undefined)
+        const writeMetadata = metadataSavePending || notesToSave.length > 0
+        metadataSavePending = false
+
+        let failed = false
+
+        for (const note of notesToSave) {
+          try {
+            await syncNoteFileToDisk(note)
+          } catch (e) {
+            console.error('Failed to save note to iCloud:', e)
+            failed = true
+            // 写失败的重新排队，等末尾的定时器重试
+            pendingSaveNotes.add(note.id)
+          }
+        }
+
+        if (writeMetadata) {
+          try {
+            await saveMetadataToCloud()
+          } catch (e) {
+            console.error('Failed to save metadata to iCloud:', e)
+            failed = true
+            metadataSavePending = true
+          }
+        }
+
+        // 有失败的就不在这一圈里连着重试，避免磁盘满 / 权限问题时空转
+        if (failed) break
       }
+    })()
+
+    try {
+      await saveRunning
+    } finally {
+      saveRunning = null
     }
 
-    pendingSaveNotes.clear()
-    metadataSavePending = false
+    if (pendingSaveNotes.size > 0 || metadataSavePending) {
+      // 还有没落盘的（失败重排或这期间又改过），按自动保存间隔续排一轮
+      if (saveTimeout) clearTimeout(saveTimeout)
+      const autoSaveInterval = useSettingStore().settings.autoSaveInterval
+      const delay = autoSaveInterval > 0 ? autoSaveInterval : 500
+      saveTimeout = setTimeout(() => void runPendingSave(), delay) as unknown as number
+    }
   }
 
   /**
@@ -339,8 +386,13 @@ export const useNoteStore = defineStore('note', () => {
    * Load all notes from iCloud
    */
   async function loadNotes(): Promise<void> {
-    if (isLoading.value) return
+    if (isLoading.value) {
+      reloadPending = true
+      return
+    }
 
+    // 记下这批数据属于哪个空间（读的过程中用户可能又切走了，那时不能算成新空间的数据）
+    const loadingWorkspaceId = useWorkspaceStore().currentId
     isLoading.value = true
     loadError.value = null
 
@@ -404,7 +456,13 @@ export const useNoteStore = defineStore('note', () => {
       // Create initial note on error
       createNoteAtHead()
     } finally {
+      loadedWorkspaceId.value = loadingWorkspaceId
       isLoading.value = false
+      // 读的过程中切过空间：把被吞掉的那次 reload 补上
+      if (reloadPending) {
+        reloadPending = false
+        if (loadedWorkspaceId.value !== useWorkspaceStore().currentId) await reload()
+      }
     }
 
     // 启动后异步扫一遍磁盘，把 metadata 之外的残留文件找出来
@@ -707,8 +765,8 @@ export const useNoteStore = defineStore('note', () => {
       const previousTitle = note.title
       // 原地更新字段而非替换数组元素，避免每次内容变化都触发所有依赖 notes 的计算属性重算
       Object.assign(note, updates, { updatedAt: Date.now() })
-      // Update title if content changed
-      if (updates.content) {
+      // Update title if content changed（含清空：'' 也要重新算标题）
+      if (updates.content !== undefined) {
         const nextTitle = extractTitle(updates.content)
         if (nextTitle && nextTitle !== note.title) {
           note.title = nextTitle
@@ -1252,6 +1310,7 @@ export const useNoteStore = defineStore('note', () => {
     searchQuery,
     navigationHint,
     isLoading,
+    loadedWorkspaceId,
     loadError,
     filterDirectoryId,
     deletingNoteId,

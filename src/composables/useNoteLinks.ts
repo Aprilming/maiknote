@@ -154,7 +154,8 @@ export function replaceWikiLinkTitle(content: string, fromTitle: string, toTitle
   const to = toTitle.trim()
   if (!from || !to || from === to || content.indexOf('[[') === -1) return content
 
-  const re = new RegExp('\\[\\[\\s*' + escapeRegExp(from) + '\\s*(\\|[^\\[\\]\\n]*)?\\]\\]', 'g')
+  // 带 i：[[Note]] 也得匹配到 [[note]]，否则改大小写等于把链接断了
+  const re = new RegExp('\\[\\[\\s*' + escapeRegExp(from) + '\\s*(\\|[^\\[\\]\\n]*)?\\]\\]', 'gi')
   return content.replace(re, (_match: string, alias?: string) => `[[${to}${alias ?? ''}]]`)
 }
 

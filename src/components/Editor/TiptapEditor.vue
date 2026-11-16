@@ -48,6 +48,7 @@ import { EMPTY_LINE_MARK, EMPTY_LINE_CHAR, isEmptyLineMarkerText } from './empty
 import { EmptyLineNormalizer } from './extensions/EmptyLineNormalizer'
 import { readText } from '@tauri-apps/plugin-clipboard-manager'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { copyText } from '@/utils/clipboard'
 
 const lowlight = createLowlight(all)
@@ -245,10 +246,16 @@ function loadHighlightCss(theme: string) {
   }
   link.onerror = () => {
     console.warn(`Failed to load highlight.js theme: ${theme}, falling back to default`)
-    // 加载默认主题作为后备
+    // 加载失败的 link 留在 head 里会一直占位，先摘掉
+    link.remove()
+    // 加载默认主题作为后备，并把它记成当前主题，
+    // 否则下次切主题时这个后备样式不会被移除，两套主题叠在一起
     const defaultLink = document.createElement('link')
     defaultLink.rel = 'stylesheet'
     defaultLink.href = 'highlight.js/styles/default.css'
+    defaultLink.onload = () => {
+      currentHighlightCss = defaultLink
+    }
     document.head.appendChild(defaultLink)
   }
   document.head.appendChild(link)
@@ -922,11 +929,17 @@ async function callAI(assistantId: string) {
     }
   }
 
+  // 走 Tauri 的 http 插件发请求：浏览器原生 fetch 会被 CORS 挡死（模型服务不返跨域头）。
+  // 纯 Web 调试（没有 __TAURI_INTERNALS__）时退回原生 fetch。
+  const aiFetch = typeof (window as any).__TAURI_INTERNALS__ === 'undefined'
+    ? (fetch as unknown as typeof tauriFetch)
+    : tauriFetch
+
   aiAbortController = new AbortController()
   const signal = aiAbortController.signal
 
   try {
-    const response = await fetch(`${settingStore.settings.aiUrl}`, {
+    const response = await aiFetch(`${settingStore.settings.aiUrl}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1124,10 +1137,17 @@ async function copyAiPreview() {
 /* ----- 链接交互 ----- */
 
 // 补全协议：用户可能只敲 example.com
+// 带协议但不是下面这几个的一律拒绝——file: 能落到本地文件，javascript: 直接执行，
+// 其余自定义 scheme 会被系统丢给别的 App，都不该从笔记链接里触发
 const normalizeHref = (raw: string): string => {
   const value = (raw || '').trim()
   if (!value) return ''
-  if (/^(https?:|mailto:|tel:|file:|#)/i.test(value)) return value
+  // 判协议前去掉中间的空白和控制字符，防 "java\nscript:" 这类变形
+  const probe = value.replace(/[\u0000-\u0020]/g, '')
+  if (/^(https?:|mailto:|tel:|#)/i.test(probe)) return value
+  // host:port 形式的裸域名（localhost:3000）不算协议，照样补 https
+  if (/^[a-z0-9.-]+:\d/i.test(probe)) return `https://${value}`
+  if (/^[a-z][a-z0-9+.-]*:/i.test(probe)) return ''
   return `https://${value}`
 }
 
@@ -2593,10 +2613,20 @@ const editor = useEditor({
       const text = clipboardData.getData('text/plain')
       if (text && /\[([^\]]+)\]\(([^)]+)\)/.test(text)) {
         event.preventDefault()
-        const html = text.replace(
-          /\[([^\]]+)\]\(([^)]+)\)/g,
-          '<a href="$2">$1</a>'
-        )
+        // 剪贴板文本是自己拼的 HTML，先转义再拼 <a>，
+        // 否则正文里混一段 <img onerror> 会被当成富文本直接灌进编辑器
+        const escapeAttr = (value: string) =>
+          value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
+        const html = text
+          .split(/\r?\n/)
+          .map((line) => {
+            const escaped = escapeAttr(line)
+            return escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, href: string) => {
+              const safeHref = /^\s*(javascript|vbscript|data):/i.test(href) ? '#' : href
+              return `<a href="${safeHref}">${label}</a>`
+            })
+          })
+          .join('<br>')
         editor.value?.commands.insertContent(html)
         return true
       }
@@ -2804,84 +2834,6 @@ onMounted(async () => {
   // Esc 关闭 AI 预览面板
   window.addEventListener('keydown', handleAiPreviewEsc, true)
 
-  /* ----- TEMP: 中文输入法下代码块被销毁的现场抓取（定位后删除） ----- */
-  const imeTrace: any[] = []
-  const tracePush = (kind: string, extra: Record<string, unknown> = {}) => {
-    imeTrace.push({ at: Math.round(performance.now()), kind, ime: (window as any).__imeComposing === true, ...extra })
-    if (imeTrace.length > 150) imeTrace.shift()
-  }
-  const docOutline = (doc: any) => {
-    const out: string[] = []
-    doc.descendants((n: any, p: number) => {
-      out.push(n.type.name + '@' + p + (n.isText ? '=' + JSON.stringify(n.text) : ''))
-      return true
-    })
-    return out
-  }
-  const countCodeBlocks = (doc: any) => {
-    let n = 0
-    doc.descendants((node: any) => {
-      if (node.type.name === 'codeBlock') n += 1
-      return true
-    })
-    return n
-  }
-  let lastCodeBlockCount = -1
-  const dumpImeTrace = (reason: string, extra: Record<string, unknown> = {}) => {
-    const ed = editor.value
-    if (!ed) return
-    const payload = {
-      reason,
-      at: new Date().toISOString(),
-      outline: docOutline(ed.state.doc),
-      html: (ed.view.dom as HTMLElement).innerHTML.slice(0, 4000),
-      trace: imeTrace.slice(-90),
-      ...extra,
-    }
-    console.warn('[ime-trace] ' + reason, JSON.stringify(payload))
-  }
-  ;['keydown', 'compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input'].forEach((name) => {
-    document.addEventListener(
-      name,
-      (event: any) => {
-        tracePush(name, {
-          key: event.key,
-          keyCode: event.keyCode,
-          isComposing: event.isComposing,
-          data: typeof event.data === 'string' ? event.data : null,
-          inputType: event.inputType,
-          target: event.target?.nodeName,
-        })
-      },
-      true
-    )
-  })
-  const imeTraceHandler = ({ editor: ed, transaction }: any) => {
-    void transaction
-    const now = countCodeBlocks(ed.state.doc)
-    if (lastCodeBlockCount >= 0 && now < lastCodeBlockCount) {
-      dumpImeTrace('codeblock-drop', { before: lastCodeBlockCount, after: now })
-    }
-    lastCodeBlockCount = now
-  }
-  editor.value?.on('transaction', imeTraceHandler)
-  const imeDomCheck = window.setInterval(() => {
-    const ed = editor.value
-    if (!ed) return
-    const docCount = countCodeBlocks(ed.state.doc)
-    const domCount = ed.view.dom.querySelectorAll('pre').length
-    if (docCount !== domCount) {
-      tracePush('dom-mismatch', { docCount, domCount })
-      dumpImeTrace('dom-mismatch', { docCount, domCount })
-    }
-  }, 1200)
-  ;(window as any).__editor = editor.value
-  ;(window as any).__imeTraceDump = () => dumpImeTrace('manual')
-  ;(window as any).__imeTraceStop = () => {
-    window.clearInterval(imeDomCheck)
-    editor.value?.off('transaction', imeTraceHandler)
-  }
-
   // 代码块语言按钮浮层：内容变化后重算坐标，滚动/缩放时也要重算
   document.addEventListener('mousedown', handleCodeLangOutsideMouseDown, true)
   window.addEventListener('mousemove', handleCodeLangPointerMove, { passive: true })
@@ -2925,14 +2877,12 @@ onUnmounted(() => {
     clearTimeout(imeUpdateTimer)
     imeUpdateTimer = null
   }
+  // 先取出 DOM 和回调，再 destroy：destroy 之后 view.dom 已经被拆掉，读不到挂着的回调
+  const editorDom = editor.value?.view.dom as any
+  const saveSelectionOnRightMousedown = editorDom?._saveSelectionOnRightMousedown
   editor.value?.destroy()
-  // 清理编辑器 DOM 级别的右键选区保存
-  if (editor.value && (editor.value.view.dom as any)._saveSelectionOnRightMousedown) {
-    editor.value.view.dom.removeEventListener(
-      'mousedown',
-      (editor.value.view.dom as any)._saveSelectionOnRightMousedown,
-      true
-    )
+  if (editorDom && saveSelectionOnRightMousedown) {
+    editorDom.removeEventListener('mousedown', saveSelectionOnRightMousedown, true)
   }
   document.removeEventListener('contextmenu', handleContextMenu, true)
   document.removeEventListener('click', hideContextMenu)

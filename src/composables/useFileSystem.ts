@@ -44,17 +44,35 @@ export function useFileSystem() {
    * Read metadata.json file
    */
   async function readMetadata(): Promise<NoteMetadata> {
+    let content: string
     try {
       const path = await getMetaPath()
-      const content = await safeInvoke<string>('read_metadata', { basePath: path })
-      return JSON.parse(content)
+      content = await safeInvoke<string>('read_metadata', { basePath: path })
     } catch (e) {
-      // If file doesn't exist or not in Tauri, return empty metadata
+      // 读不到（文件还没建、或不在 Tauri 里）：当作全新安装
       console.error('Failed to read metadata, creating new:', e)
       return {
         version: 1,
         notes: [],
       }
+    }
+
+    // 空文件同样是"还没有索引"，不是损坏
+    if (!content || !content.trim()) {
+      return {
+        version: 1,
+        notes: [],
+      }
+    }
+
+    try {
+      return JSON.parse(content) as NoteMetadata
+    } catch (e) {
+      // 解析失败 = 索引已经损坏。这里绝不能静默返回空索引：下一次保存会把
+      // 真实索引覆盖成空表，笔记文件从此变成无主孤儿。往上抛，让初始化停在
+      // 错误态（Rust 侧覆盖前还会备份成 metadata.bak.json）。
+      console.error('metadata.json is corrupted, refusing to fall back to empty index:', e)
+      throw new Error('metadata.json 内容损坏，已停止加载以免覆盖笔记索引')
     }
   }
 

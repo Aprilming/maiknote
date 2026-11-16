@@ -8,6 +8,8 @@ import {
 } from 'unocss'
 
 export default defineConfig({
+  // 图标类名写在 .ts 的模板字符串里，扫描器看不见，必须显式安全列出
+  safelist: ['i-mdi-content-copy', 'i-mdi-check'],
   presets: [
     presetUno(),
     presetAttributify(),

@@ -602,6 +602,14 @@ pub(crate) fn show_window_current_space_impl(app: &AppHandle) {
     }
 }
 
+/// 命令侧统一入口：校验前端传进来的工作空间根目录，返回规范化后的绝对路径。
+/// 落盘类命令都必须先过这一关，否则渲染进程可以直接往工作空间之外写/删文件。
+fn workspace_base(app: &AppHandle, base_path: &str) -> Result<String, String> {
+    Ok(workspace::ensure_path_allowed(app, &PathBuf::from(base_path))?
+        .to_string_lossy()
+        .to_string())
+}
+
 /// Get the iCloud path for storing notes
 #[tauri::command]
 async fn get_icloud_path() -> Result<String, String> {
@@ -629,8 +637,14 @@ async fn read_metadata(base_path: String) -> Result<String, String> {
 
 /// Write metadata.json file
 #[tauri::command]
-async fn write_metadata(base_path: String, content: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join("metadata.json");
+async fn write_metadata(app: AppHandle, base_path: String, content: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(&base).join("metadata.json");
+    // 覆盖前先留一份上一版索引：万一写进去的是空表或坏数据，还能从这里捞回来
+    if path.exists() {
+        let backup = PathBuf::from(&base).join("metadata.bak.json");
+        let _ = fs::copy(&path, &backup);
+    }
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
@@ -648,8 +662,9 @@ async fn read_directories(base_path: String) -> Result<String, String> {
 
 /// Write directories.json file
 #[tauri::command]
-async fn write_directories(base_path: String, content: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join("directories.json");
+async fn write_directories(app: AppHandle, base_path: String, content: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(&base).join("directories.json");
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
@@ -667,8 +682,9 @@ async fn read_assistants(base_path: String) -> Result<String, String> {
 
 /// Write assistants.json file
 #[tauri::command]
-async fn write_assistants(base_path: String, content: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join("assistants.json");
+async fn write_assistants(app: AppHandle, base_path: String, content: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(&base).join("assistants.json");
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
@@ -696,12 +712,30 @@ fn resolve_file_name(file_name: &str) -> String {
     format!("{}.md", safe)
 }
 
+/// 目录相对路径清洗：逐段去掉 `..`、空段和分隔符，只保留安全的子目录名。
+/// 目录名是从前端传进来的，直接 join 会让 `../../` 把写入点挪到工作空间之外。
+pub(crate) fn sanitize_rel_dir(dir: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for seg in dir.replace('\\', "/").split('/') {
+        let seg = seg.trim();
+        if seg.is_empty() || seg == "." || seg == ".." {
+            continue;
+        }
+        parts.push(sanitize_file_name(seg));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
 /// Build note file path: base/<目录相对路径>/<文件名>
 fn note_path(base_path: &str, dir: Option<&str>, file_name: &str) -> PathBuf {
     let mut path = PathBuf::from(base_path);
     if let Some(d) = dir {
-        if !d.trim().is_empty() {
-            path = path.join(d);
+        if let Some(safe) = sanitize_rel_dir(d) {
+            path = path.join(safe);
         }
     }
     path.join(resolve_file_name(file_name))
@@ -722,11 +756,13 @@ async fn read_note(base_path: String, dir: Option<String>, file_name: String) ->
 /// Write a single note file（目录 / 文件名都走真实名字）
 #[tauri::command]
 async fn write_note(
+    app: AppHandle,
     base_path: String,
     dir: Option<String>,
     file_name: String,
     content: String,
 ) -> Result<(), String> {
+    let base_path = workspace_base(&app, &base_path)?;
     let path = note_path(&base_path, dir.as_deref(), &file_name);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -779,7 +815,8 @@ fn move_to_trash(path: &std::path::Path) -> Result<String, String> {
 
 /// Delete a note file —— 移入系统废纸篓，可从废纸篓还原
 #[tauri::command]
-async fn delete_note(base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
+async fn delete_note(app: AppHandle, base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
+    let base_path = workspace_base(&app, &base_path)?;
     let path = note_path(&base_path, dir.as_deref(), &file_name);
 
     if !path.exists() {
@@ -791,8 +828,9 @@ async fn delete_note(base_path: String, dir: Option<String>, file_name: String) 
 
 /// 把任意文件移入系统废纸篓（用于清理磁盘残留笔记文件）
 #[tauri::command]
-async fn trash_file(path: String) -> Result<String, String> {
-    let p = PathBuf::from(&path);
+async fn trash_file(app: AppHandle, path: String) -> Result<String, String> {
+    // 路径来自前端（磁盘残留扫描结果），一样要落在工作空间之内才允许删
+    let p = workspace::ensure_path_allowed(&app, &PathBuf::from(&path))?;
     if !p.exists() {
         return Ok(String::new());
     }
@@ -880,17 +918,21 @@ async fn list_note_files(base_path: String) -> Result<Vec<NoteFileEntry>, String
 
 /// Create a directory folder for note organization
 #[tauri::command]
-async fn create_directory_folder(base_path: String, dir: String) -> Result<(), String> {
-    let path = PathBuf::from(base_path).join(&dir);
+async fn create_directory_folder(app: AppHandle, base_path: String, dir: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let safe_dir = sanitize_rel_dir(&dir).ok_or_else(|| "非法目录路径".to_string())?;
+    let path = PathBuf::from(base).join(safe_dir);
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
 /// Rename / move a directory folder（新旧都用相对路径）
 #[tauri::command]
-async fn rename_directory_folder(base_path: String, old_dir: String, new_dir: String) -> Result<(), String> {
-    let root = PathBuf::from(&base_path);
-    let old_path = root.join(&old_dir);
-    let new_path = root.join(&new_dir);
+async fn rename_directory_folder(app: AppHandle, base_path: String, old_dir: String, new_dir: String) -> Result<(), String> {
+    let root = PathBuf::from(workspace_base(&app, &base_path)?);
+    let safe_old = sanitize_rel_dir(&old_dir).ok_or_else(|| "非法目录路径".to_string())?;
+    let safe_new = sanitize_rel_dir(&new_dir).ok_or_else(|| "非法目录路径".to_string())?;
+    let old_path = root.join(safe_old);
+    let new_path = root.join(safe_new);
     if old_path == new_path || !old_path.exists() {
         return Ok(());
     }
@@ -902,15 +944,16 @@ async fn rename_directory_folder(base_path: String, old_dir: String, new_dir: St
 
 /// Delete a directory folder：.md 与子目录都上抬一级到父目录，然后删掉空文件夹
 #[tauri::command]
-async fn delete_directory_folder(base_path: String, dir: String, parent_dir: Option<String>) -> Result<(), String> {
-    let root = PathBuf::from(&base_path);
-    let dir_path = root.join(&dir);
+async fn delete_directory_folder(app: AppHandle, base_path: String, dir: String, parent_dir: Option<String>) -> Result<(), String> {
+    let root = PathBuf::from(workspace_base(&app, &base_path)?);
+    let safe_dir = sanitize_rel_dir(&dir).ok_or_else(|| "非法目录路径".to_string())?;
+    let dir_path = root.join(safe_dir);
     if !dir_path.exists() {
         return Ok(());
     }
-    let dest_dir = match parent_dir.as_deref() {
-        Some(p) if !p.trim().is_empty() => root.join(p),
-        _ => root.clone(),
+    let dest_dir = match parent_dir.as_deref().and_then(sanitize_rel_dir) {
+        Some(p) => root.join(p),
+        None => root.clone(),
     };
     fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
@@ -950,12 +993,14 @@ async fn delete_directory_folder(base_path: String, dir: String, parent_dir: Opt
 /// Move / rename a note file（目录与文件名都用真实名字）
 #[tauri::command]
 async fn move_note_file(
+    app: AppHandle,
     base_path: String,
     from_dir: Option<String>,
     to_dir: Option<String>,
     file_name: String,
     new_file_name: Option<String>,
 ) -> Result<(), String> {
+    let base_path = workspace_base(&app, &base_path)?;
     let src = note_path(&base_path, from_dir.as_deref(), &file_name);
     let target_name = new_file_name.as_deref().unwrap_or(&file_name);
     let dest = note_path(&base_path, to_dir.as_deref(), target_name);
@@ -1016,9 +1061,9 @@ async fn migrate_note_layout(base_path: String, moves: Vec<LayoutMove>) -> Resul
     for m in moves {
         let old_name = format!("note_{}.md", m.id);
         let candidates = [
-            match m.from_dir.as_deref() {
-                Some(d) if !d.trim().is_empty() => root.join(d).join(&old_name),
-                _ => root.join(&old_name),
+            match m.from_dir.as_deref().and_then(sanitize_rel_dir) {
+                Some(d) => root.join(d).join(&old_name),
+                None => root.join(&old_name),
             },
             root.join(&old_name),
         ];
@@ -1123,17 +1168,19 @@ async fn set_note_readwrite(base_path: String, dir: Option<String>, file_name: S
 
 /// Ensure images folder exists and return the path
 #[tauri::command]
-async fn ensure_images_folder(base_path: String) -> Result<String, String> {
-    let path = PathBuf::from(&base_path).join("images");
+async fn ensure_images_folder(app: AppHandle, base_path: String) -> Result<String, String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(&base).join("images");
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
 /// Save image to the images folder
 #[tauri::command]
-async fn save_image(base_path: String, image_data: String, filename: String) -> Result<String, String> {
+async fn save_image(app: AppHandle, base_path: String, image_data: String, filename: String) -> Result<String, String> {
+    let base = workspace_base(&app, &base_path)?;
     // Ensure images folder exists
-    let images_path = PathBuf::from(&base_path).join("images");
+    let images_path = PathBuf::from(&base).join("images");
     fs::create_dir_all(&images_path).map_err(|e| e.to_string())?;
 
     // Decode base64 image data
@@ -1146,12 +1193,15 @@ async fn save_image(base_path: String, image_data: String, filename: String) -> 
 
     let image_bytes = base64_decode(base64_data)?;
 
+    // 文件名来自前端，先清洗再拼：否则 `../../xxx` 能写穿 images 目录
+    let safe_name = sanitize_file_name(&filename);
+
     // Write the file
-    let file_path = images_path.join(&filename);
+    let file_path = images_path.join(&safe_name);
     fs::write(&file_path, &image_bytes).map_err(|e| e.to_string())?;
 
     // Return relative path
-    Ok(format!("images/{}", filename))
+    Ok(format!("images/{}", safe_name))
 }
 
 /// Simple base64 decoder
@@ -2540,6 +2590,7 @@ pub fn run() {
             workspace::validate_workspace_dir,
             workspace::scan_workspace_dir,
             workspace::copy_workspace_entry,
+            workspace::remove_workspace_meta,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

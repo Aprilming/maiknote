@@ -155,6 +155,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!ws || ws.kind === 'icloud') return
     workspaces.value = workspaces.value.filter(w => w.id !== id)
     await persist()
+    // 顺手把这个空间的索引目录删掉，否则 workspace-meta/<id> 会永远留在磁盘上
+    try {
+      await invoke('remove_workspace_meta', { workspaceId: id })
+    } catch (e) {
+      console.error('Failed to remove workspace meta dir:', e)
+    }
     if (currentId.value === id) setCurrent(ICLOUD_WORKSPACE_ID)
   }
 

@@ -18,7 +18,6 @@
     "core:window:allow-center",
     "core:window:allow-set-position",
     "core:app:allow-set-app-theme",
-    "shell:allow-open",
     "opener:default",
     "http:default",
     {

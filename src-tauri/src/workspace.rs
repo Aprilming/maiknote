@@ -67,6 +67,72 @@ fn to_slash(p: impl AsRef<Path>) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
+/// 把路径规整成绝对路径：路径还不存在时逐级上溯到最近的已存在祖先再拼回来，
+/// 这样「新建目录 / 新文件」的落点也能被校验，不会被 canonicalize 直接否掉。
+fn normalize_target(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Some(canonical);
+    }
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        let name = cur.file_name()?.to_os_string();
+        if name == ".." || name == "." {
+            return None;
+        }
+        tail.push(name);
+        let parent = cur.parent()?.to_path_buf();
+        if let Ok(canonical) = parent.canonicalize() {
+            let mut out = canonical;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+        cur = parent;
+    }
+}
+
+/// 允许落盘的根目录：应用配置目录（workspaces.json / workspace-meta）、iCloud 默认空间，
+/// 以及用户在配置里登记过的自选空间——自选空间可以在任意位置，只能从配置里读。
+fn allowed_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(config) = config_dir(app) {
+        if let Ok(text) = fs::read_to_string(config.join("workspaces.json")) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(list) = json.get("workspaces").and_then(|v| v.as_array()) {
+                    for item in list {
+                        if let Some(path) = item.get("path").and_then(|v| v.as_str()) {
+                            roots.push(expand_home(path));
+                        }
+                    }
+                }
+            }
+        }
+        roots.push(config);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        roots.push(PathBuf::from(home).join("Library/Mobile Documents/com~apple~CloudDocs/MaikNote"));
+    }
+    roots
+}
+
+/// 路径闸：把前端传来的绝对路径解析成规范路径，并确认它落在某个工作空间之内。
+/// 渲染进程一旦被攻破，没有这道闸 write_note(~/.zshrc 之类) 就能直接落地。
+/// 返回规范路径，调用方后续 join 都基于它（符号链接已经解开）。
+pub(crate) fn ensure_path_allowed(app: &AppHandle, path: &Path) -> Result<PathBuf, String> {
+    let target = normalize_target(path)
+        .ok_or_else(|| format!("无法解析路径: {}", path.display()))?;
+    for root in allowed_roots(app) {
+        if let Some(root) = normalize_target(&root) {
+            if target == root || target.starts_with(&root) {
+                return Ok(target);
+            }
+        }
+    }
+    Err(format!("拒绝访问工作空间之外的路径: {}", path.display()))
+}
+
 /// 读取工作空间列表文件内容（不存在返回空串，前端按空列表处理）
 #[tauri::command]
 pub fn read_workspaces(app: AppHandle) -> Result<String, String> {
@@ -91,8 +157,27 @@ pub fn workspace_meta_root(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn ensure_dir(path: String) -> Result<(), String> {
-    fs::create_dir_all(expand_home(&path)).map_err(|e| format!("创建目录失败: {}", e))
+pub fn ensure_dir(app: AppHandle, path: String) -> Result<(), String> {
+    let target = ensure_path_allowed(&app, &expand_home(&path))?;
+    fs::create_dir_all(target).map_err(|e| format!("创建目录失败: {}", e))
+}
+
+/// 删除某个工作空间的索引目录（空间从列表移除时调用，否则 workspace-meta/<id> 会一直留着）
+#[tauri::command]
+pub fn remove_workspace_meta(app: AppHandle, workspace_id: String) -> Result<(), String> {
+    // id 是前端生成的 ws_xxx，只认合法字符，避免 ../ 把删除点挪到配置目录之外
+    let valid = !workspace_id.is_empty()
+        && workspace_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if !valid {
+        return Err("非法的工作空间 ID".to_string());
+    }
+    let dir = meta_root(&app)?.join(&workspace_id);
+    if !dir.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(&dir).map_err(|e| format!("删除工作空间索引失败: {}", e))
 }
 
 /// 校验用户选的文件夹能当工作空间：存在、是目录、不在 iCloud 里、可写。返回规范化绝对路径。
@@ -232,18 +317,38 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 /// 把一个文件或整个文件夹复制（或移动）到另一个空间，返回落盘后的相对路径
 #[tauri::command]
 pub fn copy_workspace_entry(
+    app: AppHandle,
     src_base: String,
     src_rel: String,
     dst_base: String,
     dst_rel: String,
     move_it: bool,
 ) -> Result<String, String> {
-    let src = expand_home(&src_base).join(src_rel.replace('\\', "/"));
-    let dst_root = expand_home(&dst_base);
-    let dst_dir = if dst_rel.is_empty() {
+    // 两个根目录都必须落在工作空间之内：move_it 会连着整棵目录删
+    let src_root = ensure_path_allowed(&app, &expand_home(&src_base))?;
+    let dst_root = ensure_path_allowed(&app, &expand_home(&dst_base))?;
+    copy_entry(&src_root, &src_rel, &dst_root, &dst_rel, move_it)
+}
+
+/// copy_workspace_entry 的实现部分（不校验路径，调用方保证两个根目录已过闸）
+fn copy_entry(
+    src_root: &Path,
+    src_rel: &str,
+    dst_root: &Path,
+    dst_rel: &str,
+    move_it: bool,
+) -> Result<String, String> {
+    // 相对路径来自前端，逐段清洗，避免 ../ 把复制/移动的目标挪出工作空间
+    let safe_src_rel = crate::sanitize_rel_dir(src_rel)
+        .ok_or_else(|| "非法源路径".to_string())?;
+    let src = src_root.join(safe_src_rel);
+    let dst_root = dst_root.to_path_buf();
+    let dst_dir = if dst_rel.trim().is_empty() {
         dst_root.clone()
     } else {
-        dst_root.join(dst_rel.replace('\\', "/"))
+        let safe_dst_rel = crate::sanitize_rel_dir(dst_rel)
+            .ok_or_else(|| "非法目标路径".to_string())?;
+        dst_root.join(safe_dst_rel)
     };
     if !src.exists() {
         return Err("源文件不存在".to_string());
@@ -319,16 +424,16 @@ mod tests {
         fs::write(src.join("note.md"), "# n\n").unwrap();
         fs::write(src.join("folder/sub/inner.md"), "# i\n").unwrap();
 
-        let p1 = copy_workspace_entry(s(&src), "note.md".into(), s(&dst), String::new(), false).unwrap();
+        let p1 = copy_entry(&src, "note.md", &dst, "", false).unwrap();
         assert_eq!(p1, "note.md");
-        let p2 = copy_workspace_entry(s(&src), "note.md".into(), s(&dst), String::new(), false).unwrap();
+        let p2 = copy_entry(&src, "note.md", &dst, "", false).unwrap();
         assert_eq!(p2, "note 2.md");
 
-        let d1 = copy_workspace_entry(s(&src), "folder".into(), s(&dst), "target/deep".into(), false).unwrap();
+        let d1 = copy_entry(&src, "folder", &dst, "target/deep", false).unwrap();
         assert_eq!(d1, "target/deep/folder");
         assert!(dst.join("target/deep/folder/sub/inner.md").exists());
 
-        let m1 = copy_workspace_entry(s(&src), "note.md".into(), s(&dst), String::new(), true).unwrap();
+        let m1 = copy_entry(&src, "note.md", &dst, "", true).unwrap();
         assert_eq!(m1, "note 3.md");
         assert!(!src.join("note.md").exists());
         assert!(src.join("folder/sub/inner.md").exists());
