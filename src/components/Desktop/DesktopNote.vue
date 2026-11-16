@@ -6,6 +6,7 @@ import { emit, emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { writeText as writeClipboardNative } from '@tauri-apps/plugin-clipboard-manager'
 import { useI18n } from 'vue-i18n'
 import { createPreviewMarkdown, toggleTaskLine } from '@/utils/markdownTasks'
+import { sanitizeHtml } from '@/utils/sanitizeHtml'
 import { useTheme } from '@/composables/useTheme'
 import { adaptNoteColor } from '@/utils/noteColorTheme'
 import {
@@ -45,7 +46,7 @@ const html = computed(() => {
   if (!source) return ''
   const cached = mdCache.get(source)
   if (cached !== undefined) return cached
-  const rendered = md.render(source)
+  const rendered = sanitizeHtml(md.render(source))
   if (mdCache.size > 40) mdCache.clear()
   mdCache.set(source, rendered)
   return rendered

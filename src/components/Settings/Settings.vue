@@ -3458,6 +3458,10 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
   background: var(--st-danger);
 }
 
+.fda-probe.is-missing {
+  opacity: 0.4;
+}
+
 .fda-hint {
   margin-top: 6px;
   font-size: 10.5px;

@@ -15,7 +15,8 @@ export function useAutoSave(
     const id = noteId()
     const currentContent = content()
 
-    if (!id || !currentContent) return
+    // 内容清空（''）也要走一次保存，否则空笔记永远不落盘
+    if (!id) return
     if (currentContent === lastSavedContent) return
 
     isSaving.value = true

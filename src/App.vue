@@ -34,7 +34,7 @@ const noteStore = useNoteStore()
 const directoryStore = useDirectoryStore()
 const workspaceStore = useWorkspaceStore()
 const settingStore = useSettingStore()
-useShortcuts(openSettings)
+useShortcuts(openSettings, openSearchPage)
 useGlobalShortcut()
 const { currentTheme } = useTheme() // 初始化主题系统，currentTheme 供笔记底色做明暗适配
 useEditorStyle() // 初始化编辑器样式预设
@@ -141,6 +141,16 @@ function handleSidebarResize(width: number) {
 // 侧栏开关快捷键在设置里可自定义，useShortcuts 匹配到后派发事件
 function handleToggleSidebarEvent() {
   toggleSidebar()
+}
+
+// 全局快捷键只留这里独有的 Cmd+Shift+D（钉桌面）；
+// Cmd+F / Cmd+, / Cmd+W 统一交给 useShortcuts，否则两套逻辑各按各的 setting 走
+function handleAppKeydown(event: KeyboardEvent) {
+  if (event.metaKey && event.shiftKey && event.code === 'KeyD') {
+    event.preventDefault()
+    const noteId = noteStore.currentNoteId
+    if (noteId) void desktopNotes.toggle(noteId)
+  }
 }
 // 菜单栏图标、设置页都会发「打开教程」：前者走后端 emit，后者走 window 事件
 let unlistenTrayGuide: UnlistenFn | null = null
@@ -356,32 +366,7 @@ onMounted(async () => {
         .catch(() => {})
     }
   })
-  // 监听键盘快捷键 Cmd+F 打开搜索页面，Cmd+W 关闭窗口
-  window.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
-      event.preventDefault()
-      openSearchPage()
-    }
-    if ((event.metaKey || event.ctrlKey) && event.key === ',') {
-      event.preventDefault()
-      openSettings()
-    }
-    // Cmd+Shift+D：把当前笔记钉到桌面 / 从桌面收起
-    if (event.metaKey && event.shiftKey && event.code === 'KeyD') {
-      event.preventDefault()
-      const noteId = noteStore.currentNoteId
-      if (noteId) void desktopNotes.toggle(noteId)
-      return
-    }
-    if (event.metaKey && event.code === 'KeyW') {
-      event.preventDefault()
-      if (settingStore.settings.closeBehavior === 'quit') {
-        invoke('exit_app')
-      } else {
-        appWindow.hide()
-      }
-    }
-  })
+  window.addEventListener('keydown', handleAppKeydown)
   // 监听系统主题变化，同步 surface 背景色
   themeObserver = new MutationObserver(() => updateSurfaceColor())
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
@@ -393,6 +378,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleAppKeydown)
   desktopNotes.stop()
   if (unlistenFocus) {
     unlistenFocus()

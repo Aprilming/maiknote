@@ -500,9 +500,11 @@ watch(isSourceMode, (newVal, oldVal) => {
 const { isSaving } = useAutoSave(
   () => currentNote.value?.id || null,
   () => localContent.value,
-  async (id, content) => {
-    noteStore.updateNote(id, { content })
-    await noteStore.persistNoteNow(id)
+  // 只负责把 noteStore 里挂起的改动立刻落盘：
+  // 内容写入和防抖都在 noteStore.updateNote 里，这里再 updateNote + persistNoteNow
+  // 会和它自己的定时器并发写同一个文件
+  async () => {
+    await noteStore.flushPendingSave()
   },
   settingStore.settings.autoSaveInterval
 )

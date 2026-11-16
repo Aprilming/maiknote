@@ -96,12 +96,16 @@ function dirNameOf(note: { directoryId?: string | null }): string {
   return directoryStore.getDirectory(note.directoryId)?.name ?? t('dirTree.rootDir')
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
+}
+
 function highlightKeyword(text: string, kw: string): string {
-  if (!kw) return text
-  return text.replace(
-    new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
-    '<mark>$1</mark>'
-  )
+  if (!kw) return escapeHtml(text)
+  // 先转义再拼 <mark>：笔记正文里的 <img onerror> 不能因为命中关键词就被浏览器执行
+  const escaped = escapeHtml(text)
+  const escapedKw = escapeHtml(kw).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return escaped.replace(new RegExp(`(${escapedKw})`, 'gi'), '<mark>$1</mark>')
 }
 
 // ---- 交互 ----

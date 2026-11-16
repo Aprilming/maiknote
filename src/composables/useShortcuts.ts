@@ -1,10 +1,20 @@
 import { onMounted, onUnmounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
 import { useSourceMode } from '@/composables/useSourceMode'
 import { usePinWindow } from '@/composables/usePinWindow'
+
+/**
+ * 焦点是否落在可输入的元素上
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true
+  return target.isContentEditable
+}
 
 /**
  * 检测按键是否匹配快捷键配置
@@ -57,15 +67,15 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
 /**
  * Application-wide keyboard shortcuts
  */
-export function useShortcuts(onOpenSettings?: () => void) {
+export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => void) {
   const noteStore = useNoteStore()
   const directoryStore = useDirectoryStore()
   const settingStore = useSettingStore()
   const { toggleSourceMode } = useSourceMode()
 
   async function handleKeydown(e: KeyboardEvent) {
-    // 搜索框里不触发快捷键
-    if (e.target instanceof HTMLInputElement) {
+    // 输入类元素里不触发快捷键（input / textarea / contenteditable 都算）
+    if (isEditableTarget(e.target)) {
       return
     }
 
@@ -191,21 +201,29 @@ export function useShortcuts(onOpenSettings?: () => void) {
       noteStore.searchQuery = ''
     }
 
-    // Cmd+F: 聚焦搜索框
+    // Cmd+F: 打开搜索页；没有搜索页入口（嵌入场景）时退回聚焦侧栏搜索框
     if (e.metaKey && e.code === 'KeyF') {
       e.preventDefault()
-      const searchInput = document.querySelector('[data-search-input]') as HTMLInputElement
-      searchInput?.focus()
+      if (onOpenSearch) {
+        onOpenSearch()
+      } else {
+        const searchInput = document.querySelector('[data-search-input]') as HTMLInputElement
+        searchInput?.focus()
+      }
     }
 
-    // Cmd+W: 隐藏窗口
+    // Cmd+W: 按设置里的关闭行为走（退出程序 / 隐藏窗口）
     if (e.metaKey && e.code === 'KeyW') {
       e.preventDefault()
       try {
-        const appWindow = getCurrentWindow()
-        await appWindow.hide()
+        if (settingStore.settings.closeBehavior === 'quit') {
+          await invoke('exit_app')
+        } else {
+          const appWindow = getCurrentWindow()
+          await appWindow.hide()
+        }
       } catch (error) {
-        console.error('Failed to hide window:', error)
+        console.error('Failed to close window:', error)
       }
       return
     }

@@ -97,6 +97,17 @@ function normalizeDesktopNoteLevel(parsed: Partial<AppSettings> & { desktopNoteO
   return 'desktop'
 }
 
+/** 桌面笔记按工作空间分桶：非数组/脏值一律丢掉，别让坏数据把卡片全搞没 */
+function normalizeDesktopNotesByWorkspace(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, string[]> = {}
+  for (const [workspaceId, ids] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue
+    out[workspaceId] = ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  }
+  return out
+}
+
 /** 笔记边框宽度：笔记背景到窗口边界之间的留白，0 表示没有边框 */
 export function clampNoteBorderWidth(width: unknown): number {
   const value = Number(width)
@@ -146,7 +157,8 @@ export interface AppSettings {
   privacyAcknowledged: boolean // 首次启动的隐私承诺页是否已确认（只用于判断要不要再弹一次）
   guideSeen: boolean // 首次启动内置使用教程是否已经自动弹过（只用于判断要不要再弹一次）
   shortcutTutorialSeen: boolean // 唤出/收起快捷键的「按一次」练习是否已完成（首次引导的最后一环）
-  desktopNotes: string[] // 钉在桌面上的笔记 id（每篇一个常驻桌面卡片窗口）
+  desktopNotes: string[] // 旧版全局列表：只用来迁移到 desktopNotesByWorkspace，迁移后清空
+  desktopNotesByWorkspace: Record<string, string[]> // 钉在桌面上的笔记 id，按工作空间分桶（每篇一个常驻桌面卡片窗口）
   desktopNoteLevel: DesktopNoteLevel // 桌面卡片层级：top=浮在最上层 / normal=普通图层 / desktop=贴桌面
   desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
   fileTreePinnedSection: boolean // 文件树里是否显示「收藏笔记」大类
@@ -209,6 +221,7 @@ export const useSettingStore = defineStore('setting', () => {
     guideSeen: false,
     shortcutTutorialSeen: false,
     desktopNotes: [],
+    desktopNotesByWorkspace: {},
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
     fileTreePinnedSection: true,
@@ -346,6 +359,9 @@ export const useSettingStore = defineStore('setting', () => {
           desktopNotes: Array.isArray(parsed.desktopNotes)
             ? parsed.desktopNotes.filter((id: unknown): id is string => typeof id === 'string')
             : settings.value.desktopNotes,
+          desktopNotesByWorkspace: normalizeDesktopNotesByWorkspace(
+            parsed.desktopNotesByWorkspace ?? settings.value.desktopNotesByWorkspace,
+          ),
           desktopNoteBounds:
             parsed.desktopNoteBounds && typeof parsed.desktopNoteBounds === 'object'
               ? parsed.desktopNoteBounds
@@ -402,6 +418,7 @@ export const useSettingStore = defineStore('setting', () => {
     guideSeen: false,
     shortcutTutorialSeen: false,
       desktopNotes: [],
+    desktopNotesByWorkspace: {},
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
       fileTreePinnedSection: true,

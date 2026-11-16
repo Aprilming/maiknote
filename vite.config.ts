@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import UnoCSS from "unocss/vite";
@@ -6,7 +7,8 @@ import UnoCSS from "unocss/vite";
 const host = process.env.TAURI_DEV_HOST;
 
 
-const srcPath = new URL("./src", import.meta.url).pathname;
+// 用 fileURLToPath 而不是 .pathname：路径里有空格或中文时 pathname 会保留 %20，别名就失效了
+const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

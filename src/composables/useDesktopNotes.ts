@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useNoteStore } from '@/stores/noteStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { useDirectoryStore } from '@/stores/directoryStore'
 import { suppressMainAutoHide } from '@/composables/useEdgePanel'
 import type { Note } from '@/types/note'
 
@@ -66,9 +68,24 @@ export function desktopPayloadOf(note: Note): DesktopNotePayload {
 function createDesktopNotes() {
   const noteStore = useNoteStore()
   const settingStore = useSettingStore()
+  const workspaceStore = useWorkspaceStore()
 
-  /** 用户钉在桌面上的笔记（持久化在设置里，重启后按它还原） */
-  const pinnedIds = computed<string[]>(() => settingStore.settings.desktopNotes ?? [])
+  /**
+   * 钉在桌面上的笔记按工作空间分桶存。
+   * 以前是一个全局数组，切空间后「笔记列表里没有这条」会被当成已删除，把别的空间的 pin 一并清掉。
+   */
+  const buckets = computed<Record<string, string[]>>(
+    () => settingStore.settings.desktopNotesByWorkspace ?? {},
+  )
+
+  /** 当前空间的桌面笔记（持久化在设置里，重启后按它还原） */
+  const pinnedIds = computed<string[]>(() => buckets.value[workspaceStore.currentId] ?? [])
+
+  /** 所有空间钉过的记录：卡片来要数据时用来区分「别的空间」和「真的被删了」 */
+  const allPinnedIds = computed<string[]>(() =>
+    Object.values(buckets.value).reduce<string[]>((all, ids) => all.concat(ids), []),
+  )
+
   /** 当前真实打开的卡片窗口 */
   const openIds = ref<string[]>([])
 
@@ -76,6 +93,7 @@ function createDesktopNotes() {
   let unlisteners: UnlistenFn[] = []
   let pushTimer: number | undefined
   let stopWatch: (() => void) | undefined
+  let stopWorkspaceWatch: (() => void) | undefined
 
   /** 笔记内容指纹：任何一篇变了就把卡片刷新一遍（比 deep watch 便宜） */
   const signature = computed(() =>
@@ -86,6 +104,14 @@ function createDesktopNotes() {
       )
       .join('|'),
   )
+
+  /** 改写当前空间这一桶（别的空间原样保留） */
+  function setPinnedIds(ids: string[]) {
+    settingStore.updateSettings('desktopNotesByWorkspace', {
+      ...buckets.value,
+      [workspaceStore.currentId]: [...ids],
+    })
+  }
 
   function isOnDesktop(noteId: string | null | undefined): boolean {
     if (!noteId) return false
@@ -120,6 +146,8 @@ function createDesktopNotes() {
   /** 把某篇笔记的最新内容推给它的卡片窗口 */
   async function pushNote(noteId: string) {
     const note = noteStore.notes.find(item => item.id === noteId)
+    // 别的空间钉着的笔记在当前列表里当然找不到：推 null 会让卡片以为自己被删了直接关掉
+    if (!note && allPinnedIds.value.includes(noteId)) return
     try {
       await emitTo(`${DESKTOP_NOTE_LABEL_PREFIX}${noteId}`, DESKTOP_NOTE_EVENT, note ? desktopPayloadOf(note) : null)
     } catch (error) {
@@ -129,11 +157,22 @@ function createDesktopNotes() {
 
   async function pushAll() {
     // 笔记还没读出来（刚启动/iCloud 未就绪）时不能judge「笔记没了」，否则一上来就把卡片全收掉
+    if (noteStore.isLoading || workspaceStore.switching) return
     if (noteStore.notes.length === 0) return
+    // 正在切空间：现在的笔记列表还是上一个空间的，等它换成当前空间再判断
+    if (noteStore.loadedWorkspaceId && noteStore.loadedWorkspaceId !== workspaceStore.currentId) return
     const alive = new Set(noteStore.notes.map(note => note.id))
-    // 笔记被删了/被清空回收站了，桌面上那张卡片就跟着收掉
-    for (const id of pinnedIds.value.filter(id => !alive.has(id))) {
-      await close(id)
+    const ids = pinnedIds.value
+    // 只清理当前空间这一桶：别的空间的 id 本来就不在这个笔记列表里，不能当成已删除
+    const dead = ids.filter(id => !alive.has(id))
+    if (dead.length > 0) {
+      setPinnedIds(ids.filter(id => alive.has(id)))
+      // 笔记被删了/被清空回收站了，桌面上那张卡片就跟着收掉（位置也一并忘掉）
+      for (const id of dead) {
+        await closeWindow(id)
+        forget(id)
+      }
+      await refreshOpenIds()
     }
     await Promise.all(pinnedIds.value.map(id => pushNote(id)))
   }
@@ -160,28 +199,47 @@ function createDesktopNotes() {
     }
     const ids = pinnedIds.value
     if (!ids.includes(noteId)) {
-      settingStore.updateSettings('desktopNotes', [...ids, noteId])
+      setPinnedIds([...ids, noteId])
     }
     await refreshOpenIds()
     // 新窗口的 webview 还没挂载完，稍等一下再推数据（卡片起来后也会自己再要一次）
     window.setTimeout(() => void pushNote(noteId), 300)
   }
 
-  async function close(noteId: string) {
+  /** 只收窗口，不动 pin 记录和位置（切空间临时收起时用：切回来还要原样还原） */
+  async function closeWindow(noteId: string) {
     try {
       await invoke('desktop_note_close', { noteId })
     } catch (error) {
       console.error('关闭桌面笔记失败:', error)
     }
+    openIds.value = openIds.value.filter(id => id !== noteId)
+  }
+
+  async function close(noteId: string) {
+    await closeWindow(noteId)
     forget(noteId)
     await refreshOpenIds()
   }
 
-  /** 从设置里抹掉（窗口被卡片自己关掉时也走这里） */
+  /** 从设置里抹掉（用户取消钉住、笔记被删、卡片自己被关掉时都走这里） */
   function forget(noteId: string) {
-    const ids = pinnedIds.value
-    if (ids.includes(noteId)) {
-      settingStore.updateSettings('desktopNotes', ids.filter(id => id !== noteId))
+    const all = buckets.value
+    let touched = false
+    const next: Record<string, string[]> = {}
+    for (const [workspaceId, ids] of Object.entries(all)) {
+      if (ids.includes(noteId)) {
+        next[workspaceId] = ids.filter(id => id !== noteId)
+        touched = true
+      } else {
+        next[workspaceId] = ids
+      }
+    }
+    if (touched) settingStore.updateSettings('desktopNotesByWorkspace', next)
+    // 旧版全局列表里可能还留着（迁移前钉的），顺手清掉
+    const legacy = settingStore.settings.desktopNotes ?? []
+    if (legacy.includes(noteId)) {
+      settingStore.updateSettings('desktopNotes', legacy.filter(id => id !== noteId))
     }
     const bounds = { ...(settingStore.settings.desktopNoteBounds ?? {}) }
     if (bounds[noteId]) {
@@ -237,10 +295,47 @@ function createDesktopNotes() {
     window.setTimeout(() => void pushAll(), 800)
   }
 
+  /** 老版本只有一个全局列表：第一次按当前空间归到桶里，之后旧字段清空 */
+  function migrateLegacyPins() {
+    const legacy = settingStore.settings.desktopNotes ?? []
+    if (legacy.length === 0) return
+    const current = buckets.value[workspaceStore.currentId] ?? []
+    setPinnedIds([...current, ...legacy.filter(id => !current.includes(id))])
+    settingStore.updateSettings('desktopNotes', [])
+  }
+
+  /**
+   * 切空间：先把不属于这个空间的卡片窗口收起来（pin 记录和位置都留着），
+   * 再把当前空间的卡片按记录还原。不这么做的话，切走那一刻卡片会被当成「笔记已删除」清掉。
+   */
+  async function syncWorkspace() {
+    const keep = new Set(pinnedIds.value)
+    const foreign = openIds.value.filter(id => !keep.has(id))
+    if (foreign.length > 0) {
+      for (const id of foreign) await closeWindow(id)
+      await refreshOpenIds()
+    }
+    await restore()
+  }
+
+  /** 从别的窗口点「打开这篇」：先把筛选切到它所在的目录，再选中，否则子目录里的笔记打不开 */
+  function openInMain(noteId: string) {
+    const note = noteStore.notes.find(item => item.id === noteId)
+    if (!note) return
+    const dirId = note.directoryId ?? null
+    if (noteStore.filterDirectoryId !== dirId) {
+      noteStore.filterDirectoryId = dirId
+      useDirectoryStore().selectDirectory(dirId)
+    }
+    void noteStore.selectNote(noteId)
+  }
+
   /** 主窗口侧的事件接线（只能调一次） */
   async function start() {
     if (started) return
     started = true
+
+    migrateLegacyPins()
 
     unlisteners.push(
       // 卡片起来了，要数据
@@ -264,13 +359,25 @@ function createDesktopNotes() {
         if (note.content === payload.content) return
         noteStore.updateNote(payload.id, { content: payload.content })
       }),
-      // Rust 侧「打开这篇」（desktop_note_open_in_main）
-      await listen<string>('maiknote:open-note', event => {
-        if (event.payload) void noteStore.selectNote(event.payload)
+      // Rust 侧「打开这篇」（desktop_note_open_in_main）发的是 id 字符串；
+      // 速记栏（EdgePanel）发的是 { id }，两种载荷都要能吃下
+      await listen<string | { id?: string }>('maiknote:open-note', event => {
+        const payload = event.payload
+        const id = typeof payload === 'string' ? payload : payload?.id
+        if (id) openInMain(id)
       }),
     )
 
     stopWatch = watch(signature, () => schedulePush())
+
+    // 切空间：等这个空间的笔记真正读出来（loadedWorkspaceId 对齐）再把卡片换成它那一批
+    stopWorkspaceWatch = watch(
+      () => [workspaceStore.currentId, noteStore.loadedWorkspaceId] as const,
+      ([workspaceId, loaded]) => {
+        if (loaded !== workspaceId) return
+        void syncWorkspace()
+      },
+    )
 
     await restore()
   }
@@ -282,6 +389,8 @@ function createDesktopNotes() {
     window.clearTimeout(pushTimer)
     stopWatch?.()
     stopWatch = undefined
+    stopWorkspaceWatch?.()
+    stopWorkspaceWatch = undefined
   }
 
   return {
@@ -297,6 +406,7 @@ function createDesktopNotes() {
     rememberBounds,
     applyLevel,
     restore,
+    syncWorkspace,
     start,
     stop,
   }

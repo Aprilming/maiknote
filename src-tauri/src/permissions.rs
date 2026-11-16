@@ -13,6 +13,15 @@ use serde::Serialize;
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+/// 单个探测点的结果，前端按结果给状态点上色
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdaProbe {
+    pub path: String,
+    /// ok = 能读；denied = EPERM（没权限）；missing = 路径不存在
+    pub result: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FullDiskAccessStatus {
@@ -22,10 +31,16 @@ pub struct FullDiskAccessStatus {
     pub detectable: bool,
     /// 命中的探测点（调试用）
     pub probe: String,
+    /// 全部探测点的结果，前端逐个渲染状态点
+    pub probes: Vec<FdaProbe>,
     /// 当前 app 的 .app 路径（拖进系统设置用）
     pub app_path: String,
+    /// 当前可执行文件路径，开发态没有 .app，用它替代 app_path
+    pub exe_path: String,
     /// true 表示跑在正式 .app 里，false 表示开发态
     pub bundled: bool,
+    /// 开发态时，权限实际记在哪个宿主 App 名下（终端 / IDE）
+    pub parent_app: Option<String>,
 }
 
 fn home_dir() -> PathBuf {
@@ -46,22 +61,79 @@ fn probes() -> Vec<PathBuf> {
     ]
 }
 
+fn probe_once(path: &PathBuf) -> &'static str {
+    match std::fs::File::open(path) {
+        Ok(_) => "ok",
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => "denied",
+        Err(_) => "missing",
+    }
+}
+
 /// 逐个探测：能读到 = 有权限；EPERM = 没权限；不存在 = 换下一个
 fn detect() -> (bool, bool, PathBuf) {
     let mut last = PathBuf::new();
     for path in probes() {
         last = path.clone();
-        match std::fs::File::open(&path) {
-            Ok(_) => return (true, true, path),
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    return (false, true, path);
-                }
-                // NotFound 之类：这个探测点不适用，继续下一个
-            }
+        match probe_once(&path) {
+            "ok" => return (true, true, path),
+            "denied" => return (false, true, path),
+            // NotFound 之类：这个探测点不适用，继续下一个
+            _ => {}
         }
     }
     (false, false, last)
+}
+
+/// 全部探测点逐个出结果，列表顺序和 probes() 一致
+fn detect_all() -> Vec<FdaProbe> {
+    probes()
+        .into_iter()
+        .map(|path| FdaProbe {
+            path: path.display().to_string(),
+            result: probe_once(&path).to_string(),
+        })
+        .collect()
+}
+
+/// 开发态下权限记在宿主程序（终端 / IDE）名下，沿着父进程链往上找最近的 .app
+fn parent_app_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut pid = std::process::id().to_string();
+        for _ in 0..6 {
+            let ppid = ps_field("-o", "ppid=", &pid)?;
+            if ppid.is_empty() || ppid == "0" || ppid == "1" {
+                return None;
+            }
+            let comm = ps_field("-o", "comm=", &ppid)?;
+            if let Some(idx) = comm.find(".app/") {
+                let head = &comm[..idx];
+                if let Some(name) = head.rsplit('/').next() {
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+            pid = ppid;
+        }
+        None
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ps_field(flag: &str, field: &str, pid: &str) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args([flag, field, "-p", pid])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// 从可执行文件往上找 `*.app`，找不到就把可执行文件所在目录当结果
@@ -80,12 +152,16 @@ fn app_bundle_path() -> (PathBuf, bool) {
 pub fn full_disk_access_status(_app: AppHandle) -> FullDiskAccessStatus {
     let (granted, detectable, probe) = detect();
     let (app_path, bundled) = app_bundle_path();
+    let exe_path = std::env::current_exe().unwrap_or_default();
     FullDiskAccessStatus {
         granted,
         detectable,
         probe: probe.display().to_string(),
+        probes: detect_all(),
         app_path: app_path.display().to_string(),
+        exe_path: exe_path.display().to_string(),
         bundled,
+        parent_app: if bundled { None } else { parent_app_name() },
     }
 }
 

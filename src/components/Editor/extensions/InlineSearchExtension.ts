@@ -67,12 +67,35 @@ function createDecorations(doc: Node, matches: SearchMatch[], currentIndex: numb
   return decorations.length > 0 ? DecorationSet.create(doc, decorations) : DecorationSet.empty
 }
 
+// 真正的滚动容器是 .tiptap-wrapper（ProseMirror 自身是 height:auto），
+// 所以从编辑器节点往上找第一个能滚的祖先，而不是只改 view.dom.scrollTop
+function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    const overflowY = getComputedStyle(node).overflowY
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
+}
+
 function scrollToMatch(editorView: any, pos: number) {
   const view = editorView as { coordsAtPos: (pos: number) => { top: number } | null; dom: HTMLElement }
   const editorDom = view.dom
   const coords = view.coordsAtPos(pos)
   if (!coords) return
 
+  const scroller = findScrollParent(editorDom)
+  if (scroller) {
+    const rect = scroller.getBoundingClientRect()
+    const target = coords.top - rect.top + scroller.scrollTop - scroller.clientHeight / 3
+    scroller.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+    return
+  }
+
+  // 没有可滚动的祖先（例如源码模式）：退回到编辑器自身
   const editorRect = editorDom.getBoundingClientRect()
   const relativeTop = coords.top - editorRect.top + editorDom.scrollTop
   const centered = relativeTop - editorDom.clientHeight / 3

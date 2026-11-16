@@ -18,6 +18,7 @@ export interface EdgeNotePayload {
   color: string | null
   updatedAt: number
   dirPath: string
+  isLocked: boolean
 }
 
 /**
@@ -77,6 +78,9 @@ function applyEdgeEdit(payload: EdgeEditPayload) {
   }
 
   const selection = payload.selection || ''
+
+  // 已锁定的笔记不允许从速记栏改正文（剪切/粘贴都拦在这里）
+  if (note.isLocked) return
 
   if (payload.op === 'cut') {
     if (!selection) return
@@ -154,6 +158,7 @@ export function useEdgePanel() {
       color: note.color ?? null,
       updatedAt: note.updatedAt,
       dirPath: dirPathOf(note),
+      isLocked: note.isLocked === true,
     }))
   }
 
@@ -272,8 +277,9 @@ export function useEdgePanel() {
       await listen('maiknote:edge-ack', () => {
         lastEdgeAckAt = Date.now()
       }),
-      await listen<{ id: string }>(OPEN_EVENT, e => {
-        void openFromEdge(e.payload.id)
+      await listen<{ id: string } | string>(OPEN_EVENT, e => {
+        const id = typeof e.payload === 'string' ? e.payload : e.payload?.id
+        if (id) void openFromEdge(id)
       }),
       await listen<boolean>('maiknote:edge-pinned', e => {
         edgePinned = e.payload === true

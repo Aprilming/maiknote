@@ -694,11 +694,13 @@ async function deleteDir(dir: Directory) {
     : t('dirTree.deleteConfirm', { name: dir.name })
   const confirmed = await confirmAction({ message: msg, confirmText: t('common.delete') })
   if (!confirmed) return
+  // 目录里的笔记上抬到父目录（不是根目录）：后端删文件夹时也是这么搬的，两边保持一致
+  const targetDirId = dir.parentId ?? null
   for (const note of noteStore.getNotesByDirectory(dir.id)) {
-    await noteStore.moveNoteToDirectory(note.id, null)
+    await noteStore.moveNoteToDirectory(note.id, targetDirId)
   }
   if (noteStore.filterDirectoryId === dir.id) {
-    noteStore.filterDirectoryId = null
+    noteStore.filterDirectoryId = targetDirId
   }
   await directoryStore.deleteDirectory(dir.id)
   const next = new Set(expandedDirs.value)
