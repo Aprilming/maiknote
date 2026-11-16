@@ -4,6 +4,7 @@ pub mod autostart;
 pub mod desktop_note;
 pub mod permissions;
 pub mod skills_sync;
+pub mod tray;
 pub mod workspace;
 
 use std::collections::HashMap;
@@ -287,9 +288,12 @@ async fn register_global_shortcut(
                                 let is_visible: bool = unsafe { msg_send![ns_window_ptr, isVisible] };
                                 if is_on_space && is_visible {
                                     let _ = window.hide();
+                                    // 首次启动的「按一次快捷键」练习靠这两个事件判定
+                                    let _ = app_clone.emit("marknote:main-toggled", false);
                                     return;
                                 }
                                 show_window_current_space_impl(&app_clone);
+                                let _ = app_clone.emit("marknote:main-toggled", true);
                             }
                             #[cfg(not(target_os = "macos"))]
                             show_window_current_space_impl(&app_clone);
@@ -2271,6 +2275,15 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_denylist(&["edge"])
+                // 不记可见性：上次是「失焦自动收起」状态下退出的，也不能让下次启动
+                // 继承成「启动即隐藏」——窗口不现身，用户就只能看到一个空桌面。
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::DECORATIONS
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2318,6 +2331,12 @@ pub fn run() {
                     let ns_app = NSApp();
                     NSApplication::setActivationPolicy_(ns_app, NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory);
                 }
+            }
+
+            // 菜单栏常驻图标。Dock 图标藏了、窗口又会失焦自动收，
+            // 没有这颗图标，用户点一下别处就再也叫不回来。
+            if let Err(err) = tray::init(app.handle()) {
+                eprintln!("[tray] 菜单栏图标初始化失败: {err}");
             }
 
             // 本地联调用：MN_DESKTOP_SELFTEST=<noteId> 时自动弹一张桌面笔记卡片（生产环境不设该变量）
@@ -2447,6 +2466,12 @@ pub fn run() {
                             .store(true, Ordering::Relaxed);
                     });
                 });
+
+                // 冷启动：把主窗口直接摆到眼前，别让用户对着空桌面猜。
+                // 开机自启的情况才悄悄藏着，等快捷键唤起。
+                if !is_autolaunch {
+                    tray::reveal_on_launch(app.handle());
+                }
             }
 
             Ok(())
@@ -2487,6 +2512,8 @@ pub fn run() {
             center_window,
             toggle_window,
             exit_app,
+            tray::set_tray_language,
+            tray::set_tray_icon_enabled,
             set_window_alpha,
             init_edge_window,
             reload_edge_window,

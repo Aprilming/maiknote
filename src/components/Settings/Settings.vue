@@ -340,6 +340,17 @@ async function toggleAutoLaunch() {
   }
 }
 
+// 切换菜单栏图标
+async function toggleTrayIcon() {
+  const next = !settingStore.settings.trayIconEnabled
+  settingStore.updateSettings('trayIconEnabled', next)
+  try {
+    await invoke('set_tray_icon_enabled', { enabled: next, lang: settingStore.settings.language })
+  } catch (e) {
+    console.error('Failed to toggle tray icon:', e)
+  }
+}
+
 // 当前正在录制的快捷键
 const recordingKey = ref<keyof ShortcutSettings | null>(null)
 
@@ -1024,6 +1035,20 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
                 class="toggle-btn"
                 :class="{ active: settingStore.settings.autoLaunch }"
                 @click="toggleAutoLaunch"
+              >
+                <span class="toggle-slider"></span>
+              </button>
+            </div>
+
+            <div class="setting-item setting-item-inline">
+              <div class="setting-label">
+                <span class="setting-name">{{ $t('settings.trayIcon') }}</span>
+                <span class="setting-desc">{{ $t('settings.trayIconDesc') }}</span>
+              </div>
+              <button
+                class="toggle-btn"
+                :class="{ active: settingStore.settings.trayIconEnabled }"
+                @click="toggleTrayIcon"
               >
                 <span class="toggle-slider"></span>
               </button>

@@ -145,6 +145,7 @@ export interface AppSettings {
   edgeCopyOnSelect: boolean // 边缘面板里选中文字后是否自动复制
   privacyAcknowledged: boolean // 首次启动的隐私承诺页是否已确认（只用于判断要不要再弹一次）
   guideSeen: boolean // 首次启动内置使用教程是否已经自动弹过（只用于判断要不要再弹一次）
+  shortcutTutorialSeen: boolean // 唤出/收起快捷键的「按一次」练习是否已完成（首次引导的最后一环）
   desktopNotes: string[] // 钉在桌面上的笔记 id（每篇一个常驻桌面卡片窗口）
   desktopNoteLevel: DesktopNoteLevel // 桌面卡片层级：top=浮在最上层 / normal=普通图层 / desktop=贴桌面
   desktopNoteBounds: Record<string, { x: number; y: number; width: number; height: number }> // 桌面卡片的位置尺寸
@@ -163,6 +164,7 @@ export interface AppSettings {
   closeBehavior: 'hide' | 'quit' // 关闭窗口行为：hide=隐藏到后台 quit=退出应用
   rememberLastDirectory: boolean // 启动时恢复上次选择的目录
   globalHotkey: string
+  trayIconEnabled: boolean // 菜单栏图标：关掉后窗口只能靠快捷键唤回
   autoSaveInterval: number // milliseconds
   autoDeleteDays: number // 0 = disabled
   shortcuts: ShortcutSettings
@@ -205,6 +207,7 @@ export const useSettingStore = defineStore('setting', () => {
     edgeCopyOnSelect: true,
     privacyAcknowledged: false,
     guideSeen: false,
+    shortcutTutorialSeen: false,
     desktopNotes: [],
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
@@ -220,6 +223,7 @@ export const useSettingStore = defineStore('setting', () => {
     blockMenuEnabled: false,
     defaultNoteBackgroundColor: '',
     autoLaunch: false,
+    trayIconEnabled: true,
     closeBehavior: 'hide',
     rememberLastDirectory: false,
     globalHotkey: 'Option+Cmd+A',
@@ -396,6 +400,7 @@ export const useSettingStore = defineStore('setting', () => {
       edgeCopyOnSelect: true,
     privacyAcknowledged: false,
     guideSeen: false,
+    shortcutTutorialSeen: false,
       desktopNotes: [],
     desktopNoteLevel: 'desktop',
     desktopNoteBounds: {},
@@ -411,6 +416,7 @@ export const useSettingStore = defineStore('setting', () => {
       blockMenuEnabled: false,
       defaultNoteBackgroundColor: '',
       autoLaunch: false,
+      trayIconEnabled: true,
       closeBehavior: 'hide',
       rememberLastDirectory: false,
       globalHotkey: 'Option+Cmd+A',

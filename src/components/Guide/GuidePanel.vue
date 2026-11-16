@@ -8,6 +8,12 @@ import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { guideHtml, guideToc } from './guideContent.generated'
 
+/**
+ * firstRun：第一次启动自动弹出的那一次。这时不做模态——
+ * 遮罩全透明、不挡点击，主界面照样能用，用户边看教程边试。
+ */
+const props = defineProps<{ firstRun?: boolean }>()
+
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { t } = useI18n()
@@ -84,15 +90,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="guide-mask" @keydown="onKeydown">
-    <div ref="panelRef" class="guide-panel" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+  <div class="guide-mask" :class="{ 'is-first-run': props.firstRun }" @keydown="onKeydown">
+    <div
+      ref="panelRef"
+      class="guide-panel"
+      role="dialog"
+      :aria-modal="props.firstRun ? 'false' : 'true'"
+      aria-labelledby="guide-title"
+    >
       <header class="guide-head">
         <div class="guide-badge">
           <i class="i-mdi-book-open-variant"></i>
         </div>
         <div class="guide-titles">
           <h1 id="guide-title">{{ t('settings.userGuide') }}</h1>
-          <p>{{ t('guide.hint') }}</p>
+          <p>{{ props.firstRun ? t('guide.firstRun') : t('guide.hint') }}</p>
         </div>
         <button ref="closeBtn" class="guide-close" type="button" :title="t('guide.close')" @click="close">
           <i class="i-mdi-close"></i>
@@ -140,6 +152,17 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(6px);
   animation: guide-in 0.2s ease;
+}
+
+/* 首次启动：教程只负责「在旁边指」，不抢主界面 */
+.guide-mask.is-first-run {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.guide-mask.is-first-run .guide-panel {
+  pointer-events: auto;
 }
 
 .guide-panel {

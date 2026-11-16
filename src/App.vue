@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, watchEffect } from 'vue'
 import { getCurrentWindow, availableMonitors } from '@tauri-apps/api/window'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { invoke } from '@tauri-apps/api/core'
 import { useNoteStore } from '@/stores/noteStore'
@@ -26,6 +27,7 @@ import FileTree from '@/components/Sidebar/FileTree.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import PrivacyWelcome from '@/components/common/PrivacyWelcome.vue'
 import GuidePanel from '@/components/Guide/GuidePanel.vue'
+import ShortcutCoach from '@/components/Guide/ShortcutCoach.vue'
 
 // Initialize stores and composables
 const noteStore = useNoteStore()
@@ -39,9 +41,19 @@ useEditorStyle() // 初始化编辑器样式预设
 useEdgePanel() // 把收藏笔记同步到屏幕边缘面板
 const { locale } = useI18n()
 
-// 同步语言设置到 vue-i18n
+// 同步语言设置到 vue-i18n，顺带同步菜单栏图标的菜单文案
 watch(() => settingStore.settings.language, (newLang) => {
   locale.value = newLang
+  invoke('set_tray_language', { lang: newLang }).catch(() => {
+    // 菜单栏图标在某些环境下不存在，忽略
+  })
+}, { immediate: true })
+
+// 菜单栏图标开关存在前端，挂载时立刻同步给后端（默认开）
+watch(() => settingStore.settings.trayIconEnabled, (enabled) => {
+  invoke('set_tray_icon_enabled', { enabled, lang: settingStore.settings.language }).catch(() => {
+    // 托盘不可用的环境下忽略
+  })
 }, { immediate: true })
 
 const { latestVersion, updateAvailable, checkForUpdates, downloadAndInstall, downloadState, downloadProgress } = useVersionCheck()
@@ -73,9 +85,39 @@ function acknowledgePrivacy() {
 /** 内置使用教程：第一次启动自动弹一次；设置 → 关于 → 使用教程 可随时再看 */
 const showGuide = ref(false)
 
+/**
+ * 第一次启动（还没确认隐私承诺 / 还没看完教程）时，窗口一律常显。
+ * 否则用户刚把窗口点出来、手指还没落到键盘上，它就自己收走了——
+ * 表现为「点了图标什么都没发生」。
+ */
+const isFirstRun = computed(
+  () => !settingStore.settings.privacyAcknowledged || !settingStore.settings.guideSeen,
+)
+
 function closeGuide() {
+  const wasFirstRun = !settingStore.settings.guideSeen
   showGuide.value = false
   settingStore.updateSettings('guideSeen', true)
+  // 教程里写了「⌥⌘A 唤出 / 收起」，光说不练等于没说：
+  // 第一次看完，必须真的按一次再按回来，才算走完引导。
+  if (wasFirstRun && !settingStore.settings.shortcutTutorialSeen) {
+    if (settingStore.settings.globalHotkey.trim()) {
+      showShortcutCoach.value = true
+    } else {
+      settingStore.updateSettings('shortcutTutorialSeen', true)
+    }
+  }
+}
+
+/** 快捷键练习：start=等用户收窗口，hidden=已收起，等用户按回来 */
+const showShortcutCoach = ref(false)
+const coachPhase = ref<'start' | 'hidden'>('start')
+
+function finishShortcutCoach() {
+  if (!showShortcutCoach.value) return
+  showShortcutCoach.value = false
+  coachPhase.value = 'start'
+  settingStore.updateSettings('shortcutTutorialSeen', true)
 }
 
 function openGuide() {
@@ -100,13 +142,45 @@ function handleSidebarResize(width: number) {
 function handleToggleSidebarEvent() {
   toggleSidebar()
 }
-onMounted(() => {
+// 菜单栏图标、设置页都会发「打开教程」：前者走后端 emit，后者走 window 事件
+let unlistenTrayGuide: UnlistenFn | null = null
+let unlistenMainToggle: UnlistenFn | null = null
+
+onMounted(async () => {
   window.addEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
   window.addEventListener('marknote:open-guide', openGuide)
+  try {
+    unlistenTrayGuide = await listen('marknote:open-guide', () => openGuide())
+    // ⌥⌘A 由后端全局快捷键处理，这里靠它回报的状态推进练习进度
+    // 上次演练没走完（比如没按就退出了）：这次启动接着练，别让它能被绕过
+    if (
+      settingStore.settings.privacyAcknowledged
+      && settingStore.settings.guideSeen
+      && !settingStore.settings.shortcutTutorialSeen
+      && settingStore.settings.globalHotkey.trim()
+    ) {
+      showShortcutCoach.value = true
+    }
+
+    unlistenMainToggle = await listen<boolean>('marknote:main-toggled', ({ payload }) => {
+      if (!showShortcutCoach.value) return
+      if (!payload) {
+        coachPhase.value = 'hidden'
+      } else if (coachPhase.value === 'hidden') {
+        finishShortcutCoach()
+      }
+    })
+  } catch {
+    // 纯浏览器里预览时没有 Tauri 事件总线，忽略
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('marknote:toggle-sidebar', handleToggleSidebarEvent)
   window.removeEventListener('marknote:open-guide', openGuide)
+  unlistenTrayGuide?.()
+  unlistenTrayGuide = null
+  unlistenMainToggle?.()
+  unlistenMainToggle = null
 })
 // 初始化完成标志，防止开机自启时iCloud未准备好导致空白
 const isAppReady = ref(false)
@@ -254,6 +328,10 @@ onMounted(async () => {
       && !settingStore.settings.alwaysOnTop
       && !isNativeDialogCurrentlyOpen()
       && !isMainAutoHideSuppressed()
+      // 首次启动还没走完引导：窗口常显，别让用户对着空桌面发呆
+      && !isFirstRun.value
+      // 快捷键练习期间窗口也得杵着，等用户亲手收起
+      && !showShortcutCoach.value
       // 切换工作空间要重建目录树和笔记索引，期间窗口会短暂抖动一次焦点，
       // 不该被当成「用户点走了」而自动隐藏
       && !workspaceStore.switching
@@ -263,6 +341,19 @@ onMounted(async () => {
     if (focused) {
       // 窗口获得焦点时检查是否在可见显示器内
       ensureWindowVisible()
+      // 按回快捷键把窗口叫回来了 -> 练习完成
+      if (showShortcutCoach.value && coachPhase.value === 'hidden') finishShortcutCoach()
+    } else if (showShortcutCoach.value && coachPhase.value === 'start') {
+      // 后端事件没送到时的兜底：确认窗口是真的被收起了，
+      // 而不是用户只是点了别的应用（那样窗口还杵在原地）。
+      void appWindow
+        .isVisible()
+        .then((visible) => {
+          if (!visible && showShortcutCoach.value && coachPhase.value === 'start') {
+            coachPhase.value = 'hidden'
+          }
+        })
+        .catch(() => {})
     }
   })
   // 监听键盘快捷键 Cmd+F 打开搜索页面，Cmd+W 关闭窗口
@@ -372,7 +463,14 @@ onUnmounted(() => {
     />
 
     <!-- 内置使用教程：第一次启动自动弹一次，关掉后不再自动出现 -->
-    <GuidePanel v-if="showGuide" @close="closeGuide" />
+    <GuidePanel v-if="showGuide" :first-run="isFirstRun" @close="closeGuide" />
+
+    <!-- 首次引导的最后一环：亲手按一次 ⌥⌘A -->
+    <ShortcutCoach
+      v-if="showShortcutCoach && !showGuide"
+      :phase="coachPhase"
+      @skip="finishShortcutCoach"
+    />
 
     <!-- 应用内确认框：WKWebView 不支持 window.confirm，统一走这里 -->
     <ConfirmDialog />
