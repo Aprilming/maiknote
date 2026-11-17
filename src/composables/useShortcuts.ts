@@ -75,12 +75,16 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
   const { toggleSourceMode } = useSourceMode()
 
   async function handleKeydown(e: KeyboardEvent) {
-    // 文本输入框里不触发快捷键，避免打字误触；编辑器（contenteditable）里照常触发
-    if (isEditableTarget(e.target)) {
-      return
-    }
-
     const shortcuts = settingStore.settings.shortcuts
+
+    // 焦点在输入框（搜索框、源码模式的 textarea）里时：
+    // 纯字面按键留给输入，别抢；带 Cmd / Option / Ctrl 的组合键照常触发。
+    // 一条都不放行的话，切到源码模式（textarea）后所有应用内快捷键全会哑掉。
+    if (isEditableTarget(e.target)) {
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) return
+      // Cmd+Backspace 在输入框里是「删到行首」的原生编辑动作，不当成删除笔记
+      if (matchesShortcut(e, shortcuts.deleteNote)) return
+    }
 
     // 新建笔记
     if (matchesShortcut(e, shortcuts.newNote)) {
