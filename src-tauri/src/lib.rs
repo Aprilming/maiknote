@@ -2,7 +2,9 @@
 pub mod app_icon;
 pub mod autostart;
 pub mod desktop_note;
+pub mod net;
 pub mod permissions;
+pub mod secrets;
 pub mod skills_sync;
 pub mod tray;
 pub mod workspace;
@@ -624,8 +626,10 @@ async fn get_icloud_path() -> Result<String, String> {
 
 /// Read metadata.json file
 #[tauri::command]
-async fn read_metadata(base_path: String) -> Result<String, String> {
-    let path = PathBuf::from(base_path).join("metadata.json");
+async fn read_metadata(app: AppHandle, base_path: String) -> Result<String, String> {
+    // 读命令同样要过路径闸：否则渲染进程换个 base_path 就能读工作空间外的 metadata.json
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(base).join("metadata.json");
 
     if !path.exists() {
         // Return empty metadata if file doesn't exist
@@ -650,8 +654,9 @@ async fn write_metadata(app: AppHandle, base_path: String, content: String) -> R
 
 /// Read directories.json file
 #[tauri::command]
-async fn read_directories(base_path: String) -> Result<String, String> {
-    let path = PathBuf::from(base_path).join("directories.json");
+async fn read_directories(app: AppHandle, base_path: String) -> Result<String, String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(base).join("directories.json");
 
     if !path.exists() {
         return Ok(r#"{"version":1,"directories":[]}"#.to_string());
@@ -670,8 +675,9 @@ async fn write_directories(app: AppHandle, base_path: String, content: String) -
 
 /// Read assistants.json file
 #[tauri::command]
-async fn read_assistants(base_path: String) -> Result<String, String> {
-    let path = PathBuf::from(base_path).join("assistants.json");
+async fn read_assistants(app: AppHandle, base_path: String) -> Result<String, String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = PathBuf::from(base).join("assistants.json");
 
     if !path.exists() {
         return Ok(r#"{"version":1,"assistants":[]}"#.to_string());
@@ -743,8 +749,9 @@ fn note_path(base_path: &str, dir: Option<&str>, file_name: &str) -> PathBuf {
 
 /// Read a single note file
 #[tauri::command]
-async fn read_note(base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
-    let path = note_path(&base_path, dir.as_deref(), &file_name);
+async fn read_note(app: AppHandle, base_path: String, dir: Option<String>, file_name: String) -> Result<String, String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = note_path(&base, dir.as_deref(), &file_name);
 
     if !path.exists() {
         return Ok(String::new());
@@ -905,8 +912,8 @@ fn collect_note_files(
 
 /// 列出磁盘上所有笔记文件
 #[tauri::command]
-async fn list_note_files(base_path: String) -> Result<Vec<NoteFileEntry>, String> {
-    let base = PathBuf::from(&base_path);
+async fn list_note_files(app: AppHandle, base_path: String) -> Result<Vec<NoteFileEntry>, String> {
+    let base = PathBuf::from(workspace_base(&app, &base_path)?);
     if !base.exists() {
         return Ok(Vec::new());
     }
@@ -1052,13 +1059,24 @@ struct LayoutMove {
 }
 
 #[tauri::command]
-async fn migrate_note_layout(base_path: String, moves: Vec<LayoutMove>) -> Result<usize, String> {
+async fn migrate_note_layout(app: AppHandle, base_path: String, moves: Vec<LayoutMove>) -> Result<usize, String> {
+    // base_path 直接当根用过：传个工作空间外的路径就能批量改名、顺手删掉目标处的空目录
+    let base_path = workspace_base(&app, &base_path)?;
     let root = PathBuf::from(&base_path);
     if !root.exists() {
         return Ok(0);
     }
     let mut migrated = 0usize;
     for m in moves {
+        // id 来自 metadata.json，只认 uuid / 模板 id 的字符集：别让它拼出 note_../../x 这种名字
+        let id_safe = !m.id.is_empty()
+            && m
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !id_safe {
+            continue;
+        }
         let old_name = format!("note_{}.md", m.id);
         let candidates = [
             match m.from_dir.as_deref().and_then(sanitize_rel_dir) {
@@ -1094,6 +1112,10 @@ async fn migrate_note_layout(base_path: String, moves: Vec<LayoutMove>) -> Resul
                 i += 1;
             }
         }
+        // 目标是 base 下的相对路径拼出来的，再兜一道：绝不 rename 到 root 之外
+        if !final_dest.starts_with(&root) || !src.starts_with(&root) {
+            continue;
+        }
         if fs::rename(&src, &final_dest).is_ok() {
             migrated += 1;
         }
@@ -1124,8 +1146,9 @@ async fn migrate_note_layout(base_path: String, moves: Vec<LayoutMove>) -> Resul
 
 /// Set note file to read-only (444 permission)
 #[tauri::command]
-async fn set_note_readonly(base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
-    let path = note_path(&base_path, dir.as_deref(), &file_name);
+async fn set_note_readonly(app: AppHandle, base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = note_path(&base, dir.as_deref(), &file_name);
 
     if path.exists() {
         #[cfg(unix)]
@@ -1146,8 +1169,9 @@ async fn set_note_readonly(base_path: String, dir: Option<String>, file_name: St
 
 /// Set note file to read-write (644 permission)
 #[tauri::command]
-async fn set_note_readwrite(base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
-    let path = note_path(&base_path, dir.as_deref(), &file_name);
+async fn set_note_readwrite(app: AppHandle, base_path: String, dir: Option<String>, file_name: String) -> Result<(), String> {
+    let base = workspace_base(&app, &base_path)?;
+    let path = note_path(&base, dir.as_deref(), &file_name);
 
     if path.exists() {
         #[cfg(unix)]
@@ -1175,6 +1199,9 @@ async fn ensure_images_folder(app: AppHandle, base_path: String) -> Result<Strin
     Ok(path.to_string_lossy().to_string())
 }
 
+/// 单张图片的解码上限：粘贴超大图时要在解码前就挡住，不能让它把内存打满
+const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
 /// Save image to the images folder
 #[tauri::command]
 async fn save_image(app: AppHandle, base_path: String, image_data: String, filename: String) -> Result<String, String> {
@@ -1191,7 +1218,21 @@ async fn save_image(app: AppHandle, base_path: String, image_data: String, filen
         &image_data
     };
 
+    // 先按 base64 长度估算解码后体积：超限的直接拒，不把上百 MB 的字符串解进内存
+    if base64_data.len() / 4 * 3 > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "图片过大，超过 {} MB 上限",
+            MAX_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
+
     let image_bytes = base64_decode(base64_data)?;
+    if image_bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "图片过大，超过 {} MB 上限",
+            MAX_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
 
     // 文件名来自前端，先清洗再拼：否则 `../../xxx` 能写穿 images 目录
     let safe_name = sanitize_file_name(&filename);
@@ -1637,20 +1678,92 @@ async fn get_network_info(ip_api_url: Option<String>) -> Result<NetworkInfo, Str
 /// IP 助手默认出口 IP 查询地址（前端可在通用设置里改，留空即用这个）
 const DEFAULT_IP_API_URL: &str = "https://ip.911505.xyz/ip/location";
 
-/// 请求远程 API 获取出口 IP 信息；endpoint 只接受 http/https，其余回落默认地址
+/// 只放行公网地址：字面量 IP 直接查网段，域名先解析再逐条查，
+/// 挡住 127.0.0.1 / 10.x / 169.254.169.254 这类内网与元数据地址。
+pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                // 100.64.0.0/10 CGNAT，是运营商内网，不是出口
+                || (o[0] == 100 && (64..128).contains(&o[1])))
+        }
+        IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // fc00::/7 唯一本地地址、fe80::/10 链路本地地址
+                || (seg[0] & 0xfe00) == 0xfc00
+                || (seg[0] & 0xffc0) == 0xfe80)
+        }
+    }
+}
+
+/// 校验待请求的主机可以访问：不允许回环、内网、链路本地与云元数据地址
+fn ensure_public_host(host: &str, port: u16) -> Result<(), String> {
+    use std::net::ToSocketAddrs;
+
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return if is_public_ip(ip) {
+            Ok(())
+        } else {
+            Err(format!("拒绝访问内网地址: {host}"))
+        };
+    }
+
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("域名解析失败: {e}"))?;
+    let mut resolved = false;
+    for addr in addrs {
+        resolved = true;
+        if !is_public_ip(addr.ip()) {
+            return Err(format!("拒绝访问内网地址: {}", addr.ip()));
+        }
+    }
+    if !resolved {
+        return Err("域名没有解析结果".to_string());
+    }
+    Ok(())
+}
+
+/// 请求远程 API 获取出口 IP 信息。地址可由前端改（设置里的「IP 查询地址」），
+/// 所以这里必须自己兜住 SSRF：只走 http/https、不跟随跳转、目标必须是公网主机。
 async fn fetch_public_ip(endpoint: Option<&str>) -> Result<PublicIpInfo, String> {
     let url = endpoint
         .map(str::trim)
-        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .filter(|u| !u.is_empty())
         .unwrap_or(DEFAULT_IP_API_URL);
+
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("地址不合法: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("只支持 http / https 地址".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "地址缺少主机名".to_string())?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "地址端口不合法".to_string())?;
+    ensure_public_host(&host, port)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        // 不跟随跳转：否则一个公网域名可以把请求转到内网地址上
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
 
     let resp = client
-        .get(url)
+        .get(parsed)
         .send()
         .await
         .map_err(|e| format!("请求失败: {e}"))?;
@@ -2576,6 +2689,12 @@ pub fn run() {
             autostart::disable_autostart,
             autostart::is_autostart_enabled,
             get_network_info,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
+            net::ai_chat_stream,
+            net::ai_chat_cancel,
+            net::fetch_page_html,
             permissions::full_disk_access_status,
             permissions::open_full_disk_access_settings,
             permissions::reveal_app_in_finder,

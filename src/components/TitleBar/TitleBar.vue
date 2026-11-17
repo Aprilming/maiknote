@@ -105,6 +105,12 @@ async function toggleFullscreen() {
 
 async function closeWindow() {
   if (settingStore.settings.closeBehavior === 'quit') {
+    // 退出前先把防抖队列里的内容落盘，否则最后一个保存窗口里的编辑会丢
+    try {
+      await noteStore.flushPendingSave()
+    } catch (e) {
+      console.error('flushPendingSave before quit failed:', e)
+    }
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('exit_app')
   } else {

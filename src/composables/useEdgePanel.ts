@@ -271,29 +271,43 @@ export function useEdgePanel() {
   )
 
   void (async () => {
-    unlisteners.push(
-      await listen(READY_EVENT, () => scheduleSync(0)),
+    // 逐个注册并立即记账：中途失败时已注册的监听仍然留在 unlisteners 里，由 onUnmounted 统一注销
+    try {
+      unlisteners.push(await listen(READY_EVENT, () => scheduleSync(0)))
       // 贴边窗口收到笔记后的回执（看门狗用）
-      await listen('maiknote:edge-ack', () => {
-        lastEdgeAckAt = Date.now()
-      }),
-      await listen<{ id: string } | string>(OPEN_EVENT, e => {
-        const id = typeof e.payload === 'string' ? e.payload : e.payload?.id
-        if (id) void openFromEdge(id)
-      }),
-      await listen<boolean>('maiknote:edge-pinned', e => {
-        edgePinned = e.payload === true
-        scheduleSync(0)
-      }),
+      unlisteners.push(
+        await listen('maiknote:edge-ack', () => {
+          lastEdgeAckAt = Date.now()
+        }),
+      )
+      unlisteners.push(
+        await listen<{ id: string } | string>(OPEN_EVENT, e => {
+          const id = typeof e.payload === 'string' ? e.payload : e.payload?.id
+          if (id) void openFromEdge(id)
+        }),
+      )
+      unlisteners.push(
+        await listen<boolean>('maiknote:edge-pinned', e => {
+          edgePinned = e.payload === true
+          scheduleSync(0)
+        }),
+      )
       // 边缘面板右键菜单「取消收藏」
-      await listen<{ id: string }>(UNPIN_EVENT, e => {
-        void noteStore.togglePin(e.payload.id)
-      }),
+      unlisteners.push(
+        await listen<{ id: string }>(UNPIN_EVENT, e => {
+          void noteStore.togglePin(e.payload.id)
+        }),
+      )
       // 边缘面板右键菜单「剪切 / 粘贴」
-      await listen<EdgeEditPayload>(EDIT_EVENT, e => {
-        applyEdgeEdit(e.payload)
-      }),
-    )
+      unlisteners.push(
+        await listen<EdgeEditPayload>(EDIT_EVENT, e => {
+          applyEdgeEdit(e.payload)
+        }),
+      )
+    } catch (e) {
+      // 监听注册失败不让整个面板挂掉：已注册的仍由 onUnmounted 统一注销
+      console.error('[edge-panel] register listeners failed:', e)
+    }
     // 首次同步（等 noteStore 加载完由 watch 触发一次）
     scheduleSync(0)
   })()

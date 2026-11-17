@@ -234,6 +234,28 @@ export const useNoteStore = defineStore('note', () => {
   let saveTimeout: number | null = null
   const pendingSaveNotes = new Set<string>()
   let metadataSavePending = false
+  // 当前这一轮正在写的东西：定时器里那一轮的 rejection 必须靠它把改动重新排队，
+  // 因为队列在 await 之前就被摘空了，不重新排 = 这批改动彻底丢掉
+  let inFlightNoteIds: string[] = []
+  let inFlightMetadata = false
+
+  /**
+   * 定时器触发的落盘入口（fire-and-forget 调用）。
+   * runPendingSave 的 rejection 必须在这里收口：打印 + 把飞行中的改动重新排进
+   * 队列，并复用 runPendingSave 末尾那条失败重试链再排一轮。
+   */
+  function runPendingSaveInBackground(): void {
+    void runPendingSave().catch((e) => {
+      console.error('Background save failed, re-queueing pending writes:', e)
+      for (const id of inFlightNoteIds) pendingSaveNotes.add(id)
+      if (inFlightMetadata) metadataSavePending = true
+      if (pendingSaveNotes.size === 0 && !metadataSavePending) return
+      if (saveTimeout) clearTimeout(saveTimeout)
+      const autoSaveInterval = useSettingStore().settings.autoSaveInterval
+      const delay = autoSaveInterval > 0 ? autoSaveInterval : 500
+      saveTimeout = setTimeout(runPendingSaveInBackground, delay) as unknown as number
+    })
+  }
 
   /**
    * Schedule a save to iCloud (debounced)
@@ -252,7 +274,7 @@ export const useNoteStore = defineStore('note', () => {
     // 保存节流跟随设置里的自动保存间隔，不再写死 500ms
     const autoSaveInterval = useSettingStore().settings.autoSaveInterval
     const delay = autoSaveInterval > 0 ? autoSaveInterval : 500
-    saveTimeout = setTimeout(() => void runPendingSave(), delay) as unknown as number
+    saveTimeout = setTimeout(runPendingSaveInBackground, delay) as unknown as number
   }
 
   /** 立刻把待保存内容落盘（切换工作空间前必须调用，否则会写进新空间的目录） */
@@ -289,6 +311,8 @@ export const useNoteStore = defineStore('note', () => {
           .filter((n): n is Note => n !== undefined)
         const writeMetadata = metadataSavePending || notesToSave.length > 0
         metadataSavePending = false
+        inFlightNoteIds = ids
+        inFlightMetadata = writeMetadata
 
         let failed = false
 
@@ -316,6 +340,10 @@ export const useNoteStore = defineStore('note', () => {
         // 有失败的就不在这一圈里连着重试，避免磁盘满 / 权限问题时空转
         if (failed) break
       }
+
+      // 正常走完：飞行中的改动已经各自有了归宿（写成功，或由上面的 catch 重新排队）
+      inFlightNoteIds = []
+      inFlightMetadata = false
     })()
 
     try {
@@ -329,7 +357,7 @@ export const useNoteStore = defineStore('note', () => {
       if (saveTimeout) clearTimeout(saveTimeout)
       const autoSaveInterval = useSettingStore().settings.autoSaveInterval
       const delay = autoSaveInterval > 0 ? autoSaveInterval : 500
-      saveTimeout = setTimeout(() => void runPendingSave(), delay) as unknown as number
+      saveTimeout = setTimeout(runPendingSaveInBackground, delay) as unknown as number
     }
   }
 
@@ -470,6 +498,22 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * 立即把 metadata 落盘，失败收进重试链。
+   * 这些调用点都是「顺手持久化」的副作用（删除、还原、改名、导航清理空笔记…），
+   * 调用方是 UI 事件处理器：往上抛只会变成 unhandled rejection，metadata 也不会
+   * 重试；所以失败就重新排队，交给 runPendingSave 的失败重试链。
+   */
+  async function persistMetadataNow(): Promise<void> {
+    try {
+      await saveMetadataToCloud()
+    } catch (e) {
+      console.error('Failed to persist metadata, queued for retry:', e)
+      metadataSavePending = true
+      scheduleSave()
+    }
+  }
+
+  /**
    * Save metadata to iCloud (internal function)
    */
   async function saveMetadataToCloud(): Promise<void> {
@@ -597,6 +641,23 @@ export const useNoteStore = defineStore('note', () => {
     return color || undefined
   }
 
+  /**
+   * 新建笔记后立刻落盘。
+   * 写失败不往外抛：这条笔记已经在内存里、也在列表里了，而 createNote* 的调用方
+   * （快捷键、侧边栏、目录过滤切空目录）都是 fire-and-forget，抛出去只会变成
+   * unhandled rejection。所以改成把 id 重新排进保存队列，交给失败重试链继续写。
+   */
+  async function saveNewNote(note: Note): Promise<void> {
+    try {
+      await saveNoteToCloud(note)
+    } catch (e) {
+      console.error('Failed to save new note to iCloud, queued for retry:', e)
+      pendingSaveNotes.add(note.id)
+      metadataSavePending = true
+      scheduleSave()
+    }
+  }
+
   async function createNoteAtHead(): Promise<Note> {
     const now = Date.now()
     const newNote: Note = {
@@ -614,7 +675,7 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = newNote.id
 
     // Save to iCloud
-    await saveNoteToCloud(newNote)
+    await saveNewNote(newNote)
 
     return newNote
   }
@@ -637,7 +698,7 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = newNote.id
 
     // Save to iCloud
-    await saveNoteToCloud(newNote)
+    await saveNewNote(newNote)
 
     return newNote
   }
@@ -670,7 +731,7 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = newNote.id
 
     // Save to iCloud
-    await saveNoteToCloud(newNote)
+    await saveNewNote(newNote)
 
     return newNote
   }
@@ -703,7 +764,7 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = newNote.id
 
     // Save to iCloud
-    await saveNoteToCloud(newNote)
+    await saveNewNote(newNote)
 
     return newNote
   }
@@ -733,7 +794,7 @@ export const useNoteStore = defineStore('note', () => {
     currentNoteId.value = newNote.id
 
     // Save to iCloud
-    await saveNoteToCloud(newNote)
+    await saveNewNote(newNote)
 
     return newNote
   }
@@ -806,7 +867,7 @@ export const useNoteStore = defineStore('note', () => {
           currentNoteId.value = active[newIndex]?.id ?? null
         }
         await purgeNoteFile(note)
-        await saveMetadataToCloud()
+        await persistMetadataNow()
         return
       }
 
@@ -814,7 +875,7 @@ export const useNoteStore = defineStore('note', () => {
       note.updatedAt = Date.now()
       note.isPinned = false
       deletingNoteId.value = null
-      await saveMetadataToCloud()
+      await persistMetadataNow()
 
       // If deleted note was current, select the previous note (or first if at index 0)
       if (currentNoteId.value === id) {
@@ -833,6 +894,13 @@ export const useNoteStore = defineStore('note', () => {
 
     const directoryStore = useDirectoryStore()
     const fromRel = dirRelPath(note.directoryId) ?? null
+    // 搬文件失败要整条回滚：先把「恢复前」的状态留一份
+    const prev = {
+      directoryId: note.directoryId,
+      trashedAt: note.trashedAt,
+      updatedAt: note.updatedAt,
+      fileName: note.fileName,
+    }
     if (note.directoryId && !directoryStore.getDirectory(note.directoryId)) {
       note.directoryId = undefined
     }
@@ -843,10 +911,22 @@ export const useNoteStore = defineStore('note', () => {
       // 目录没了，把文件一起搬到现在的位置
       const fileName = noteFile(note)
       const desired = uniqueFileName(note.directoryId, fileName, note.id)
-      await fs.moveNoteFile(fileName, fromRel, toRel, desired)
-      note.fileName = desired
+      try {
+        await fs.moveNoteFile(fileName, fromRel, toRel, desired)
+        note.fileName = desired
+      } catch (e) {
+        // 文件没搬过来 = 这条笔记还躺在原处，内存退回恢复前，不能报「恢复成功」
+        note.directoryId = prev.directoryId
+        note.trashedAt = prev.trashedAt
+        note.updatedAt = prev.updatedAt
+        note.fileName = prev.fileName
+        console.error('[restore-note] 搬移文件失败，已回滚恢复:', e)
+        const msg = e instanceof Error ? e.message : String(e)
+        showHint(i18n.global.t('trash.restoreFailed', { reason: msg }))
+        return
+      }
     }
-    await saveMetadataToCloud()
+    await persistMetadataNow()
   }
 
   /**
@@ -871,7 +951,7 @@ export const useNoteStore = defineStore('note', () => {
     if (currentIndex !== -1) {
       notes.value.splice(currentIndex, 1)
     }
-    await saveMetadataToCloud()
+    await persistMetadataNow()
 
     if (currentNoteId.value === id) {
       currentNoteId.value = activeNoteList.value[0]?.id ?? null
@@ -1035,14 +1115,24 @@ export const useNoteStore = defineStore('note', () => {
   async function toggleLock(id: string) {
     const note = notes.value.find(n => n.id === id)
     if (note) {
+      const prevLocked = note.isLocked
+      const prevUpdatedAt = note.updatedAt
       note.isLocked = !note.isLocked
       note.updatedAt = Date.now()
 
       // Set file permission based on lock state
-      if (note.isLocked) {
-        await fs.setNoteReadonly(noteFile(note), dirRelPath(note.directoryId))
-      } else {
-        await fs.setNoteReadwrite(noteFile(note), dirRelPath(note.directoryId))
+      try {
+        if (note.isLocked) {
+          await fs.setNoteReadonly(noteFile(note), dirRelPath(note.directoryId))
+        } else {
+          await fs.setNoteReadwrite(noteFile(note), dirRelPath(note.directoryId))
+        }
+      } catch (e) {
+        // 权限没改成功：锁图标不能停在「已锁」上，否则用户以为文件真的锁住了
+        console.error('[toggle-lock] 修改文件权限失败，已回滚锁定状态:', e)
+        note.isLocked = prevLocked
+        note.updatedAt = prevUpdatedAt
+        return
       }
 
       // Schedule metadata save to iCloud (debounced)
@@ -1093,7 +1183,7 @@ export const useNoteStore = defineStore('note', () => {
 
       // 空笔记直接清掉磁盘文件，不留残余
       await purgeNoteFile(noteToDelete)
-      await saveMetadataToCloud()
+      await persistMetadataNow()
     } else {
       // Navigate to previous note
       navDirection.value = 'left'
@@ -1132,7 +1222,7 @@ export const useNoteStore = defineStore('note', () => {
       currentNoteId.value = active[activeIdx + 1].id
 
       await purgeNoteFile(noteToDelete)
-      await saveMetadataToCloud()
+      await persistMetadataNow()
     } else {
       // Navigate to next note
       navDirection.value = 'right'
@@ -1236,7 +1326,7 @@ export const useNoteStore = defineStore('note', () => {
     } catch (err) {
       console.error('[rename-note] 写入内容失败:', err)
     }
-    await saveMetadataToCloud()
+    await persistMetadataNow()
     return true
   }
 
@@ -1251,13 +1341,27 @@ export const useNoteStore = defineStore('note', () => {
       if ((note.directoryId ?? null) === (directoryId ?? null)) return
       const fromRel = dirRelPath(note.directoryId) ?? null
       const fileName = noteFile(note)
+      const prev = {
+        directoryId: note.directoryId,
+        updatedAt: note.updatedAt,
+        fileName: note.fileName,
+      }
       note.directoryId = directoryId || undefined
       note.updatedAt = Date.now()
       const toRel = dirRelPath(note.directoryId) ?? null
       const desired = uniqueFileName(directoryId, fileName, note.id)
       // Move the actual file on the filesystem
-      await fs.moveNoteFile(fileName, fromRel, toRel, desired)
-      note.fileName = desired
+      try {
+        await fs.moveNoteFile(fileName, fromRel, toRel, desired)
+        note.fileName = desired
+      } catch (e) {
+        // 搬运失败：内存必须退回原目录 / 原文件名，否则界面显示「已移动」、磁盘还在老地方
+        console.error(`[move-note] 移动笔记失败（${fromRel ?? '(root)'} -> ${toRel ?? '(root)'}），已回滚内存状态:`, e)
+        note.directoryId = prev.directoryId
+        note.updatedAt = prev.updatedAt
+        note.fileName = prev.fileName
+        return
+      }
       scheduleSave()
     }
   }
@@ -1300,7 +1404,7 @@ export const useNoteStore = defineStore('note', () => {
       const index = notes.value.findIndex(n => n.id === note.id)
       if (index !== -1) notes.value.splice(index, 1)
     }
-    await saveMetadataToCloud()
+    await persistMetadataNow()
   }
 
   return {

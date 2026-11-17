@@ -93,6 +93,53 @@ fn normalize_target(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// 自定义空间的目录至少要这么深（/Users/<name>/<folder>）：再浅的就是根目录、/Users、家目录，
+/// 把它们当根等于没有闸。
+const MIN_WORKSPACE_DEPTH: usize = 3;
+
+/// 根目录、/Users、家目录本身都不能当工作空间：它们一旦成为合法根，
+/// 所有基于根的校验都会跟着失效。
+fn is_root_like(canonical: &Path) -> bool {
+    if canonical.components().count() < MIN_WORKSPACE_DEPTH {
+        return true;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if let Ok(home) = PathBuf::from(home).canonicalize() {
+            // 家目录本身，或者家目录的祖先
+            if home == canonical || home.starts_with(canonical) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 落盘前的条目校验：不存在的目录放行（它成不了有效根，留着只是为了让前端能把它删掉），
+/// 存在的目录必须过和「手动选目录」同一套检查。
+fn validate_saved_workspace_entry(text: &str) -> Result<(), String> {
+    let target = expand_home(text.trim());
+    if !target.is_absolute() {
+        return Err("工作空间必须是绝对路径".to_string());
+    }
+    let canonical = match target.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    if !canonical.is_dir() {
+        return Err("不是文件夹".to_string());
+    }
+    if is_root_like(&canonical) {
+        return Err("根目录 / 主目录不能当工作空间".to_string());
+    }
+    if to_slash(&canonical).contains("com~apple~CloudDocs") {
+        return Err("iCloud 目录只能作为默认空间".to_string());
+    }
+    let probe = canonical.join(".maiknote-write-probe");
+    fs::write(&probe, b"ok").map_err(|_| "没有写入权限".to_string())?;
+    let _ = fs::remove_file(&probe);
+    Ok(())
+}
+
 /// 允许落盘的根目录：应用配置目录（workspaces.json / workspace-meta）、iCloud 默认空间，
 /// 以及用户在配置里登记过的自选空间——自选空间可以在任意位置，只能从配置里读。
 fn allowed_roots(app: &AppHandle) -> Vec<PathBuf> {
@@ -103,7 +150,14 @@ fn allowed_roots(app: &AppHandle) -> Vec<PathBuf> {
                 if let Some(list) = json.get("workspaces").and_then(|v| v.as_array()) {
                     for item in list {
                         if let Some(path) = item.get("path").and_then(|v| v.as_str()) {
-                            roots.push(expand_home(path));
+                            let root = expand_home(path);
+                            // 配置文件被手改坏（比如 path 写成 "/"）时不认这条：宁可少一个根，
+                            // 也不能把根目录变成合法工作空间
+                            if root.components().count() >= MIN_WORKSPACE_DEPTH
+                                && !is_root_like(&root)
+                            {
+                                roots.push(root);
+                            }
                         }
                     }
                 }
@@ -146,6 +200,24 @@ pub fn read_workspaces(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn write_workspaces(app: AppHandle, content: String) -> Result<(), String> {
     let dir = config_dir(&app)?;
+    // 这个文件就是 allowed_roots 的来源：写进去什么，路径闸就认什么。
+    // 所以落盘前必须逐条校验，否则一条 path=/ 就能把整个路径安全模型关掉。
+    if !content.trim().is_empty() {
+        let json: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("工作空间配置不是合法 JSON: {}", e))?;
+        let list = json
+            .get("workspaces")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "工作空间配置缺少 workspaces 数组".to_string())?;
+        for item in list {
+            let path = item
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "工作空间条目缺少 path".to_string())?;
+            validate_saved_workspace_entry(path)
+                .map_err(|e| format!("拒绝保存工作空间 {}: {}", path, e))?;
+        }
+    }
     fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {}", e))?;
     fs::write(dir.join("workspaces.json"), content).map_err(|e| format!("保存工作空间配置失败: {}", e))
 }
@@ -187,6 +259,9 @@ pub fn validate_workspace_dir(path: String) -> Result<String, String> {
     let canonical = fs::canonicalize(&target).map_err(|_| "文件夹不存在".to_string())?;
     if !canonical.is_dir() {
         return Err("请选择一个文件夹".to_string());
+    }
+    if is_root_like(&canonical) {
+        return Err("请选择更下一层的文件夹，根目录和主目录不能当工作空间".to_string());
     }
     // 自定义空间只接受 iCloud 之外的文件夹（iCloud 里只有默认空间）
     let text = to_slash(&canonical);

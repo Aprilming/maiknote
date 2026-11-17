@@ -439,7 +439,6 @@ export default {
   'search.today': '今天',
   'search.yesterday': '昨天',
   'search.daysAgo': '{n}天前',
-  'search.monthDay': '{month}月{day}日',
 
   'trash.title': '回收站',
   'trash.empty': '清空',

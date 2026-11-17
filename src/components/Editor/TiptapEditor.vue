@@ -48,7 +48,7 @@ import { EMPTY_LINE_MARK, EMPTY_LINE_CHAR, isEmptyLineMarkerText } from './empty
 import { EmptyLineNormalizer } from './extensions/EmptyLineNormalizer'
 import { readText } from '@tauri-apps/plugin-clipboard-manager'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
+import { invoke, Channel } from '@tauri-apps/api/core'
 import { copyText } from '@/utils/clipboard'
 
 const lowlight = createLowlight(all)
@@ -574,6 +574,12 @@ const aiPreviewStatus = ref<'idle' | 'streaming' | 'done' | 'error'>('idle')
 const aiPreviewSearch = ref<'off' | 'used' | 'empty' | 'failed'>('off')
 const aiTargetScope = ref<'selection' | 'document'>('selection')
 const aiPreviewBodyRef = ref<HTMLElement>()
+// Rust 侧 ai_chat_stream 推回来的事件（serde: tag = type, camelCase）
+type AiStreamEvent =
+  | { type: 'chunk'; data: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
 let aiAbortController: AbortController | null = null
 let aiInputText = '' // 送给模型的原文
 let aiDocSnapshot = '' // 发起请求时的整篇 Markdown，用于判断笔记是否已被改动
@@ -929,31 +935,126 @@ async function callAI(assistantId: string) {
     }
   }
 
-  // 走 Tauri 的 http 插件发请求：浏览器原生 fetch 会被 CORS 挡死（模型服务不返跨域头）。
-  // 纯 Web 调试（没有 __TAURI_INTERNALS__）时退回原生 fetch。
-  const aiFetch = typeof (window as any).__TAURI_INTERNALS__ === 'undefined'
-    ? (fetch as unknown as typeof tauriFetch)
-    : tauriFetch
+  // Tauri 下由 Rust 侧代发请求：webview 不受 CORS 限制，capabilities 也不再需要通配域。
+  // 纯 Web 调试（没有 __TAURI_INTERNALS__）时仍走浏览器原生 fetch。
+  const inTauri = typeof (window as any).__TAURI_INTERNALS__ !== 'undefined'
 
   aiAbortController = new AbortController()
   const signal = aiAbortController.signal
 
+  // 两条分支共用的请求体
+  const aiRequestBody = {
+    model: settingStore.settings.aiModel,
+    messages: [
+      { role: 'system', content: '你是一个笔记助手, 协助用户完成文字处理，严格遵守用户的规则！' },
+      { role: 'user', content: `${prompt}\n\n${text}${searchContext}` }
+    ],
+    temperature: 0.7,
+    stream: true
+  }
+
+  // SSE 的一行可能被网络切片劈成两半：必须留缓冲，否则被劈开的那条 delta 会整条丢掉（表现为随机少字）
+  let sseBuffer = ''
+
+  const consumeSseLine = (rawLine: string) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (!line.startsWith('data:')) return
+    const data = line.slice(5).trim()
+    if (!data || data === '[DONE]') return
+    try {
+      const parsed = JSON.parse(data)
+      const choice = parsed.choices?.[0]
+      const piece = choice?.delta?.content ?? choice?.message?.content ?? choice?.text
+      if (typeof piece === 'string' && piece) {
+        aiPreviewText.value += piece
+        if (/[\[\]□☐]/.test(piece)) {
+          aiPreviewText.value = normalizeTaskMarkdown(aiPreviewText.value)
+        }
+        scrollAiPreviewToBottom()
+      }
+    } catch {
+      // 单条事件解析失败就跳过这一条，不影响后面的内容
+    }
+  }
+
+  // 收到一段原始文本：按行切开，最后那半行留在缓冲里
+  const appendChunk = (data: string) => {
+    sseBuffer += data
+    const lines = sseBuffer.split('\n')
+    sseBuffer = lines.pop() ?? ''
+    for (const line of lines) consumeSseLine(line)
+  }
+
+  // 流结束：收尾最后一行 + 归一化 + 判定预览状态（两条分支共用）
+  const finalizeStream = () => {
+    if (sseBuffer) {
+      consumeSseLine(sseBuffer)
+      sseBuffer = ''
+    }
+    aiPreviewText.value = normalizeTaskMarkdown(
+      aiPreviewText.value.replace(/^[\s\u200b]+/, '').trimEnd()
+    )
+    if (aiPreviewText.value) {
+      aiPreviewStatus.value = 'done'
+    } else {
+      aiPreviewStatus.value = 'error'
+      aiPreviewError.value = t('toast.aiEmptyResult')
+    }
+  }
+
+  // 解绑 abort 监听，别让控制器把闭包留到下一次请求
+  let detachAbort: (() => void) | null = null
+
   try {
-    const response = await aiFetch(`${settingStore.settings.aiUrl}`, {
+    if (inTauri) {
+      const requestId = crypto.randomUUID()
+      let streamError = ''
+
+      const channel = new Channel<AiStreamEvent>()
+      channel.onmessage = (ev) => {
+        if (ev.type === 'chunk') {
+          appendChunk(ev.data)
+        } else if (ev.type === 'error') {
+          // 只记下来：invoke 同时会 reject，统一走下面的错误分支
+          streamError = ev.message || 'API错误'
+        }
+      }
+
+      // 「停止」按钮 abort 时通知 Rust 断流（invoke 本身没有 signal 可挂）
+      const cancelRequest = () => {
+        void invoke('ai_chat_cancel', { requestId }).catch(() => {})
+      }
+      signal.addEventListener('abort', cancelRequest)
+      detachAbort = () => signal.removeEventListener('abort', cancelRequest)
+
+      await invoke('ai_chat_stream', {
+        requestId,
+        url: settingStore.settings.aiUrl,
+        apiKey: settingStore.settings.aiKey,
+        body: JSON.stringify(aiRequestBody),
+        onEvent: channel,
+      })
+
+      // 用户点了停止：沿用原来的 AbortError 语义（有内容算 done，没内容回 idle）
+      if (signal.aborted) {
+        const aborted = new Error('aborted')
+        aborted.name = 'AbortError'
+        throw aborted
+      }
+      if (streamError) {
+        throw new Error(streamError)
+      }
+      finalizeStream()
+      return
+    }
+
+    const response = await fetch(`${settingStore.settings.aiUrl}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${settingStore.settings.aiKey}`
       },
-      body: JSON.stringify({
-        model: settingStore.settings.aiModel,
-        messages: [
-          { role: 'system', content: '你是一个笔记助手, 协助用户完成文字处理，严格遵守用户的规则！' },
-          { role: 'user', content: `${prompt}\n\n${text}${searchContext}` }
-        ],
-        temperature: 0.7,
-        stream: true
-      }),
+      body: JSON.stringify(aiRequestBody),
       signal
     })
 
@@ -967,50 +1068,14 @@ async function callAI(assistantId: string) {
     }
 
     const decoder = new TextDecoder()
-    // SSE 的一行可能被网络切片劈成两半：必须留缓冲，否则被劈开的那条 delta 会整条丢掉（表现为随机少字）
-    let sseBuffer = ''
-
-    const consumeSseLine = (rawLine: string) => {
-      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
-      if (!line.startsWith('data:')) return
-      const data = line.slice(5).trim()
-      if (!data || data === '[DONE]') return
-      try {
-        const parsed = JSON.parse(data)
-        const choice = parsed.choices?.[0]
-        const piece = choice?.delta?.content ?? choice?.message?.content ?? choice?.text
-        if (typeof piece === 'string' && piece) {
-          aiPreviewText.value += piece
-          if (/[\[\]□☐]/.test(piece)) {
-            aiPreviewText.value = normalizeTaskMarkdown(aiPreviewText.value)
-          }
-          scrollAiPreviewToBottom()
-        }
-      } catch {
-        // 单条事件解析失败就跳过这一条，不影响后面的内容
-      }
-    }
-
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      sseBuffer += decoder.decode(value, { stream: true })
-      const lines = sseBuffer.split('\n')
-      sseBuffer = lines.pop() ?? ''
-      for (const line of lines) consumeSseLine(line)
+      appendChunk(decoder.decode(value, { stream: true }))
     }
     // 流结束时最后一行可能没有换行收尾
-    consumeSseLine(sseBuffer + decoder.decode())
-
-    aiPreviewText.value = normalizeTaskMarkdown(
-      aiPreviewText.value.replace(/^[\s\u200b]+/, '').trimEnd()
-    )
-    if (aiPreviewText.value) {
-      aiPreviewStatus.value = 'done'
-    } else {
-      aiPreviewStatus.value = 'error'
-      aiPreviewError.value = t('toast.aiEmptyResult')
-    }
+    appendChunk(decoder.decode())
+    finalizeStream()
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       aiPreviewStatus.value = aiPreviewText.value ? 'done' : 'idle'
@@ -1021,6 +1086,7 @@ async function callAI(assistantId: string) {
     aiPreviewStatus.value = 'error'
     showToast(t('toast.aiFailed', { error: aiPreviewError.value }))
   } finally {
+    detachAbort?.()
     isAILoading.value = false
     aiAbortController = null
   }
@@ -3741,6 +3807,11 @@ defineExpose({
 :deep(ul[data-type="taskList"]) {
   list-style: none;
   padding-left: 0;
+  margin: 0 0 12px;
+}
+
+:deep(ul[data-type="taskList"] li > div > p) {
+  margin-bottom: 0;
 }
 
 :deep(ul[data-type="taskList"] li) {
@@ -3751,7 +3822,10 @@ defineExpose({
 
 :deep(ul[data-type="taskList"] li > label) {
   flex-shrink: 0;
-  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  min-height: 1.75em;
+  margin-top: 0;
 }
 
 :deep(ul[data-type="taskList"] li > label input[type="checkbox"]) {
@@ -4278,6 +4352,11 @@ defineExpose({
 .tiptap ul[data-type="taskList"] {
   list-style: none;
   padding-left: 0;
+  margin: 0 0 12px;
+}
+
+.tiptap ul[data-type="taskList"] li > div > p {
+  margin-bottom: 0;
 }
 
 .tiptap ul[data-type="taskList"] li {
@@ -4288,7 +4367,10 @@ defineExpose({
 
 .tiptap ul[data-type="taskList"] li > label {
   flex-shrink: 0;
-  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  min-height: 1.75em;
+  margin-top: 0;
 }
 
 .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {

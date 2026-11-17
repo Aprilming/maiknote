@@ -10,6 +10,12 @@ import {
   type NoteLogoStyle,
 } from '@/utils/noteLogoPresets'
 import { clampTabSize } from '@/components/Editor/tabInsert'
+import {
+  SECRET_AI_KEY,
+  SECRET_BAIDU_KEY,
+  hydrateSecret,
+  setSecret,
+} from '@/composables/useSecrets'
 
 export type Theme = 'light' | 'dark' | 'auto'
 
@@ -313,6 +319,10 @@ export const useSettingStore = defineStore('setting', () => {
     // Save to localStorage
     saveSettings()
 
+    // Key 不进 localStorage，也不进 iCloud：单独写钥匙串
+    if (key === 'aiKey') void setSecret(SECRET_AI_KEY, settings.value.aiKey)
+    if (key === 'baiduSearchKey') void setSecret(SECRET_BAIDU_KEY, settings.value.baiduSearchKey)
+
     // Sync AI config to iCloud via assistantsStore
     if (key === 'aiUrl' || key === 'aiKey' || key === 'aiModel') {
       const assistantsStore = useAssistantsStore()
@@ -333,8 +343,13 @@ export const useSettingStore = defineStore('setting', () => {
   function loadSettings() {
     try {
       const saved = localStorage.getItem('maiknote-settings')
+      let legacyAiKey = ''
+      let legacyBaiduSearchKey = ''
       if (saved) {
         const parsed = JSON.parse(saved)
+        // 老版本的 Key 明文躺在 localStorage 里，下面迁移进钥匙串
+        legacyAiKey = typeof parsed.aiKey === 'string' ? parsed.aiKey : ''
+        legacyBaiduSearchKey = typeof parsed.baiduSearchKey === 'string' ? parsed.baiduSearchKey : ''
         settings.value = {
           ...settings.value,
           ...parsed,
@@ -381,6 +396,15 @@ export const useSettingStore = defineStore('setting', () => {
           },
         }
       }
+
+      // Key 只存在钥匙串：上面读到的旧明文搬过去，迁移完成后重写一份不含 Key 的配置
+      void hydrateSecret(SECRET_AI_KEY, legacyAiKey).then((value) => {
+        settings.value.aiKey = value
+      })
+      void hydrateSecret(SECRET_BAIDU_KEY, legacyBaiduSearchKey).then((value) => {
+        settings.value.baiduSearchKey = value
+      })
+      if (legacyAiKey || legacyBaiduSearchKey) saveSettings()
     } catch (e) {
       console.error('Failed to load settings:', e)
     }
@@ -388,7 +412,11 @@ export const useSettingStore = defineStore('setting', () => {
 
   function saveSettings() {
     try {
-      localStorage.setItem('maiknote-settings', JSON.stringify(settings.value))
+      // aiKey / baiduSearchKey 只留在内存与钥匙串里，localStorage 里不留明文
+      const payload: Record<string, unknown> = { ...settings.value }
+      delete payload.aiKey
+      delete payload.baiduSearchKey
+      localStorage.setItem('maiknote-settings', JSON.stringify(payload))
     } catch (e) {
       console.error('Failed to save settings:', e)
     }
@@ -489,7 +517,9 @@ export const useSettingStore = defineStore('setting', () => {
       baiduSearchKey: '',
     }
     saveSettings()
-    // 重置 iCloud 中的 AI 配置和百度搜索密钥
+    // 重置 iCloud 中的 AI 配置和百度搜索密钥（钥匙串里的 Key 一并清掉，否则下次启动会被读回来）
+    void setSecret(SECRET_AI_KEY, '')
+    void setSecret(SECRET_BAIDU_KEY, '')
     const assistantsStore = useAssistantsStore()
     assistantsStore.updateAiConfig(
       settings.value.aiUrl,

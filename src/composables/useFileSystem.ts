@@ -4,6 +4,14 @@ import { useWorkspaceStore } from '@/stores/workspaceStore'
 
 
 // 直接使用 invoke，在非 Tauri 环境下调用时会自然抛出异常（由各函数的 try/catch 捕获）
+/**
+ * directories.json 上一次读取是否成功。
+ * 读失败时 readDirectories 仍返回空树占位值（initialize / loadNotes 必须能继续启动），
+ * 但「这次拿到的是占位值、不是真实索引」这个事实必须能被上层看到 ——
+ * directoryStore.saveDirectories 靠它拒绝把空树写回磁盘（否则整棵目录索引被抹掉）。
+ */
+const directoriesIndexState: { failed: boolean; reason: string | null } = { failed: false, reason: null }
+
 async function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(command, args)
 }
@@ -77,6 +85,14 @@ export function useFileSystem() {
   }
 
   /**
+   * 保住原始错误（Error 原样返回，栈不丢）；Tauri invoke 常抛字符串，
+   * 包成带上下文的 Error 再往上抛，调用方才看得清是哪一步失败的。
+   */
+  function withContext(context: string, e: unknown): Error {
+    return e instanceof Error ? e : new Error(`${context}: ${String(e)}`)
+  }
+
+  /**
    * Write metadata.json file
    */
   async function writeMetadata(metadata: NoteMetadata): Promise<void> {
@@ -85,7 +101,10 @@ export function useFileSystem() {
       const content = JSON.stringify(metadata, null, 2)
       await safeInvoke('write_metadata', { basePath: path, content })
     } catch (e) {
+      // 索引写不进去 = 整本笔记的目录没落盘，绝不能只打一行日志就当作成功：
+      // 往上抛，让调用方（noteStore 的失败重试链）能看见并重新排队
       console.error('Failed to write metadata:', e)
+      throw e instanceof Error ? e : new Error(`Failed to write metadata: ${String(e)}`)
     }
   }
 
@@ -114,7 +133,10 @@ export function useFileSystem() {
       if (dir) args.dir = dir
       await safeInvoke('write_note', args)
     } catch (e) {
+      // 正文没写进去就是这条笔记的内容丢了，必须让上层感知（H4）：
+      // 保留原始错误往上抛，由 noteStore 打印 + 重新排进保存队列
       console.error(`Failed to write note ${fileName}:`, e)
+      throw e instanceof Error ? e : new Error(`Failed to write note ${fileName}: ${String(e)}`)
     }
   }
 
@@ -153,7 +175,10 @@ export function useFileSystem() {
       const path = await getContentPath()
       await safeInvoke('create_directory_folder', { basePath: path, dir })
     } catch (e) {
+      // 文件夹没建出来 = 内存里已经有这个目录、磁盘上没有（H4/M10）：
+      // 打完上下文往上抛，由 directoryStore 决定回滚还是交给下次布局迁移重建
       console.error(`Failed to create directory folder ${dir}:`, e)
+      throw withContext(`Failed to create directory folder ${dir}`, e)
     }
   }
 
@@ -165,7 +190,9 @@ export function useFileSystem() {
       const path = await getContentPath()
       await safeInvoke('rename_directory_folder', { basePath: path, oldDir, newDir })
     } catch (e) {
-      console.error(`Failed to rename directory folder:`, e)
+      // 改名没生效 = 树里已是新名字、磁盘还是老文件夹：必须让调用方看见
+      console.error(`Failed to rename directory folder ${oldDir} -> ${newDir}:`, e)
+      throw withContext(`Failed to rename directory folder ${oldDir} -> ${newDir}`, e)
     }
   }
 
@@ -179,7 +206,9 @@ export function useFileSystem() {
       if (parentDir) args.parentDir = parentDir
       await safeInvoke('delete_directory_folder', args)
     } catch (e) {
+      // 目录没删掉：文件还在磁盘上，树里就不能当作已删
       console.error(`Failed to delete directory folder ${dir}:`, e)
+      throw withContext(`Failed to delete directory folder ${dir}`, e)
     }
   }
 
@@ -192,6 +221,8 @@ export function useFileSystem() {
     toDir: string | null,
     newFileName?: string
   ): Promise<void> {
+    const from = fromDir ?? '(root)'
+    const to = toDir ?? '(root)'
     try {
       const path = await getContentPath()
       const args: Record<string, unknown> = { basePath: path, fileName }
@@ -200,7 +231,10 @@ export function useFileSystem() {
       if (newFileName) args.newFileName = newFileName
       await safeInvoke('move_note_file', args)
     } catch (e) {
-      console.error(`Failed to move note file ${fileName}:`, e)
+      // 搬运失败 = 内存里目录/文件名已改、磁盘还停在原处（假成功）：
+      // 日志带 from/to 方便定位，抛给调用方回滚内存状态
+      console.error(`Failed to move note file ${fileName} from "${from}" to "${to}":`, e)
+      throw withContext(`Failed to move note file ${fileName} from "${from}" to "${to}"`, e)
     }
   }
 
@@ -214,7 +248,9 @@ export function useFileSystem() {
       if (dir) args.dir = dir
       await safeInvoke('set_note_readonly', args)
     } catch (e) {
+      // 只读没设上：锁状态不能停在「已锁」，抛给调用方回滚
       console.error(`Failed to set note ${fileName} readonly:`, e)
+      throw withContext(`Failed to set note ${fileName} readonly`, e)
     }
   }
 
@@ -228,7 +264,9 @@ export function useFileSystem() {
       if (dir) args.dir = dir
       await safeInvoke('set_note_readwrite', args)
     } catch (e) {
+      // 解锁没设上：抛给调用方回滚锁状态
       console.error(`Failed to set note ${fileName} readwrite:`, e)
+      throw withContext(`Failed to set note ${fileName} readwrite`, e)
     }
   }
 
@@ -278,15 +316,34 @@ export function useFileSystem() {
   }
 
   /**
+   * 目录索引加载失败的原因（null = 内存里的树可信）。
+   * 为什么不把 readDirectories 改成 rethrow：initialize / loadNotes / 工作空间迁移都指望
+   * 「索引读不出来也能继续启动」（首次启动、备份恢复路径），抛出去应用直接起不来；
+   * 而 Rust 侧 read_directories 在文件不存在时本来就返回 {"version":1,"directories":[]}，
+   * 所以走到 catch 只可能是 IPC / 权限 / 解析异常。改为把失败事实暴露出去，由写入口把关。
+   */
+  function getDirectoriesIndexError(): string | null {
+    return directoriesIndexState.failed ? (directoriesIndexState.reason ?? 'unknown error') : null
+  }
+
+  /**
    * Read directories.json file
    */
   async function readDirectories(): Promise<DirectoryData> {
     try {
       const path = await getMetaPath()
       const content = await safeInvoke<string>('read_directories', { basePath: path })
-      return JSON.parse(content)
+      const data = JSON.parse(content) as DirectoryData
+      // 读成功 = 磁盘上的索引可信，解除失败标志：下一次保存可以正常写回
+      directoriesIndexState.failed = false
+      directoriesIndexState.reason = null
+      return data
     } catch (e) {
-      console.error('Failed to read directories, creating new:', e)
+      // 不 rethrow（见 getDirectoriesIndexError 的注释）：返回的是空树占位值，不是真实索引。
+      // 记下失败事实，让 directoryStore.saveDirectories 拒绝把它写回磁盘。
+      console.error('Failed to read directories, index unusable until next successful load:', e)
+      directoriesIndexState.failed = true
+      directoriesIndexState.reason = e instanceof Error ? e.message : String(e)
       return {
         version: 1,
         directories: [],
@@ -303,7 +360,9 @@ export function useFileSystem() {
       const content = JSON.stringify(data, null, 2)
       await safeInvoke('write_directories', { basePath: path, content })
     } catch (e) {
+      // 目录索引写不进去 = 整棵树没落盘，往上抛，由 directoryStore 回滚或报错
       console.error('Failed to write directories:', e)
+      throw withContext('Failed to write directories', e)
     }
   }
 
@@ -323,6 +382,7 @@ export function useFileSystem() {
     ensureImagesFolder,
     saveImage,
     readDirectories,
+    getDirectoriesIndexError,
     writeDirectories,
     createDirectoryFolder,
     renameDirectoryFolder,

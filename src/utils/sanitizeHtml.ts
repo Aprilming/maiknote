@@ -33,17 +33,33 @@ const URL_ATTRS = new Set(['href', 'src'])
 // 还有一堆自定义协议会被系统交给别的 App 处理
 const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:', 'asset:'])
 
+// 这些协议一律先拒：前几个是可执行脚本协议，"java\nscript:" 之类去掉空白后就落到这里；
+// 剩下的能碰本地文件、读浏览器内部页面或把内容交给系统别的 App，白名单里的用法也用不到
+const FORBIDDEN_SCHEMES = new Set([
+  'javascript:', 'vbscript:', 'livescript:', 'mocha:',
+  'file:', 'filesystem:', 'blob:', 'about:', 'chrome:',
+  'resource:', 'jar:', 'view-source:',
+])
+
 function isSafeUrl(value: string, tag: string, attr: string): boolean {
   // 去掉控制字符和空白再判断，避免 "java\nscript:" 这类变形
   const normalized = value.replace(/[\u0000-\u0020]/g, '').toLowerCase()
+
+  // 内联图片只对 img[src] 放行，且必须是 image/*；data:text/html 之类照旧拒绝
   if (normalized.startsWith('data:')) {
     return tag === 'img' && attr === 'src' && normalized.startsWith('data:image/')
   }
-  // 没有协议头的是相对路径 / 锚点，交给页面自己处理
-  // host:port 形式（localhost:3000/x）不是协议
-  if (/^[a-z0-9.-]+:\d/i.test(normalized)) return true
+
+  // 可执行 / 伪协议放在任何通配规则之前，避免被下面 host:port 规则顺手放行
   const scheme = /^([a-z][a-z0-9+.-]*):/.exec(normalized)
+  if (scheme && FORBIDDEN_SCHEMES.has(scheme[1] + ':')) return false
+
+  // host:port 形态（localhost:3000/x）的 "localhost:" 不是协议，先于协议白名单放行
+  if (/^[a-z0-9.-]+:\d/.test(normalized)) return true
+
+  // 没有协议头的是相对路径 / 锚点，交给页面自己处理
   if (!scheme) return true
+
   return ALLOWED_SCHEMES.has(scheme[1] + ':')
 }
 

@@ -2,6 +2,11 @@ import { fetch } from '@tauri-apps/plugin-http'
 
 const BAIDU_SEARCH_URL = 'https://qianfan.baidubce.com/v2/ai_search/mcp'
 
+// 调试日志只在开发构建里输出：生产包不打印查询词与响应正文
+const debugLog: (...args: unknown[]) => void = import.meta.env.DEV
+  ? (...args: unknown[]) => console.log(...args)
+  : () => {}
+
 /**
  * 发送 MCP 请求（带 id，等待响应）
  */
@@ -9,7 +14,7 @@ async function mcpRequest(method: string, params: unknown, apiKey: string): Prom
   const id = crypto.randomUUID()
   const body = { jsonrpc: '2.0', id, method, params }
 
-  console.log(`[BaiduSearch] MCP 请求:`, JSON.stringify({ method, id }).slice(0, 200))
+  debugLog(`[BaiduSearch] MCP 请求:`, JSON.stringify({ method, id }).slice(0, 200))
   const response = await fetch(BAIDU_SEARCH_URL, {
     method: 'POST',
     headers: {
@@ -26,7 +31,7 @@ async function mcpRequest(method: string, params: unknown, apiKey: string): Prom
 
   const rawText = await response.text()
   const parsed = JSON.parse(rawText)
-  console.log(`[BaiduSearch] MCP 响应 ${method}:`, rawText.slice(0, 200))
+  debugLog(`[BaiduSearch] MCP 响应 ${method}:`, rawText.slice(0, 200))
 
   if (parsed.error) {
     throw new Error(`MCP 错误: ${parsed.error.message} (code: ${parsed.error.code})`)
@@ -41,7 +46,7 @@ async function mcpRequest(method: string, params: unknown, apiKey: string): Prom
 async function mcpNotify(method: string, params: unknown, apiKey: string): Promise<void> {
   const body = { jsonrpc: '2.0', method, params }
 
-  console.log(`[BaiduSearch] MCP 通知:`, method)
+  debugLog(`[BaiduSearch] MCP 通知:`, method)
   const response = await fetch(BAIDU_SEARCH_URL, {
     method: 'POST',
     headers: {
@@ -73,7 +78,7 @@ export async function callBaiduSearch(
 ): Promise<string> {
   try {
     // Step 1: 初始化
-    console.log('[BaiduSearch] 初始化 MCP 连接...')
+    debugLog('[BaiduSearch] 初始化 MCP 连接...')
     await mcpRequest('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
@@ -81,24 +86,24 @@ export async function callBaiduSearch(
     }, apiKey)
 
     // Step 2: 发送 initialized 通知（无 id，不等待响应）
-    console.log('[BaiduSearch] 发送 initialized 通知...')
+    debugLog('[BaiduSearch] 发送 initialized 通知...')
     await mcpNotify('notifications/initialized', {}, apiKey)
 
     // Step 3: 查询可用工具
-    console.log('[BaiduSearch] 查询工具列表...')
+    debugLog('[BaiduSearch] 查询工具列表...')
     let toolName = 'AIsearch'
     try {
       const toolsResult = await mcpRequest('tools/list', {}, apiKey) as { tools?: Array<{ name: string }> }
       if (toolsResult?.tools?.length) {
         toolName = toolsResult.tools[0].name
-        console.log('[BaiduSearch] 发现工具:', toolName)
+        debugLog('[BaiduSearch] 发现工具:', toolName)
       }
     } catch {
-      console.log('[BaiduSearch] tools/list 失败，使用默认工具名 AIsearch')
+      debugLog('[BaiduSearch] tools/list 失败，使用默认工具名 AIsearch')
     }
 
     // Step 4: 调用搜索工具
-    console.log('[BaiduSearch] 调用工具:', toolName, 'query:', query)
+    debugLog('[BaiduSearch] 调用工具:', toolName, 'query:', query)
     const result = await mcpRequest('tools/call', {
       name: toolName,
       arguments: {
@@ -126,7 +131,7 @@ export async function callBaiduSearch(
         console.warn('[BaiduSearch] 响应里没有文本结果，按无结果处理')
         return ''
       }
-      console.log('[BaiduSearch] 搜索结果长度:', texts.length)
+      debugLog('[BaiduSearch] 搜索结果长度:', texts.length)
       return texts
     }
 

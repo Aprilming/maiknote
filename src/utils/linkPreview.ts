@@ -1,4 +1,4 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * 链接卡片预览：抓到目标网页的 og/meta 信息，供编辑器渲染成卡片。
@@ -162,31 +162,25 @@ function parseHtml(html: string, url: string, finalUrl: string): LinkPreviewData
 }
 
 async function getHtml(url: string): Promise<{ html: string; finalUrl: string }> {
-  const inTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+  // Tauri 下交给 Rust 命令抓：跳转逐跳检查在 Rust 侧做，capabilities 不需要通配域
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    const page = await invoke<{ html: string; finalUrl: string }>('fetch_page_html', {
+      url,
+      maxChars: MAX_HTML_CHARS,
+    })
+    return { html: page.html, finalUrl: page.finalUrl || url }
+  }
+
+  // 纯 Web 调试分支：浏览器原生 fetch，超时用 AbortController 兜住
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT)
   try {
-    const request = (target: string) =>
-      inTauri
-        ? tauriFetch(target, {
-            method: 'GET',
-            headers: {
-              Accept: 'text/html,application/xhtml+xml',
-              'User-Agent':
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-            },
-            signal: controller.signal,
-            connectTimeout: FETCH_TIMEOUT,
-            maxRedirections: 5,
-          })
-        : fetch(target, {
-            method: 'GET',
-            headers: { Accept: 'text/html,application/xhtml+xml' },
-            signal: controller.signal,
-            redirect: 'follow',
-          })
-
-    const response = await request(url)
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+      signal: controller.signal,
+      redirect: 'follow',
+    })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const text = await response.text()
     return { html: text.slice(0, MAX_HTML_CHARS), finalUrl: response.url || url }
@@ -194,6 +188,7 @@ async function getHtml(url: string): Promise<{ html: string; finalUrl: string }>
     clearTimeout(timer)
   }
 }
+
 
 /** 抓取并解析链接预览；失败返回 null（永不抛错） */
 export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData | null> {

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { SECRET_AI_KEY, SECRET_BAIDU_KEY, hydrateSecret } from '@/composables/useSecrets'
 
 // Assistant interface
 export interface Assistant {
@@ -148,6 +149,15 @@ export const useAssistantsStore = defineStore('assistants', () => {
         if (parsed.baiduSearchKey) {
           baiduSearchKey.value = parsed.baiduSearchKey
         }
+
+        // Key 只存在钥匙串：老版本写在这个文件里的明文搬过去，再把文件重写一次
+        const legacyAiKey = typeof parsed.aiConfig?.key === 'string' ? parsed.aiConfig.key : ''
+        const legacyBaiduKey = typeof parsed.baiduSearchKey === 'string' ? parsed.baiduSearchKey : ''
+        // 这里要 await：Settings 的 onMounted 会在 loadAssistants() 之后立刻把这两个值
+        // 同步进 settingStore，钥匙串还没读完就同步会把真实 Key 覆盖成空串
+        aiKey.value = await hydrateSecret(SECRET_AI_KEY, legacyAiKey)
+        baiduSearchKey.value = await hydrateSecret(SECRET_BAIDU_KEY, legacyBaiduKey)
+        if (legacyAiKey || legacyBaiduKey) void saveAssistants()
       }
 
       isLoaded.value = true
@@ -168,8 +178,9 @@ export const useAssistantsStore = defineStore('assistants', () => {
       const content = JSON.stringify({
         version: 1,
         assistants: assistants.value,
-        aiConfig: { url: aiUrl.value, key: aiKey.value, model: aiModel.value },
-        baiduSearchKey: baiduSearchKey.value,
+        // key 与 baiduSearchKey 不落文件（会同步上 iCloud），只存钥匙串
+        aiConfig: { url: aiUrl.value, key: '', model: aiModel.value },
+        baiduSearchKey: '',
       }, null, 2)
       await invoke('write_assistants', { basePath: path, content })
     } catch (e) {

@@ -8,12 +8,13 @@ import { useSourceMode } from '@/composables/useSourceMode'
 import { usePinWindow } from '@/composables/usePinWindow'
 
 /**
- * 焦点是否落在可输入的元素上
+ * 焦点是否落在文本输入框里。
+ * 笔记正文编辑器是 contenteditable，故意不算：应用焦点几乎总在编辑器上，
+ * 把它当输入框会让新建/翻页/删除/锁定等所有应用内快捷键全部失灵。
  */
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true
-  return target.isContentEditable
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
 }
 
 /**
@@ -74,7 +75,7 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
   const { toggleSourceMode } = useSourceMode()
 
   async function handleKeydown(e: KeyboardEvent) {
-    // 输入类元素里不触发快捷键（input / textarea / contenteditable 都算）
+    // 文本输入框里不触发快捷键，避免打字误触；编辑器（contenteditable）里照常触发
     if (isEditableTarget(e.target)) {
       return
     }
@@ -217,6 +218,8 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
       e.preventDefault()
       try {
         if (settingStore.settings.closeBehavior === 'quit') {
+          // 退出前先把防抖队列里的内容落盘，否则最后一个保存窗口里的编辑会丢
+          await noteStore.flushPendingSave()
           await invoke('exit_app')
         } else {
           const appWindow = getCurrentWindow()
