@@ -70,7 +70,7 @@ fn ensure_public_target(url: &reqwest::Url) -> Result<(), String> {
 
 /// AI 端点用的地址检查：允许内网和回环（自建 / 本机模型是正常用法），
 /// 但云元数据地址（169.254.0.0/16、fe80::/10）和 0.0.0.0 这类还是拒掉
-fn ensure_chat_target(url: &reqwest::Url) -> Result<(), String> {
+pub(crate) fn ensure_chat_target(url: &reqwest::Url) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("只支持 http / https 地址".to_string());
     }

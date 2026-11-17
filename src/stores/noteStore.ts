@@ -47,6 +47,30 @@ export function extractTitle(content: string): string {
   return 'Untitled'
 }
 
+/**
+ * 笔记成功写盘后的钩子：WebDAV 自动同步挂在这里。
+ * 放在模块级而不是 store 里，是为了让「刚写完一个笔记文件」这件事只有一个出口。
+ */
+type NoteSavedListener = (payload: { fileName: string; dir: string | null }) => void
+const noteSavedListeners = new Set<NoteSavedListener>()
+
+export function onNoteSaved(listener: NoteSavedListener): () => void {
+  noteSavedListeners.add(listener)
+  return () => {
+    noteSavedListeners.delete(listener)
+  }
+}
+
+function emitNoteSaved(fileName: string, dir: string | null): void {
+  for (const listener of [...noteSavedListeners]) {
+    try {
+      listener({ fileName, dir })
+    } catch (e) {
+      console.error('note saved listener failed:', e)
+    }
+  }
+}
+
 export const useNoteStore = defineStore('note', () => {
   // File system
   const fs = useFileSystem()
@@ -95,6 +119,7 @@ export const useNoteStore = defineStore('note', () => {
     }
     note.fileName = desired
     await fs.writeNote(desired, note.content, dir)
+    emitNoteSaved(desired, dir ?? null)
   }
 
   /**
@@ -1375,6 +1400,37 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   /**
+   * WebDAV 同步把远端文件下下来之后收编：磁盘上已有文件，只是 metadata 里还没有。
+   * 只认同步报告点名的那些文件，不顺手把整盘残留都塞进笔记列表。
+   */
+  async function adoptSyncedFiles(rels: string[]): Promise<number> {
+    const wanted = new Set(
+      rels.filter(rel => /\.md$/i.test(rel)).map(rel => rel.replace(/^\/+/, ''))
+    )
+    if (!wanted.size) return 0
+    try {
+      const files = await fs.listNoteFiles()
+      const known = new Set(
+        notes.value.map(n => (dirRelPath(n.directoryId) ?? '').replace(/^\/+/, '') + '/' + noteFile(n))
+      )
+      let added = 0
+      for (const file of files) {
+        const rel = (file.dir ?? '').replace(/^\/+/, '') + '/' + file.fileName
+        if (!wanted.has(rel) || known.has(rel)) continue
+        const note = await buildNoteFromFileEntry(file)
+        notes.value.unshift(note)
+        known.add(rel)
+        added++
+      }
+      if (added > 0) await saveMetadataToCloud()
+      return added
+    } catch (e) {
+      console.error('Failed to adopt synced files:', e)
+      return 0
+    }
+  }
+
+  /**
    * 切换工作空间后重新加载：先落盘 + 清空当前状态，再读新空间的索引与笔记
    */
   async function reload(): Promise<void> {
@@ -1449,6 +1505,7 @@ export const useNoteStore = defineStore('note', () => {
     orphanFiles,
     orphanScanning,
     scanOrphanFiles,
+    adoptSyncedFiles,
     trashOrphanFile,
     trashAllOrphanFiles,
     restoreOrphanFile,

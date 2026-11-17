@@ -16,6 +16,7 @@ import { useEditorStyle } from '@/composables/useEditorStyle'
 import { useEdgePanel, isMainAutoHideSuppressed } from '@/composables/useEdgePanel'
 import { useDesktopNotes } from '@/composables/useDesktopNotes'
 import { useVersionCheck } from '@/composables/useVersionCheck'
+import { useWebdavSync } from '@/composables/useWebdavSync'
 import { syncAppIcon } from '@/composables/useAppIcon'
 import { useI18n } from 'vue-i18n'
 import { isNativeDialogCurrentlyOpen } from '@/stores/dialogStore'
@@ -319,6 +320,9 @@ onMounted(async () => {
 
   // 按设置把钉在桌面上的笔记卡片还原出来（要笔记数据在手才行）
   void desktopNotes.start()
+
+  // 后台挂上 WebDAV 自动同步：开了同步的空间启动时先拉一次，之后保存笔记 30 秒后推送
+  void useWebdavSync().startAutoSync()
 
   // 如果启用了"记忆上次文件夹"，恢复上次选择的目录
   if (settingStore.settings.rememberLastDirectory) {

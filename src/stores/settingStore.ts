@@ -25,11 +25,14 @@ export interface ShortcutSettings {
   nextNote: string      // 下一页
   prevDirectory: string // 上一个目录
   nextDirectory: string // 下一个目录
+  prevWorkspace: string // 上一个工作空间
+  nextWorkspace: string // 下一个工作空间
   newNote: string       // 新增页面
   newNoteBefore: string // 在当前页面之前新增
   deleteNote: string   // 删除页面
   pin: string          // 置顶窗口
   lock: string         // 锁定/解锁笔记
+  saveSync: string      // 保存并立即同步
   toggleSource: string // 切换源码模式
   centerWindow: string // 居中窗口
   toggleSidebar: string // 展开/收起侧栏
@@ -52,11 +55,14 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   nextNote: 'Cmd+]',
   prevDirectory: 'Option+Cmd+[',
   nextDirectory: 'Option+Cmd+]',
+  prevWorkspace: 'Shift+Option+Cmd+[',
+  nextWorkspace: 'Shift+Option+Cmd+]',
   newNote: 'Cmd+N',
   newNoteBefore: 'Cmd+Shift+N',
   deleteNote: 'Cmd+Backspace',
   pin: 'Shift+Cmd+P',
   lock: 'Cmd+L',
+  saveSync: 'Cmd+S',
   toggleSource: 'Cmd+/',
   centerWindow: 'Shift+Option+Cmd+A',
   toggleSidebar: 'Cmd+\\',

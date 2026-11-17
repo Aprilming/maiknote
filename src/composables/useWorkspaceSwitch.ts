@@ -24,6 +24,9 @@ export function useWorkspaceSwitch() {
   const settingStore = useSettingStore()
   const { t } = useI18n()
 
+  /** 重载期间按下但还没执行的方向（见 cycleWorkspace） */
+  let pendingCycle: 1 | -1 | 0 = 0
+
   /** 切换空间后重新灌数据：目录树、笔记、当前筛选 */
   async function reloadWorkspaceData(): Promise<void> {
     await directoryStore.reload()
@@ -39,6 +42,9 @@ export function useWorkspaceSwitch() {
     if (id === ws.currentId) return
     if (!ws.byId(id)) return
     ws.switching = true
+    // 兜底：某个 await 万一卡住（iCloud 目录偶尔会），switching 会永远为 true，
+    // 之后所有切换（快捷键、下拉点选）都会被「正在切换」挡掉。到点强制解锁。
+    const watchdog = setTimeout(() => { ws.switching = false }, 10000)
     // 重建索引期间会有一瞬间的窗口失焦，抑制自动隐藏，避免切换后窗口自己藏起来
     suppressMainAutoHide(2000)
     try {
@@ -47,9 +53,39 @@ export function useWorkspaceSwitch() {
       ws.setCurrent(id)
       await reloadWorkspaceData()
     } finally {
+      clearTimeout(watchdog)
       ws.switching = false
-      suppressMainAutoHide(800)
+      suppressMainAutoHide(1500)
+      // 重建索引期间窗口会掉一次焦点（macOS 会把焦点交出去），不主动收回来
+      // 后面所有键盘快捷键都会哑掉，看起来就像「切了一圈之后快捷键失灵」
+      const appWindow = getCurrentWindow()
+      const visible = await appWindow.isVisible().catch(() => false)
+      if (visible) await appWindow.setFocus().catch(() => {})
+      // 重载期间按下的那次切换，现在补上
+      if (pendingCycle !== 0) {
+        const step = pendingCycle
+        pendingCycle = 0
+        cycleWorkspace(step)
+      }
     }
+  }
+
+  /**
+   * 按当前空间在列表里的位置切到上一个/下一个，首尾循环。
+   * 正在切换时记下方向，等这次重载结束再补一刀 —— 直接丢弃会让「连按几下」
+   * 和「重载还没收尾就按」都表现为「按了没反应」。
+   */
+  function cycleWorkspace(step: 1 | -1): void {
+    if (ws.switching) {
+      pendingCycle = step
+      return
+    }
+    const list = ws.workspaces
+    if (list.length < 2) return
+    const idx = list.findIndex(w => w.id === ws.currentId)
+    const target = list[(idx + step + list.length) % list.length]
+    if (!target || target.id === ws.currentId) return
+    void switchWorkspace(target.id)
   }
 
   /** 递归扫描自定义空间里已有的 .md，建成目录树 + 笔记索引（不动原文件） */
@@ -164,6 +200,7 @@ export function useWorkspaceSwitch() {
 
   return {
     switchWorkspace,
+    cycleWorkspace,
     addWorkspace,
     renameWorkspace,
     removeWorkspace,

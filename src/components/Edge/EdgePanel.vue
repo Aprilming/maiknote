@@ -1177,7 +1177,7 @@ onUnmounted(() => {
 }
 
 .card-content.md :deep(pre) {
-  margin: 5px 0;
+  margin: 0;
   padding: 6px 8px;
   overflow-x: auto;
   border-radius: 5px;
@@ -1190,9 +1190,11 @@ onUnmounted(() => {
   font-size: 10.5px;
 }
 
-/* 代码块复制按钮：markdown-it 只吐裸 pre，按钮由预览渲染器挂上去，悬停代码块才露出来 */
+/* 代码块复制按钮：markdown-it 只吐裸 pre，按钮由预览渲染器挂上去，悬停代码块才露出来。
+   外边距挂在包裹层上、pre 自身归零，按钮的 top/right 才是相对代码块边框算的 */
 .card-content.md :deep(.md-code-block) {
   position: relative;
+  margin: 5px 0;
 }
 
 .card-content.md :deep(.md-code-copy) {

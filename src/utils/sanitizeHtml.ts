@@ -11,6 +11,8 @@ const ALLOWED_TAGS = new Set([
   'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'img', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
   'span', 'div', 'label', 'input', 'sup', 'sub', 'kbd', 'figure', 'figcaption',
+  // 预览渲染器给代码块挂的复制按钮；剥掉它按钮会退化成裸 span，绝对定位和点击都失效
+  'button',
 ])
 
 // 这些标签连内容一起丢掉（unwrapped 会把脚本正文留在页面里）

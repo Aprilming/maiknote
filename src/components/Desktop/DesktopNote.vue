@@ -244,8 +244,10 @@ onMounted(async () => {
     await emit(DESKTOP_NOTE_REQUEST, noteId)
   }
 
-  // 前端已经挂载、样式也生效了，这时再露脸（后端建窗时是隐藏的）
-  await appWindow.show()
+  // 前端已经挂载、样式也生效了，这时再露脸（后端建窗时是隐藏的）。
+  // 必须走 Rust 的 orderFrontRegardless：直接 appWindow.show() 会让卡片成为 key window，
+  // 把主窗口的键盘焦点抢走，之后主窗口里所有快捷键都不响应。
+  await invoke('desktop_note_reveal').catch(() => appWindow.show())
 
   // show 之后 AppKit 会把窗口层级打回 0，按设置再压一次（Rust 侧还有几秒内的多次兜底）
   try {

@@ -2390,6 +2390,7 @@ version = "0.10.21"
 dependencies = [
  "block2 0.5.1",
  "cocoa",
+ "futures-util",
  "if-addrs",
  "libc",
  "objc2 0.6.4",

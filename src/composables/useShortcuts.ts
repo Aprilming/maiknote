@@ -4,8 +4,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { useWebdavStore } from '@/stores/webdavStore'
 import { useSourceMode } from '@/composables/useSourceMode'
 import { usePinWindow } from '@/composables/usePinWindow'
+import { useWebdavSync } from '@/composables/useWebdavSync'
+import { useWorkspaceSwitch } from '@/composables/useWorkspaceSwitch'
 
 /**
  * 焦点是否落在文本输入框里。
@@ -72,7 +76,16 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
   const noteStore = useNoteStore()
   const directoryStore = useDirectoryStore()
   const settingStore = useSettingStore()
+  const workspaceStore = useWorkspaceStore()
+  const webdavStore = useWebdavStore()
+  const webdavSync = useWebdavSync()
+  const workspaceSwitch = useWorkspaceSwitch()
   const { toggleSourceMode } = useSourceMode()
+
+  /** 切到上一个/下一个工作空间（逻辑在 useWorkspaceSwitch） */
+  function cycleWorkspace(step: 1 | -1): void {
+    workspaceSwitch.cycleWorkspace(step)
+  }
 
   async function handleKeydown(e: KeyboardEvent) {
     const shortcuts = settingStore.settings.shortcuts
@@ -132,6 +145,20 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
     if (matchesShortcut(e, shortcuts.nextDirectory)) {
       e.preventDefault()
       noteStore.setFilterDirectory(directoryStore.getAdjacentDirectoryId('next'))
+      return
+    }
+
+    // 上一个工作空间
+    if (matchesShortcut(e, shortcuts.prevWorkspace)) {
+      e.preventDefault()
+      cycleWorkspace(-1)
+      return
+    }
+
+    // 下一个工作空间
+    if (matchesShortcut(e, shortcuts.nextWorkspace)) {
+      e.preventDefault()
+      cycleWorkspace(1)
       return
     }
 
@@ -232,6 +259,23 @@ export function useShortcuts(onOpenSettings?: () => void, onOpenSearch?: () => v
       } catch (error) {
         console.error('Failed to close window:', error)
       }
+      return
+    }
+
+    // 保存并立即同步（默认 Cmd+S）：先落盘，再立刻同步当前空间；
+    // 没开同步的空间就只是落盘，不弹任何提示
+    if (matchesShortcut(e, shortcuts.saveSync)) {
+      e.preventDefault()
+      // 保存是防抖的，先冲掉队列，否则推上去的是上一次的内容
+      await noteStore.flushPendingSave()
+      const workspace = workspaceStore.current
+      if (!workspace) return
+      await webdavStore.initialize()
+      const option = webdavStore.optionOf(workspace.id)
+      if (!webdavStore.hasServer || !option.enabled) return
+      // 已经在同步了就别叠一轮，进度条那边还在跑
+      if (webdavSync.running.value) return
+      await webdavSync.syncSpace(workspace, { skipDownload: webdavSync.currentNoteRelPath() })
       return
     }
 

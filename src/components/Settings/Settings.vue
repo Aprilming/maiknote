@@ -12,6 +12,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import AssistantEditor from '@/components/Assistant/AssistantEditor.vue'
 import PrivacyPledge from '@/components/common/PrivacyPledge.vue'
 import PrivacyDialog from '@/components/common/PrivacyDialog.vue'
+import WebdavSettings from './WebdavSettings.vue'
 import { useI18n } from 'vue-i18n'
 import NoteLogo from '@/components/NoteLogo.vue'
 import { presetsOfStyle, type NoteLogoStyle } from '@/utils/noteLogoPresets'
@@ -138,7 +139,7 @@ function onDefaultNoteBgInput(e: Event) {
 }
 
 // 分类导航
-type CategoryKey = 'general' | 'personalization' | 'fileTree' | 'ai' | 'sidebar' | 'shortcuts' | 'about'
+type CategoryKey = 'general' | 'personalization' | 'fileTree' | 'ai' | 'sidebar' | 'shortcuts' | 'sync' | 'about'
 const activeCategory = ref<CategoryKey>('general')
 
 const categories = computed(() => [
@@ -148,6 +149,7 @@ const categories = computed(() => [
   { key: 'ai' as const, icon: 'i-mdi-robot', label: t('settings.ai') },
   { key: 'sidebar' as const, icon: 'i-mdi-dock-right', label: t('settings.sidebar') },
   { key: 'shortcuts' as const, icon: 'i-mdi-keyboard', label: t('settings.shortcuts') },
+  { key: 'sync' as const, icon: 'i-mdi-cloud-sync-outline', label: t('settings.sync') },
   { key: 'about' as const, icon: 'i-mdi-information-outline', label: t('settings.about') },
 ])
 
@@ -286,10 +288,13 @@ function blockNoteShortcuts(e: KeyboardEvent) {
     shortcuts.nextNote,
     shortcuts.prevDirectory,
     shortcuts.nextDirectory,
+    shortcuts.prevWorkspace,
+    shortcuts.nextWorkspace,
     shortcuts.newNote,
     shortcuts.newNoteBefore,
     shortcuts.deleteNote,
     shortcuts.lock,
+    shortcuts.saveSync,
     shortcuts.toggleSource,
   ]
 
@@ -377,11 +382,14 @@ const shortcutLabels = computed((): Record<keyof ShortcutSettings, string> => ({
   nextNote: t('shortcut.nextNote'),
   prevDirectory: t('shortcut.prevDirectory'),
   nextDirectory: t('shortcut.nextDirectory'),
+  prevWorkspace: t('shortcut.prevWorkspace'),
+  nextWorkspace: t('shortcut.nextWorkspace'),
   newNote: t('shortcut.newNote'),
   newNoteBefore: t('shortcut.newNoteBefore'),
   deleteNote: t('shortcut.deleteNote'),
   pin: t('shortcut.pin'),
   lock: t('shortcut.lock'),
+  saveSync: t('shortcut.saveSync'),
   toggleSource: t('shortcut.toggleSource'),
   centerWindow: t('shortcut.centerWindow'),
   toggleSidebar: t('shortcut.toggleSidebar'),
@@ -394,11 +402,14 @@ const shortcutDescs = computed((): Record<keyof ShortcutSettings, string> => ({
   nextNote: t('shortcut.nextNoteDesc'),
   prevDirectory: t('shortcut.prevDirectoryDesc'),
   nextDirectory: t('shortcut.nextDirectoryDesc'),
+  prevWorkspace: t('shortcut.prevWorkspaceDesc'),
+  nextWorkspace: t('shortcut.nextWorkspaceDesc'),
   newNote: t('shortcut.newNoteDesc'),
   newNoteBefore: t('shortcut.newNoteBeforeDesc'),
   deleteNote: t('shortcut.deleteNoteDesc'),
   pin: t('shortcut.pinDesc'),
   lock: t('shortcut.lockDesc'),
+  saveSync: t('shortcut.saveSyncDesc'),
   toggleSource: t('shortcut.toggleSourceDesc'),
   centerWindow: t('shortcut.centerWindowDesc'),
   toggleSidebar: t('shortcut.toggleSidebarDesc'),
@@ -2007,6 +2018,11 @@ async function handleSkillUnlink(target: SkillTargetInfo) {
         </section>
 
         <!-- 关于 -->
+        <!-- 同步：WebDAV 服务器 + 按空间开关 -->
+        <div v-if="activeCategory === 'sync'" class="settings-groups">
+          <WebdavSettings />
+        </div>
+
         <section v-if="activeCategory === 'about'" class="settings-section">
           <div class="setting-item version-item">
             <div class="version-info">

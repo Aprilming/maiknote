@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useNoteStore } from '@/stores/noteStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { useWebdavSync } from '@/composables/useWebdavSync'
 
 /**
  * 写作足迹：GitHub 那种一年热力图，看哪一天动过笔记。
@@ -10,6 +12,14 @@ import { useNoteStore } from '@/stores/noteStore'
  */
 const { t } = useI18n()
 const noteStore = useNoteStore()
+const workspaceStore = useWorkspaceStore()
+/** 工作空间同步的实时状态：热力图上面那一行进度条靠它 */
+const sync = useWebdavSync()
+
+// 订阅后端推的进度事件（幂等，App 启动流程里已经装过就复用同一条）
+onMounted(() => {
+  void sync.initProgressListener()
+})
 
 const LEDGER_KEY = 'marknote.writeDaysByNote'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -133,10 +143,62 @@ function cellTitle(cell: { label: string; count: number }): string {
     ? t('activity.tooltip', { date: cell.label, count: cell.count })
     : t('activity.emptyTooltip', { date: cell.label })
 }
+
+/* ---------- 工作空间同步进度：热力图上方一条细进度条 ---------- */
+
+/** 正在同步的空间 id：没在同步就是空，整行不显示 */
+const syncSpaceId = computed(() => (sync.running.value ? sync.syncingSpaceId.value : ''))
+
+const syncProgress = computed(() =>
+  syncSpaceId.value ? sync.progress.value[syncSpaceId.value] : undefined,
+)
+
+/** 传文件阶段才知道总数，其余阶段（清点/对比/收尾）转个不确定的滚动条 */
+const syncPercent = computed(() => {
+  const p = syncProgress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.max(4, Math.round((p.done / p.total) * 100)))
+})
+
+/** 阶段文案：清点本地、对比云端、传文件是三件事，别用一句话盖住整段网络往返 */
+function syncPhaseText(phase: string): string {
+  if (phase === 'scan') return t('webdav.phaseScan')
+  if (phase === 'remote') return t('webdav.phaseRemote')
+  if (phase === 'manifest') return t('webdav.phaseManifest')
+  return t('webdav.phaseWrap')
+}
+
+const syncLabel = computed(() => {
+  const spaceName = workspaceStore.workspaces.find(w => w.id === syncSpaceId.value)?.name ?? ''
+  const p = syncProgress.value
+  let text = t('webdav.syncing')
+  if (p) {
+    text = p.phase === 'transfer' && p.total
+      ? t('webdav.progress', { done: p.done, total: p.total })
+      : syncPhaseText(p.phase)
+  }
+  return spaceName ? spaceName + ' · ' + text : text
+})
 </script>
 
 <template>
   <section class="contribution-graph">
+    <!-- 同步进行中：热力图上方显示当前空间的同步进度 -->
+    <div v-if="syncSpaceId" class="cg-sync">
+      <div class="cg-sync-head">
+        <i class="i-mdi-cloud-sync-outline cg-sync-icon"></i>
+        <span class="cg-sync-text">{{ syncLabel }}</span>
+        <span v-if="syncPercent" class="cg-sync-pct">{{ syncPercent }}%</span>
+      </div>
+      <div class="cg-sync-track">
+        <span
+          class="cg-sync-fill"
+          :class="{ 'is-waiting': !syncPercent }"
+          :style="syncPercent ? { width: syncPercent + '%' } : undefined"
+        />
+      </div>
+    </div>
+
     <div class="cg-head">
       <span class="cg-summary">{{ t('activity.summary', { days: activeDays }) }}</span>
       <span class="cg-legend">
@@ -171,6 +233,67 @@ function cellTitle(cell: { label: string; count: number }): string {
   --cg-2: color-mix(in srgb, var(--color-primary) 48%, transparent);
   --cg-3: color-mix(in srgb, var(--color-primary) 74%, transparent);
   --cg-4: var(--color-primary);
+}
+
+.cg-sync {
+  margin-bottom: 6px;
+}
+
+.cg-sync-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--color-text-secondary);
+}
+
+.cg-sync-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-primary);
+}
+
+.cg-sync-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cg-sync-pct {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-primary);
+}
+
+.cg-sync-track {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background-color: var(--cg-empty);
+}
+
+.cg-sync-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background-color: var(--color-primary);
+  transition: width 240ms var(--ease-out);
+}
+
+/* 总数还没出来：来回滑一段，表示「在干活但不知道还剩几成」 */
+.cg-sync-fill.is-waiting {
+  width: 35%;
+  animation: cg-sync-slide 1.1s var(--ease-out) infinite;
+}
+
+@keyframes cg-sync-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
 }
 
 .cg-head {

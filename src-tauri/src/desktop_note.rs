@@ -166,6 +166,28 @@ fn apply_level_settling(app: &AppHandle, window: &tauri::WebviewWindow, level: &
     });
 }
 
+/// 把卡片窗口「排到前面」但不激活它。
+///
+/// 这里不能用 `window.show()`：Tauri 的 show() 在 macOS 上走 AppKit 的
+/// `makeKeyAndOrderFront:`，会让卡片成为 key window，主窗口的键盘焦点连同所有
+/// DOM keydown 一起被抢走（表现为「切回某个空间后快捷键全哑」）。
+/// `orderFrontRegardless` 只排序不夺焦，焦点仍留在主窗口。
+#[cfg(target_os = "macos")]
+fn reveal_without_activation(app: &AppHandle, window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let window = window.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(ptr) = window.ns_window() {
+            let ns_window = ptr as *mut AnyObject;
+            unsafe {
+                let _: () = msg_send![ns_window, orderFrontRegardless];
+            }
+        }
+    });
+}
+
 /// 打开（或重新显示）某篇笔记的桌面卡片窗口
 #[tauri::command]
 pub async fn desktop_note_open(
@@ -178,6 +200,9 @@ pub async fn desktop_note_open(
 
     // 已经开过：直接显示，不要重复建窗口（否则会多出一份 DOM 和事件监听）
     if let Some(window) = app.get_webview_window(&label) {
+        #[cfg(target_os = "macos")]
+        reveal_without_activation(&app, &window);
+        #[cfg(not(target_os = "macos"))]
         let _ = window.show();
         return Ok(label);
     }
@@ -205,6 +230,20 @@ pub async fn desktop_note_open(
     apply_level_settling(&app, &window, &want_level);
 
     Ok(label)
+}
+
+/// 卡片窗口自己挂载完成后调用：非激活地露脸（原因见 reveal_without_activation）
+#[tauri::command]
+pub fn desktop_note_reveal(app: AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        reveal_without_activation(&app, &window);
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().map_err(|e| e.to_string())
+    }
 }
 
 /// 关掉某篇笔记的桌面卡片窗口

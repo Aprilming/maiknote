@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkspaceStore, type Workspace } from '@/stores/workspaceStore'
+import { useWebdavStore } from '@/stores/webdavStore'
 import { useWorkspaceSwitch } from '@/composables/useWorkspaceSwitch'
 import { confirmAction } from '@/composables/useConfirm'
 
 const { t } = useI18n()
 const ws = useWorkspaceStore()
+const webdav = useWebdavStore()
 const { switchWorkspace, addWorkspace, renameWorkspace, removeWorkspace, displayNameOf } = useWorkspaceSwitch()
+
+/** 这个空间开了云同步就返回 true：名字前面挂一朵云 */
+function isSynced(workspaceId: string): boolean {
+  return !!webdav.optionOf(workspaceId).enabled
+}
 
 const rootEl = ref<HTMLElement | null>(null)
 const open = ref(false)
@@ -56,6 +63,11 @@ function toggleCard() {
   if (open.value) close()
   else openCard()
 }
+
+onMounted(() => {
+  // 同步配置在设置页之外也要读一次，否则侧栏不知道哪些空间开了同步
+  void webdav.initialize()
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
@@ -139,6 +151,11 @@ async function addSpace() {
       :title="displayNameOf(ws.current)"
       @click="toggleCard"
     >
+      <i
+        v-if="ws.current && isSynced(ws.current.id)"
+        class="i-mdi-cloud-outline ws-cloud"
+        :title="t('workspace.cloudSyncOn')"
+      ></i>
       <span class="ws-trigger-name">{{ displayNameOf(ws.current) }}</span>
       <i class="i-mdi-chevron-down ws-trigger-arrow"></i>
     </button>
@@ -170,6 +187,11 @@ async function addSpace() {
             @keydown.enter="selectWorkspace(item.id)"
           >
             <i class="ws-check" :class="item.id === ws.currentId ? 'i-mdi-check' : ''"></i>
+            <i
+              v-if="isSynced(item.id)"
+              class="i-mdi-cloud-outline ws-cloud"
+              :title="t('workspace.cloudSyncOn')"
+            ></i>
             <span class="ws-name" :title="displayNameOf(item)">{{ displayNameOf(item) }}</span>
             <span v-if="item.kind === 'custom'" class="ws-actions" @click.stop>
               <button class="ws-action" type="button" :title="t('workspace.rename')" @click.stop="startRename(item)">
@@ -239,6 +261,18 @@ async function addSpace() {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 开了云同步的空间：名字前面的小云朵 */
+.ws-cloud {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  opacity: 0.85;
+}
+
+.ws-row.is-current .ws-cloud {
+  color: var(--color-primary);
 }
 
 .ws-trigger-arrow {

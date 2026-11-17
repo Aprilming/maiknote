@@ -7,6 +7,7 @@ pub mod permissions;
 pub mod secrets;
 pub mod skills_sync;
 pub mod tray;
+pub mod webdav;
 pub mod workspace;
 
 use std::collections::HashMap;
@@ -229,6 +230,9 @@ fn parse_shortcut_str(shortcut_str: &str) -> Result<Shortcut, String> {
                     "Enter" | "Return" => Some(Code::Enter),
                     "Tab" => Some(Code::Tab),
                     "Escape" | "Esc" => Some(Code::Escape),
+                    // 方括号（切换目录 / 工作空间的默认键位）
+                    "[" => Some(Code::BracketLeft),
+                    "]" => Some(Code::BracketRight),
                     // 修饰键（作为主要按键时）
                     "MetaLeft" | "MetaRight" | "Meta" => Some(Code::MetaLeft),
                     "ControlLeft" | "ControlRight" | "Ctrl" => Some(Code::ControlLeft),
@@ -2144,6 +2148,35 @@ fn style_edge_window(win: &tauri::WebviewWindow) {
     }
 }
 
+/// 显示边缘面板，同时不抢走主窗口的键盘焦点。
+///
+/// tao 的 Window::show() 在 macOS 上等于 makeKeyAndOrderFront: —— 谁 show 谁就当 key window。
+/// 贴边条本身没有任何键盘交互，但它一旦成为 key window，主窗口的 keydown 就收不到事件了
+/// （webview 的键盘事件只送给 key window），表现就是所有快捷键静默失效，点一下主窗口才恢复。
+/// 所以：主窗口此刻持有焦点时只用 orderFront:（显示但不抢 key）；
+/// 其余情况（用户从全局快捷键唤起面板、主窗口本来就隐藏）沿用 show()，该给焦点时照旧给。
+fn show_edge_preserving_focus<R: tauri::Runtime>(app: &AppHandle<R>, win: &tauri::WebviewWindow<R>) {
+    let main_focused = app
+        .get_webview_window("main")
+        .map(|m| m.is_visible().unwrap_or(false) && m.is_focused().unwrap_or(false))
+        .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    if main_focused {
+        use cocoa::base::id;
+        use objc2::msg_send;
+        if let Ok(ns_window) = win.ns_window() {
+            let ns_window_ptr = ns_window as id as *mut objc2::runtime::AnyObject;
+            let nil_ptr = cocoa::base::nil as *mut objc2::runtime::AnyObject;
+            unsafe {
+                let _: () = msg_send![ns_window_ptr, orderFront: nil_ptr];
+            }
+            return;
+        }
+    }
+
+    let _ = win.show();
+}
 static EDGE_WINDOW_STYLED: AtomicBool = AtomicBool::new(false);
 
 /// 重新载入边缘面板的页面。
@@ -2177,7 +2210,7 @@ fn init_edge_window(app: AppHandle) -> Result<(), String> {
             style_edge_window(&win);
         }
         let _ = apply_edge_layout(&handle, &win, edge_trigger_thickness());
-        let _ = win.show();
+        show_edge_preserving_focus(&handle, &win);
         EDGE_VISIBLE.store(true, Ordering::Relaxed);
         EDGE_HOVERED.store(false, Ordering::Relaxed);
         start_edge_hover_tracker(handle.clone());
@@ -2301,7 +2334,7 @@ fn toggle_edge_panel_impl(app: &AppHandle) {
             let width = if pinned { edge_panel_thickness() } else { edge_trigger_thickness() };
             let _ = apply_edge_layout(&handle, &win, width);
             if pinned {
-                let _ = win.show();
+                show_edge_preserving_focus(&handle, &win);
                 EDGE_HOVERED.store(true, Ordering::Relaxed);
                 start_edge_hover_tracker(handle.clone());
             }
@@ -2641,6 +2674,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_note::desktop_note_open,
+            desktop_note::desktop_note_reveal,
             desktop_note::desktop_note_close,
             desktop_note::desktop_note_list,
             desktop_note::desktop_note_apply_level,
@@ -2710,6 +2744,12 @@ pub fn run() {
             workspace::scan_workspace_dir,
             workspace::copy_workspace_entry,
             workspace::remove_workspace_meta,
+            webdav::read_webdav_config,
+            webdav::write_webdav_config,
+            webdav::webdav_test,
+            webdav::webdav_sync,
+            webdav::webdav_force,
+            webdav::webdav_cancel_sync,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -2757,5 +2797,27 @@ mod edge_layout_tests {
     #[test]
     fn thickness_is_clamped_to_at_least_one_pixel() {
         assert_eq!(edge_rect(0, WORK, 0), (1919, 25, 1, 1055));
+    }
+}
+
+#[cfg(test)]
+mod shortcut_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_workspace_shortcuts() {
+        assert!(parse_shortcut_str("Shift+Option+Cmd+[").is_ok());
+        assert!(parse_shortcut_str("Shift+Option+Cmd+]").is_ok());
+    }
+
+    #[test]
+    fn parses_directory_shortcuts() {
+        assert!(parse_shortcut_str("Option+Cmd+[").is_ok());
+        assert!(parse_shortcut_str("Option+Cmd+]").is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_keys() {
+        assert!(parse_shortcut_str("Cmd+Unknown").is_err());
     }
 }
