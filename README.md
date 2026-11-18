@@ -21,6 +21,7 @@
 全局快捷键随叫随到，所见即所得写 Markdown，笔记以纯 `.md` 文件落在 iCloud 目录里天然多设备同步，并内置 AI 改写与桌面笔记卡片。灵感来自 [Antinote](https://antinote.io/)，在其基础上深度整合了 AI 能力。本项目完全通过 vibe coding 方式开发。
 
 官网与下载：[maiknote.91kfc.vip](https://maiknote.91kfc.vip)
+windows(由第三方开发者开发):[MaikNote-for-Windows](https://github.com/1578393930/MaikNote-for-Windows)
 
 📘 **使用教程**：[在线版 maiknote.91kfc.vip/guide.html](https://maiknote.91kfc.vip/guide.html) · [仓库内 TUTORIAL.md](TUTORIAL.md) — 一页看完：快捷键、收藏、置顶、AI。
 
