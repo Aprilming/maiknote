@@ -22,6 +22,8 @@ Summon it with a global shortcut, write WYSIWYG Markdown, and keep every note as
 
 Website & downloads: [maiknote.91kfc.vip](https://maiknote.91kfc.vip)
 
+windows(Developed by third-party developers): [MaikNote-for-Windows](https://github.com/1578393930/MaikNote-for-Windows)
+
 ## Design Philosophy
 
 **Come and go** · summon/hide anywhere with one shortcut ｜ **What you see is what you write** · live Markdown, no preview pane ｜ **No entities without need** · minimal UI, focus on content
