@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 use serde::{Deserialize, Serialize};
 
 /// 出口 IP 信息（来自远程 API）
@@ -1825,8 +1825,13 @@ static EDGE_TRIGGER_SPAN_PERCENT: Mutex<f64> = Mutex::new(EDGE_TRIGGER_SPAN_DEFA
 
 /// 侧边栏总开关：关掉后贴边条隐藏，热区与快捷键一律失效
 static EDGE_ENABLED: AtomicBool = AtomicBool::new(true);
+/// 鼠标移开是否自动收起（设置里的「边缘面板自动隐藏」）：关掉后只能再用快捷键收起
+static EDGE_AUTO_HIDE: AtomicBool = AtomicBool::new(true);
 /// 快捷键钉住的展开态：钉住后鼠标移开也不再收起
 static EDGE_PINNED: AtomicBool = AtomicBool::new(false);
+/// 钉住态是否已被鼠标接管：鼠标进过面板一次后，再移开就收起并解除钉住。
+/// 只按快捷键、鼠标始终不碰面板时保持展开，方便纯粹看列表
+static EDGE_PIN_ARMED: AtomicBool = AtomicBool::new(false);
 /// 边缘窗口当前厚度（逻辑像素）：用于区分展开/折叠态，避免收起动画中被热区误判重新展开
 static EDGE_CURRENT_WIDTH: Mutex<f64> = Mutex::new(EDGE_STRIP_WIDTH_DEFAULT + EDGE_STRIP_PADDING);
 /// 上次实际下发的窗口几何 (x, y, w, h)：完全相同时不再重复设置，避免窗口反复重排导致闪烁
@@ -1898,6 +1903,20 @@ fn start_edge_hover_tracker(app: AppHandle) {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             let suppressed = now_ms < EDGE_SUPPRESS_UNTIL.load(Ordering::SeqCst);
+            // 鼠标也能收回快捷键钉住的面板：鼠标先落进面板（armed），之后移开就收起并解除钉住
+            let auto_hide = EDGE_AUTO_HIDE.load(Ordering::Relaxed);
+            if EDGE_PINNED.load(Ordering::Relaxed) {
+                if inside && !suppressed {
+                    EDGE_PIN_ARMED.store(true, Ordering::Relaxed);
+                } else if auto_hide && !inside && EDGE_PIN_ARMED.load(Ordering::Relaxed) {
+                    EDGE_PINNED.store(false, Ordering::Relaxed);
+                    EDGE_PIN_ARMED.store(false, Ordering::Relaxed);
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let _ = handle.emit("maiknote:edge-pinned", false);
+                    });
+                }
+            }
             let effective = if suppressed {
                 false
             } else {
@@ -1906,7 +1925,12 @@ fn start_edge_hover_tracker(app: AppHandle) {
             // 兜底收起：不依赖前端的 setTimeout + invoke。
             // 边缘窗口没有焦点，webview 的定时器会被系统节流，一旦收起那次调用被吞掉，
             // 窗口就会一直停在面板宽度，那块透明区域全都算热区——表现就是「触发宽度调到最小也没用」。
-            if !effective && !suppressed && EDGE_VISIBLE.load(Ordering::Relaxed) && current > trigger + 0.5 {
+            if !effective
+                && auto_hide
+                && !suppressed
+                && EDGE_VISIBLE.load(Ordering::Relaxed)
+                && current > trigger + 0.5
+            {
                 if let Some(win) = app.get_webview_window("edge") {
                     let handle = app.clone();
                     let _ = app.run_on_main_thread(move || {
@@ -2003,9 +2027,9 @@ fn edge_zone(side: u8, area: [f64; 4], thickness: f64) -> [f64; 4] {
 }
 
 /// 按当前贴边方向与厚度算窗口矩形（物理像素）与热区（逻辑坐标）
-fn apply_edge_layout<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    win: &tauri::WebviewWindow<R>,
+fn apply_edge_layout(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
     thickness: f64,
 ) -> Result<(), String> {
     let monitor = edge_monitor(app, win).ok_or_else(|| "no monitor available".to_string())?;
@@ -2060,6 +2084,9 @@ fn apply_edge_layout<R: tauri::Runtime>(
     if let Ok(mut current) = EDGE_CURRENT_WIDTH.lock() {
         *current = thickness;
     }
+    // 折叠态（只有那根白条）不需要磨玻璃，展开成面板才要
+    #[cfg(target_os = "macos")]
+    sync_edge_vibrancy(win, thickness > edge_trigger_thickness() + 0.5);
     Ok(())
 }
 
@@ -2119,13 +2146,7 @@ fn style_edge_window(win: &tauri::WebviewWindow) {
     use cocoa::base::id;
     use objc2::msg_send;
 
-    // 磨玻璃底（失败不影响功能）
-    let _ = apply_vibrancy(
-        win,
-        NSVisualEffectMaterial::Popover,
-        Some(NSVisualEffectState::Active),
-        Some(0.0),
-    );
+    // 磨玻璃底不在这里加：它是随折叠/展开变的，见 sync_edge_vibrancy
 
     if let Ok(ns_window) = win.ns_window() {
         let ns_window_ptr = ns_window as id as *mut objc2::runtime::AnyObject;
@@ -2146,6 +2167,95 @@ fn style_edge_window(win: &tauri::WebviewWindow) {
             enable_first_mouse(content_view);
         }
     }
+
+    // 重新样式化（reload）后图层的裁剪会丢，按当前展开状态再贴一次
+    sync_edge_window_corners(win, EDGE_VIBRANCY_ON.load(Ordering::Relaxed));
+}
+
+/// 面板圆角半径：必须和 .edge-panel 的 border-radius 一致，否则裁出来的弧和内层圆角错位。
+#[cfg(target_os = "macos")]
+const EDGE_PANEL_RADIUS: f64 = 14.0;
+
+/// 把一个视图图层裁成「只圆朝内那两个角」。side: 0=右 1=左 2=上 3=下
+#[cfg(target_os = "macos")]
+unsafe fn round_panel_corners(view: *mut objc2::runtime::AnyObject, side: u8, open: bool) {
+    use objc2::msg_send;
+
+    // CACornerMask：1=MinXMinY 2=MaxXMinY 4=MinXMaxY 8=MaxXMaxY；非翻转图层下 MinY 才是下边
+    let all_corners: usize = 0b1111;
+    let radius = if open { EDGE_PANEL_RADIUS } else { 0.0 };
+
+    let _: () = msg_send![view, setWantsLayer: 1i8];
+    let layer: *mut objc2::runtime::AnyObject = msg_send![view, layer];
+    if layer.is_null() {
+        return;
+    }
+    let _: () = msg_send![layer, setCornerRadius: radius];
+    let _: () = msg_send![layer, setMasksToBounds: if open { 1i8 } else { 0i8 }];
+
+    let mask = if !open {
+        all_corners
+    } else {
+        // 图层坐标系的 Y 轴底在哪，取决于视图是否 flipped，按实际翻转情况挑上/下那一对
+        let flipped: i8 = msg_send![view, isFlipped];
+        match side {
+            0 => 0b0101,                 // 贴右：只圆左边（MinX）两角
+            1 => 0b1010,                 // 贴左：只圆右边（MaxX）两角
+            2 if flipped != 0 => 0b1100, // 贴上：只圆下边两角
+            2 => 0b0011,
+            3 if flipped != 0 => 0b0011, // 贴下：只圆上边两角
+            _ => 0b1100,
+        }
+    };
+    let _: () = msg_send![layer, setMaskedCorners: mask];
+}
+
+/// 展开态把原生背板（磨玻璃视图 + contentView + webview）一起裁成面板的圆角形状，
+/// 圆角弧外那块方角半透明底就没有落脚处了；折叠态是贴边细条，必须还原成方角。
+#[cfg(target_os = "macos")]
+fn sync_edge_window_corners<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, open: bool) {
+    use cocoa::base::id;
+    use objc2::msg_send;
+
+    let side = edge_side();
+    unsafe {
+        if let Ok(ns_window) = win.ns_window() {
+            let ns_window_ptr = ns_window as id as *mut objc2::runtime::AnyObject;
+            let content_view: *mut objc2::runtime::AnyObject = msg_send![ns_window_ptr, contentView];
+            if !content_view.is_null() {
+                round_panel_corners(content_view, side, open);
+            }
+        }
+        if let Ok(ns_view) = win.ns_view() {
+            let view = ns_view as *mut objc2::runtime::AnyObject;
+            if !view.is_null() {
+                round_panel_corners(view, side, open);
+            }
+        }
+    }
+}
+
+static EDGE_VIBRANCY_ON: AtomicBool = AtomicBool::new(false);
+
+/// 折叠态必须真透明：毛玻璃会把整块窗口涂成一片浅灰，白条上下就多出一根看不透的灰条。
+/// 展开态再把它装回去，面板才有真正的背景模糊。只在状态翻转时动手，避免一路上叠出多层视图。
+#[cfg(target_os = "macos")]
+fn sync_edge_vibrancy<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, open: bool) {
+    if open == EDGE_VIBRANCY_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    if open {
+        let _ = apply_vibrancy(
+            win,
+            NSVisualEffectMaterial::Popover,
+            Some(NSVisualEffectState::Active),
+            Some(0.0),
+        );
+    } else {
+        let _ = clear_vibrancy(win);
+    }
+    EDGE_VIBRANCY_ON.store(open, Ordering::Relaxed);
+    sync_edge_window_corners(win, open);
 }
 
 /// 显示边缘面板，同时不抢走主窗口的键盘焦点。
@@ -2227,6 +2337,7 @@ fn set_edge_prefs(
     trigger_span: f64,
     strip_width: f64,
     enabled: bool,
+    auto_hide: bool,
 ) -> Result<(), String> {
     let side_id = match side.as_str() {
         "left" => 1u8,
@@ -2245,6 +2356,7 @@ fn set_edge_prefs(
         *v = strip_width.clamp(3.0, 16.0);
     }
     EDGE_ENABLED.store(enabled, Ordering::Relaxed);
+    EDGE_AUTO_HIDE.store(auto_hide, Ordering::Relaxed);
     // 几何变了就强制重排一次
     if let Ok(mut last) = EDGE_LAST_GEOM.lock() {
         *last = None;
@@ -2297,6 +2409,7 @@ fn hide_edge_window(app: AppHandle) -> Result<(), String> {
         EDGE_VISIBLE.store(false, Ordering::Relaxed);
         EDGE_HOVERED.store(false, Ordering::Relaxed);
         EDGE_PINNED.store(false, Ordering::Relaxed);
+        EDGE_PIN_ARMED.store(false, Ordering::Relaxed);
         if let Some(win) = handle.get_webview_window("edge") {
             let _ = win.hide();
         }
@@ -2321,6 +2434,7 @@ fn toggle_edge_panel_impl(app: &AppHandle) {
     }
     let pinned = !EDGE_PINNED.load(Ordering::Relaxed);
     EDGE_PINNED.store(pinned, Ordering::Relaxed);
+    EDGE_PIN_ARMED.store(false, Ordering::Relaxed);
     if pinned {
         EDGE_VISIBLE.store(true, Ordering::Relaxed);
     }
@@ -2355,6 +2469,7 @@ fn toggle_edge_panel(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn collapse_edge_panel(app: AppHandle) -> Result<(), String> {
     EDGE_PINNED.store(false, Ordering::Relaxed);
+    EDGE_PIN_ARMED.store(false, Ordering::Relaxed);
     let until = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64 + 700)
@@ -2750,6 +2865,10 @@ pub fn run() {
             webdav::webdav_sync,
             webdav::webdav_force,
             webdav::webdav_cancel_sync,
+            webdav::webdav_scan_spaces,
+            webdav::webdav_set_space_password,
+            webdav::webdav_join_space,
+            webdav::webdav_prepare_local_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

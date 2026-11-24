@@ -97,6 +97,12 @@
           {{ sync.stopping.value ? $t('webdav.stopping') : $t('webdav.stop') }}
         </button>
       </div>
+    </section>
+
+    <!-- 本机文件夹 -->
+    <div class="settings-group-title wd-subtitle">{{ $t('webdav.localSpaces') }}</div>
+    <section class="wd-panel">
+      <p class="wd-section-desc">{{ $t('webdav.localSpacesDesc') }}</p>
 
       <div v-for="ws in workspaceStore.workspaces" :key="ws.id" class="wd-item wd-space">
         <div class="wd-head">
@@ -104,6 +110,9 @@
           <span class="wd-badge">
             {{ ws.kind === 'icloud' ? $t('webdav.kindIcloud') : $t('webdav.kindCustom') }}
           </span>
+          <button class="wd-btn wd-btn-xs" type="button" @click="openPwd(ws)">
+            <i class="i-mdi-lock-outline" />{{ hasPassword(ws) ? $t('webdav.changePassword') : $t('webdav.setPassword') }}
+          </button>
           <span class="wd-spacer" />
           <span v-if="summaryOf(ws.id)" class="wd-summary">{{ summaryOf(ws.id) }}</span>
           <button
@@ -192,6 +201,26 @@
           </div>
         </div>
 
+        <!-- 设置 / 修改这个空间的密码 -->
+        <div v-if="editingPwd === ws.id" class="wd-join-form">
+          <div class="wd-join-title">{{ hasPassword(ws) ? $t('webdav.changePassword') : $t('webdav.setPassword') }}</div>
+          <template v-if="hasPassword(ws)">
+            <label class="wd-field-label">{{ $t('webdav.currentPassword') }}</label>
+            <input v-model="pwdCurrent" class="wd-input wd-input-sm" type="password" autocomplete="off" spellcheck="false" />
+          </template>
+          <label class="wd-field-label">{{ $t('webdav.newPassword') }}</label>
+          <input v-model="pwdNew" class="wd-input wd-input-sm" type="password" autocomplete="off" spellcheck="false" />
+          <p v-if="pwdMsg" class="wd-error">{{ pwdMsg }}</p>
+          <div class="wd-join-actions">
+            <button class="wd-btn wd-btn-sm" type="button" :disabled="pwdBusy" @click="cancelPwd">
+              {{ $t('webdav.cancel') }}
+            </button>
+            <button class="wd-btn wd-btn-sm wd-btn-primary" type="button" :disabled="pwdBusy" @click="confirmPwd(ws)">
+              {{ pwdBusy ? $t('webdav.saving') : $t('webdav.save') }}
+            </button>
+          </div>
+        </div>
+
         <div class="wd-space-foot">
           <span class="wd-sub">{{ lastSyncText(ws.id) }}</span>
           <span v-if="store.optionOf(ws.id).lastError" class="wd-error">
@@ -199,6 +228,64 @@
           </span>
         </div>
       </div>
+    </section>
+
+    <!-- 加入云端空间 -->
+    <div class="settings-group-title wd-subtitle">{{ $t('webdav.joinCloud') }}</div>
+    <section class="wd-panel">
+      <p class="wd-section-desc">{{ $t('webdav.joinCloudDesc') }}</p>
+      <!-- 扫描云端空间并加入：B 端不用手动建同名文件夹 -->
+      <div class="wd-item wd-cloud">
+        <div class="wd-head">
+          <span class="wd-sub">{{ $t('webdav.cloudSpaces') }}</span>
+          <span class="wd-spacer" />
+          <button class="wd-btn wd-btn-sm" type="button" :disabled="!store.hasServer || scanning" @click="onScanCloud">
+            {{ scanning ? $t('webdav.scanning') : $t('webdav.scanCloud') }}
+          </button>
+        </div>
+        <p v-if="scanMsg" class="wd-hint-text">{{ scanMsg }}</p>
+
+        <div v-for="sp in cloudSpaces" :key="sp.remoteDir" class="wd-cloud-row">
+          <div class="wd-cloud-meta">
+            <span class="wd-name">{{ sp.name }}</span>
+            <span class="wd-badge" :class="{ locked: sp.locked }">
+              {{ !sp.initialized ? $t('webdav.uninitialized') : (sp.locked ? $t('webdav.locked') : $t('webdav.unlocked')) }}
+            </span>
+            <span class="wd-sub">{{ $t('webdav.cloudNotes', { n: sp.noteCount }) }}</span>
+            <span v-if="rotationChanged(sp)" class="wd-rotate-hint">{{ $t('webdav.rotationChanged') }}</span>
+          </div>
+          <button class="wd-btn wd-btn-sm" type="button" :disabled="joiningBusy" @click="openJoin(sp)">
+            {{ $t('webdav.join') }}
+          </button>
+        </div>
+
+        <!-- 加入表单：输空间密码 + 选本地父目录，本地文件夹自动建 -->
+        <div v-if="joining" class="wd-join-form">
+          <div class="wd-join-title">{{ $t('webdav.joinTitle', { name: joining.name }) }}</div>
+          <label class="wd-field-label">{{ $t('webdav.spacePassword') }}</label>
+          <input
+            v-model="joinPassword"
+            class="wd-input wd-input-sm"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            :placeholder="$t('webdav.spacePasswordPlaceholder')"
+          />
+          <label class="wd-field-label">{{ $t('webdav.localParent') }}</label>
+          <input v-model="joinParent" class="wd-input wd-input-sm" type="text" spellcheck="false" />
+          <p class="wd-hint-text">{{ $t('webdav.localParentDesc') }}</p>
+          <p v-if="joinMsg" class="wd-error">{{ joinMsg }}</p>
+          <div class="wd-join-actions">
+            <button class="wd-btn wd-btn-sm" type="button" :disabled="joiningBusy" @click="cancelJoin">
+              {{ $t('webdav.cancel') }}
+            </button>
+            <button class="wd-btn wd-btn-sm wd-btn-primary" type="button" :disabled="joiningBusy" @click="confirmJoin">
+              {{ joiningBusy ? $t('webdav.joining') : $t('webdav.joinConfirm') }}
+            </button>
+          </div>
+        </div>
+      </div>
+
     </section>
 
     <!-- 规则 ------------------------------------------------ -->
@@ -220,7 +307,7 @@ import type { Workspace } from '@/stores/workspaceStore'
 import { useWebdavStore } from '@/stores/webdavStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { useWebdavSync } from '@/composables/useWebdavSync'
-import type { WebdavForceMode } from '@/types/webdav'
+import type { WebdavForceMode, CloudSpaceInfo } from '@/types/webdav'
 
 const { t, locale } = useI18n()
 const store = useWebdavStore()
@@ -354,6 +441,120 @@ function lastSyncText(workspaceId: string): string {
   if (!stamp) return t('webdav.neverSynced')
   const when = new Date(stamp * 1000).toLocaleString(locale.value)
   return t('webdav.lastSync', { time: when })
+}
+
+// ===== 云端空间：扫描 / 加入 / 每空间密码 =====
+const cloudSpaces = ref<CloudSpaceInfo[]>([])
+const scanning = ref(false)
+const scanMsg = ref('')
+/** 正在加入的云端空间；有值就展开加入表单 */
+const joining = ref<CloudSpaceInfo | null>(null)
+const joinPassword = ref('')
+const joinParent = ref('~/Documents/MaikNote')
+const joiningBusy = ref(false)
+const joinMsg = ref('')
+/** 正在设密码的本地空间 */
+const editingPwd = ref<string | null>(null)
+const pwdCurrent = ref('')
+const pwdNew = ref('')
+const pwdBusy = ref(false)
+const pwdMsg = ref('')
+
+async function onScanCloud() {
+  scanning.value = true
+  scanMsg.value = ''
+  cloudSpaces.value = []
+  try {
+    cloudSpaces.value = await store.scanSpaces()
+    if (cloudSpaces.value.length === 0) scanMsg.value = t('webdav.scanEmpty')
+  } catch (e) {
+    scanMsg.value = t('webdav.scanFail') + '：' + (e instanceof Error ? e.message : String(e))
+  } finally {
+    scanning.value = false
+  }
+}
+
+function openJoin(sp: CloudSpaceInfo) {
+  joining.value = sp
+  joinPassword.value = ''
+  joinMsg.value = ''
+}
+
+function cancelJoin() {
+  joining.value = null
+}
+
+function rotationChanged(sp: CloudSpaceInfo): boolean {
+  return workspaceStore.workspaces.some(ws => {
+    const opt = store.optionOf(ws.id)
+    return !!opt.spaceId && opt.spaceId === sp.spaceId && opt.rotation !== sp.rotation
+  })
+}
+
+/** 加入：校验密码 → 自动建本地文件夹 → 建工作空间 → 绑定 → 首次拉取 */
+async function confirmJoin() {
+  const sp = joining.value
+  if (!sp) return
+  if (!joinPassword.value) {
+    joinMsg.value = t('webdav.passwordEmpty')
+    return
+  }
+  joiningBusy.value = true
+  joinMsg.value = ''
+  try {
+    const joined = await store.joinSpace(sp.remoteDir, joinPassword.value)
+    const localPath = await store.prepareLocalDir(joinParent.value.trim(), joined.name)
+    const ws = await workspaceStore.addFromPath(localPath)
+    store.setOption(ws.id, {
+      enabled: true,
+      remoteDir: joined.remoteDir,
+      spaceId: joined.spaceId,
+      rotation: joined.rotation,
+    })
+    await store.persist()
+    joining.value = null
+    joinMsg.value = ''
+    await onScanCloud()
+    await sync.syncSpace(ws, { skipDownload: sync.currentNoteRelPath() })
+  } catch (e) {
+    joinMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    joiningBusy.value = false
+  }
+}
+
+function openPwd(ws: Workspace) {
+  editingPwd.value = ws.id
+  pwdCurrent.value = ''
+  pwdNew.value = ''
+  pwdMsg.value = ''
+}
+
+function cancelPwd() {
+  editingPwd.value = null
+}
+
+async function confirmPwd(ws: Workspace) {
+  if (!pwdNew.value) {
+    pwdMsg.value = t('webdav.passwordEmpty')
+    return
+  }
+  pwdBusy.value = true
+  pwdMsg.value = ''
+  try {
+    const opt = store.optionOf(ws.id)
+    await store.setSpacePassword(ws, pwdNew.value, opt.spaceId ? pwdCurrent.value : '')
+    editingPwd.value = null
+    pwdMsg.value = ''
+  } catch (e) {
+    pwdMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    pwdBusy.value = false
+  }
+}
+
+function hasPassword(ws: Workspace): boolean {
+  return !!store.optionOf(ws.id).spaceId
 }
 </script>
 
@@ -553,7 +754,6 @@ function lastSyncText(workspaceId: string): string {
   color: var(--st-text, #1f2937);
   background: var(--st-sunken, rgba(0, 0, 0, 0.05));
   border: 1px solid var(--st-panel-border, rgba(0, 0, 0, 0.08));
-  transition: background 0.15s ease, opacity 0.15s ease;
 }
 
 .wd-btn:hover:not(:disabled) {
@@ -561,7 +761,9 @@ function lastSyncText(workspaceId: string): string {
 }
 
 .wd-btn:disabled {
-  opacity: 0.45;
+  color: var(--st-text-dim, #9ca3af);
+  background: var(--st-sunken, rgba(0, 0, 0, 0.05));
+  border-color: var(--st-panel-border, rgba(0, 0, 0, 0.08));
   cursor: default;
 }
 
@@ -686,5 +888,89 @@ function lastSyncText(workspaceId: string): string {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 三个分区的子标题与说明 */
+.settings-group-title.wd-subtitle {
+  margin-top: 14px;
+}
+.wd-section-desc {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--st-text-dim, #6b7280);
+  margin: 0;
+  padding: 2px 4px 4px;
+}
+
+/* 云端空间发现 / 加入 */
+.wd-cloud {
+  background: var(--st-sunken, rgba(0, 0, 0, 0.03));
+}
+.wd-cloud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px;
+}
+.wd-cloud-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.wd-badge.locked {
+  background: rgba(224, 87, 74, 0.14);
+  color: #c0453a;
+}
+.wd-rotate-hint {
+  font-size: 10px;
+  color: #c98a2b;
+}
+.wd-join-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--st-panel, rgba(255, 255, 255, 0.66));
+  border: 1px solid var(--st-panel-border, rgba(0, 0, 0, 0.07));
+}
+.wd-join-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--st-text, #1f2937);
+  margin-bottom: 2px;
+}
+.wd-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--st-text-dim, #6b7280);
+}
+.wd-hint-text {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--st-text-soft, #8b93a1);
+  margin: 0;
+}
+.wd-join-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.wd-join-actions .wd-btn {
+  flex: 0 0 auto;
+}
+.wd-btn-primary {
+  background: var(--st-accent, #3b82f6);
+  color: #fff;
+  border-color: transparent;
+}
+.wd-btn-primary:disabled {
+  color: #e6f0ff;
+  background: #8fb8f5;
+  border-color: transparent;
 }
 </style>

@@ -14,6 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::Read;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::workspace::ensure_path_allowed;
@@ -47,11 +49,17 @@ pub struct WebdavWorkspaceConfig {
     pub last_sync_at: u64,
     #[serde(default)]
     pub last_error: String,
+    /// 云端空间身份卡的 spaceId，用来认空间不认名字（老配置为空）
+    #[serde(default)]
+    pub space_id: String,
+    /// 空间密码轮换号，云端变了就提示重新输密码
+    #[serde(default)]
+    pub rotation: u32,
 }
 
 impl Default for WebdavWorkspaceConfig {
     fn default() -> Self {
-        Self { enabled: false, remote_dir: String::new(), last_sync_at: 0, last_error: String::new() }
+        Self { enabled: false, remote_dir: String::new(), last_sync_at: 0, last_error: String::new(), space_id: String::new(), rotation: 0 }
     }
 }
 
@@ -1103,6 +1111,312 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), String> {
 // 命令入口
 // ============================================================
 
+// ============================================================
+// 云端空间身份卡：认 ID 不认名字 + 每空间密码门禁
+// 卡存在 <remoteDir>/.maiknote/space.json，list_tree 会跳过 .maiknote，不会当笔记同步。
+// 密码本身永远不上云：云端只存随机盐 + SHA256(盐||密码) 指纹 + 轮换号。
+// ============================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpaceCard {
+    #[serde(default = "card_version")]
+    version: u32,
+    #[serde(default)]
+    space_id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    created_at: u64,
+    #[serde(default)]
+    rotation: u32,
+    /// 16 字节随机数的 hex（32 字符）
+    #[serde(default)]
+    salt: String,
+    /// SHA256(salt_bytes || password_bytes) 的 hex（64 字符）；空 = 空间未上锁
+    #[serde(default)]
+    fingerprint: String,
+}
+
+fn card_version() -> u32 { 1 }
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes { s.push_str(&format!("{:02x}", b)); }
+    s
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 { return Err("hex 长度不是偶数".to_string()); }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = (bytes[i] as char).to_digit(16).ok_or_else(|| "hex 含非法字符".to_string())?;
+        let lo = (bytes[i + 1] as char).to_digit(16).ok_or_else(|| "hex 含非法字符".to_string())?;
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn random_bytes(n: usize) -> Result<Vec<u8>, String> {
+    let mut f = fs::File::open("/dev/urandom").map_err(|e| format!("读随机源失败: {e}"))?;
+    let mut buf = vec![0u8; n];
+    f.read_exact(&mut buf).map_err(|e| format!("读随机源失败: {e}"))?;
+    Ok(buf)
+}
+
+fn new_space_id() -> Result<String, String> {
+    let mut b = random_bytes(16)?;
+    b[6] = (b[6] & 0x0f) | 0x40; // UUID v4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant 10xx
+    let h = hex_encode(&b);
+    Ok(format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]))
+}
+
+/// 指纹 = SHA256(salt_bytes || password_utf8)，A/B 两端用同一个算法
+fn password_fingerprint(salt_hex: &str, password: &str) -> Result<String, String> {
+    let salt = hex_decode(salt_hex)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&salt);
+    hasher.update(password.as_bytes());
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+fn space_card_rel(remote_dir: &str) -> String {
+    format!("{}/{}/space.json", remote_dir.trim_end_matches('/'), STATE_DIR)
+}
+
+async fn read_space_card(dav: &Dav, remote_dir: &str) -> Option<SpaceCard> {
+    let bytes = dav.get(&space_card_rel(remote_dir)).await.ok()?;
+    serde_json::from_slice::<SpaceCard>(&bytes).ok()
+}
+
+async fn write_space_card(dav: &Dav, remote_dir: &str, card: &SpaceCard) -> Result<(), String> {
+    dav.ensure_dir_chain(&format!("{}/{}", remote_dir.trim_end_matches('/'), STATE_DIR)).await?;
+    let bytes = serde_json::to_vec_pretty(card).map_err(|e| format!("序列化身份卡失败: {e}"))?;
+    dav.put(&space_card_rel(remote_dir), bytes).await?;
+    Ok(())
+}
+
+/// 首次同步时补一张「未上锁」的卡：别的设备能扫描到，但加入仍需空间主人设密码
+async fn ensure_space_card(dav: &Dav, remote_dir: &str) -> Result<(), String> {
+    if read_space_card(dav, remote_dir).await.is_some() { return Ok(()); }
+    let name = remote_dir.trim_end_matches('/').rsplit('/').next().unwrap_or("workspace").to_string();
+    let card = SpaceCard {
+        version: card_version(),
+        space_id: new_space_id()?,
+        name,
+        created_at: now_ms(),
+        rotation: 1,
+        salt: String::new(),
+        fingerprint: String::new(),
+    };
+    write_space_card(dav, remote_dir, &card).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPasswordRequest {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub insecure_tls: bool,
+    pub remote_dir: String,
+    pub name: String,
+    #[serde(default)]
+    pub old_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceIdentityResult {
+    pub space_id: String,
+    pub rotation: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinSpaceRequest {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub insecure_tls: bool,
+    pub remote_dir: String,
+    pub space_password: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinedSpace {
+    pub space_id: String,
+    pub name: String,
+    pub remote_dir: String,
+    pub rotation: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSpaceInfo {
+    pub name: String,
+    pub remote_dir: String,
+    pub space_id: String,
+    /// false = 老空间，云端还没有身份卡
+    pub initialized: bool,
+    /// true = 已设密码，B 加入必须输密码
+    pub locked: bool,
+    pub note_count: u32,
+    pub updated_at: u64,
+    pub rotation: u32,
+}
+
+/// 扫描 MaikNote/ 下每个空间目录，读身份卡列成表。单张卡损坏只跳过，不拖垮整批。
+#[tauri::command]
+pub async fn webdav_scan_spaces(
+    url: String,
+    username: String,
+    password: String,
+    insecure_tls: bool,
+) -> Result<Vec<CloudSpaceInfo>, String> {
+    let dav = Dav::new(&url, &username, &password, insecure_tls)?;
+    let entries = dav.propfind("MaikNote", "1").await?;
+    let mut dirs: Vec<(String, u64)> = Vec::new();
+    for e in entries.into_iter().filter(|e| e.is_dir) {
+        let rel = e.rel.trim_end_matches('/');
+        // 只认 MaikNote/<空间名>，跳过 MaikNote 本身和隐藏目录
+        if !rel.contains('/') { continue; }
+        let seg = match rel.rsplit('/').next() { Some(s) if !s.is_empty() => s, _ => continue };
+        if seg.starts_with('.') { continue; }
+        dirs.push((seg.to_string(), e.mtime));
+    }
+    let mut out = Vec::new();
+    for (seg, mtime) in dirs {
+        let remote_dir = format!("MaikNote/{}", seg);
+        let card = read_space_card(&dav, &remote_dir).await;
+        let note_count = match dav.propfind(&remote_dir, "1").await {
+            Ok(list) => list.iter().filter(|e| !e.is_dir && !e.rel.contains(STATE_DIR)).count() as u32,
+            Err(_) => 0,
+        };
+        match card {
+            Some(c) => out.push(CloudSpaceInfo {
+                name: if c.name.trim().is_empty() { seg.clone() } else { c.name.clone() },
+                remote_dir,
+                space_id: c.space_id,
+                initialized: true,
+                locked: !c.fingerprint.is_empty(),
+                note_count,
+                updated_at: mtime,
+                rotation: c.rotation,
+            }),
+            None => out.push(CloudSpaceInfo {
+                name: seg.clone(),
+                remote_dir,
+                space_id: String::new(),
+                initialized: false,
+                locked: false,
+                note_count,
+                updated_at: mtime,
+                rotation: 0,
+            }),
+        }
+    }
+    Ok(out)
+}
+
+/// A 端给空间设密码；已上锁时改密码要先验旧密码，成功后轮换号 +1
+#[tauri::command]
+pub async fn webdav_set_space_password(req: SetPasswordRequest) -> Result<SpaceIdentityResult, String> {
+    let dav = Dav::new(&req.url, &req.username, &req.password, req.insecure_tls)?;
+    let remote_dir = normalize_remote_dir(&req.remote_dir)?;
+    if req.new_password.is_empty() { return Err("空间密码不能为空".to_string()); }
+    let existing = read_space_card(&dav, &remote_dir).await;
+    if let Some(ref card) = existing {
+        if !card.fingerprint.is_empty() {
+            let old_fp = password_fingerprint(&card.salt, &req.old_password)?;
+            if old_fp != card.fingerprint { return Err("当前空间密码不对".to_string()); }
+        }
+    }
+    let (space_id, created_at, rotation) = match existing {
+        Some(c) => (c.space_id, c.created_at, c.rotation + 1),
+        None => (new_space_id()?, now_ms(), 1),
+    };
+    let salt = hex_encode(&random_bytes(16)?);
+    let fingerprint = password_fingerprint(&salt, &req.new_password)?;
+    let card = SpaceCard {
+        version: card_version(),
+        space_id: space_id.clone(),
+        name: req.name.clone(),
+        created_at,
+        rotation,
+        salt,
+        fingerprint,
+    };
+    write_space_card(&dav, &remote_dir, &card).await?;
+    Ok(SpaceIdentityResult { space_id, rotation })
+}
+
+/// B 端加入：有卡且上锁就验密码；未上锁的空间提示先让主人设密码
+#[tauri::command]
+pub async fn webdav_join_space(req: JoinSpaceRequest) -> Result<JoinedSpace, String> {
+    let dav = Dav::new(&req.url, &req.username, &req.password, req.insecure_tls)?;
+    let remote_dir = normalize_remote_dir(&req.remote_dir)?;
+    let card = read_space_card(&dav, &remote_dir).await
+        .ok_or_else(|| "这个空间还没初始化，请联系空间主人先开启同步".to_string())?;
+    if card.fingerprint.is_empty() {
+        return Err("这个空间还没设密码，请联系空间主人设置后再加入".to_string());
+    }
+    let fp = password_fingerprint(&card.salt, &req.space_password)?;
+    if fp != card.fingerprint { return Err("空间密码不对".to_string()); }
+    Ok(JoinedSpace { space_id: card.space_id, name: card.name, remote_dir, rotation: card.rotation })
+}
+
+/// B 端加入云端空间时，在选定父目录下自动建出本地文件夹，免去手动建同名目录。
+/// 不查路径白名单（新空间还没登记进 workspaces.json），但仍校验绝对路径/非 root/非 iCloud/可写。
+#[tauri::command]
+pub fn webdav_prepare_local_dir(parent: String, name: String) -> Result<String, String> {
+    use std::path::PathBuf;
+    let expanded = if let Some(rest) = parent.trim().strip_prefix("~/") {
+        match std::env::var("HOME") {
+            Ok(home) => PathBuf::from(home).join(rest),
+            Err(_) => return Err("读不到主目录".to_string()),
+        }
+    } else {
+        PathBuf::from(parent.trim())
+    };
+    if !expanded.is_absolute() {
+        return Err("文件夹位置必须是绝对路径".to_string());
+    }
+    // 空间名做成安全的子目录名
+    let clean = name
+        .replace(|c: char| c == '/' || c == '\\', "-")
+        .trim()
+        .trim_matches('.')
+        .to_string();
+    let clean = if clean.is_empty() { "space".to_string() } else { clean };
+    let target = expanded.join(clean);
+    std::fs::create_dir_all(&target).map_err(|e| format!("建文件夹失败: {}", e))?;
+    let canonical = std::fs::canonicalize(&target).map_err(|e| format!("读取文件夹失败: {}", e))?;
+    let text = canonical.to_string_lossy().replace('\\', "/");
+    if text.contains("com~apple~CloudDocs") {
+        return Err("不能建在 iCloud 目录里".to_string());
+    }
+    if canonical.components().count() < 3 {
+        return Err("文件夹层级太浅，请选更下一层".to_string());
+    }
+    let probe = canonical.join(".maiknote-write-probe");
+    std::fs::write(&probe, b"ok").map_err(|_| "文件夹不可写".to_string())?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(text)
+}
+
 #[tauri::command]
 pub async fn webdav_test(
     url: String,
@@ -1151,6 +1465,11 @@ pub async fn webdav_sync(app: AppHandle, req: SyncRequest) -> Result<SyncReport,
         _ => None,
     };
     let manifest_file = manifest_path(&app, &req.workspace_id)?;
+    // 首次同步补一张无锁身份卡：别的设备才能扫描到这个空间；密码由空间主人在设置里补上。
+    // 建卡失败不拖垮同步本身，笔记照常传。
+    if let Ok(dav) = Dav::new(&req.url, &req.username, &req.password, req.insecure_tls) {
+        let _ = ensure_space_card(&dav, &req.remote_dir).await;
+    }
     // 进度走事件推给界面：同步可能几十秒，光转圈看不出来在干嘛
     let window_owner = app.clone();
     let emit = move |progress: SyncProgress| {

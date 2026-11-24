@@ -121,19 +121,6 @@ function collapse(delay = 240) {
   }, delay)
 }
 
-/// 面板上的隐藏按钮：解除钉住并收回到右侧细条
-async function hidePanel() {
-  suppressExpandUntil = Date.now() + 800
-  if (collapseTimer) {
-    clearTimeout(collapseTimer)
-    collapseTimer = null
-  }
-  expanded.value = false
-  currentWidth = stripWidth.value
-  closeMenu()
-  await invoke('collapse_edge_panel').catch(() => {})
-}
-
 function openNote(note: EdgeNotePayload) {
   void emit('maiknote:open-note', { id: note.id })
   collapse(0)
@@ -190,19 +177,26 @@ function markCopied(id: string) {
 const md = createPreviewMarkdown({ codeCopyLabel: t('edge.copyCode') })
 const mdCache = new Map<string, string>()
 
+// 笔记里的图片是相对工作空间内容根的地址，贴边窗口拿不到仓库状态，
+// 基准路径由主窗口随笔记内容一起推过来
+const imageBasePath = computed(() => notes.value[0]?.contentBasePath || '')
+
 function renderMarkdown(content: string | undefined | null): string {
   const source = content || ''
-  const cached = mdCache.get(source)
+  const base = imageBasePath.value
+  // 缓存键带上基准路径：工作空间还没解析出来时渲染的那一份不能用
+  const key = base ? `${base}\u0000${source}` : source
+  const cached = mdCache.get(key)
   if (cached !== undefined) return cached
   if (mdCache.size > 80) mdCache.clear()
   let html: string
   try {
-    html = sanitizeHtml(md.render(source))
+    html = sanitizeHtml(md.render(source, { imageBasePath: base }))
   } catch {
     // 渲染炸了也别让整个面板空白，退化成纯文本
     html = `<pre>${source.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string)}</pre>`
   }
-  mdCache.set(source, html)
+  mdCache.set(key, html)
   return html
 }
 
@@ -565,22 +559,6 @@ onUnmounted(() => {
 
     <!-- 展开态卡片面板 -->
     <aside class="edge-panel" @contextmenu.prevent="closeMenu()">
-      <header class="panel-head">
-        <span class="head-icon">⭐</span>
-        <span class="head-title">{{ t('fileTree.pinnedSection') }}</span>
-        <span class="head-count">{{ notes.length }}</span>
-        <button
-          class="head-hide"
-          type="button"
-          :title="t('edge.hidePanel')"
-          @click.stop="hidePanel"
-        >
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none" />
-          </svg>
-        </button>
-      </header>
-
       <div class="panel-list">
         <div
           v-for="note in notes"
@@ -678,10 +656,6 @@ onUnmounted(() => {
 
         <p v-if="notes.length === 0" class="panel-empty">{{ t('edge.empty') }}</p>
       </div>
-
-      <footer class="panel-foot">
-        <span class="foot-hint">{{ t('edge.hint') }}</span>
-      </footer>
     </aside>
 
     <!-- 卡片右键菜单 -->
@@ -814,7 +788,7 @@ onUnmounted(() => {
   position: absolute;
   display: flex;
   flex-direction: column;
-  padding: 14px 12px 10px;
+  padding: 6px 8px 8px;
   box-sizing: border-box;
   opacity: 0;
   transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -883,68 +857,6 @@ onUnmounted(() => {
 .side-bottom .note-card {
   min-width: 260px;
   max-width: 320px;
-}
-
-.head-hide {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-left: auto;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-secondary, rgba(0, 0, 0, 0.45));
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.12s ease, background 0.12s ease;
-}
-
-.head-hide:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.07);
-}
-
-:global(html[data-theme='dark'] .head-hide:hover) {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 4px 10px;
-  border-bottom: 1px solid var(--color-border);
-  flex: 0 0 auto;
-}
-
-.head-icon {
-  font-size: 12px;
-}
-
-.head-title {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--color-text);
-}
-
-.head-count {
-  margin-left: auto;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
-  border-radius: 999px;
-  color: var(--color-text-secondary);
-  background: rgba(120, 130, 150, 0.16);
 }
 
 .panel-list {
@@ -1340,18 +1252,6 @@ onUnmounted(() => {
   text-align: center;
   font-size: 11px;
   color: var(--color-text-secondary);
-}
-
-.panel-foot {
-  flex: 0 0 auto;
-  padding: 8px 4px 0;
-  border-top: 1px solid var(--color-border);
-}
-
-.foot-hint {
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  opacity: 0.8;
 }
 
 /* ---------- 右键菜单 ---------- */

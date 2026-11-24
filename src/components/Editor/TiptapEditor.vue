@@ -50,6 +50,8 @@ import { readText } from '@tauri-apps/plugin-clipboard-manager'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { copyText } from '@/utils/clipboard'
+import { markdownImagesForRender, markdownImagesForStorage } from '@/utils/localImages'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 
 const lowlight = createLowlight(all)
 
@@ -58,6 +60,13 @@ const assistantsStore = useAssistantsStore()
 const noteStore = useNoteStore()
 const linkStore = useLinkStore()
 const fileSystem = useFileSystem()
+const workspaceStore = useWorkspaceStore()
+
+/**
+ * 笔记里图片地址的相对基准 = 当前工作空间的内容根。
+ * 编辑器只认 asset:// 地址，所以进出都在 markdown 文本这一层换算（见 utils/localImages）。
+ */
+const contentBasePath = (): string => workspaceStore.current?.path || ''
 const { t } = useI18n()
 
 type TextAlignValue = 'left' | 'center' | 'right'
@@ -378,7 +387,9 @@ const isImeEditing = (): boolean => {
 
 const getEditorMarkdown = (ed: any = editor.value): string => {
   if (!ed) return ''
-  return normalizeMarkdown(ed.storage.markdown.getMarkdown())
+  // 编辑器内部持的是 asset:// 地址，写回笔记前换回相对路径，
+  // 否则 .md 里就是 /Users/<用户名>/... 这种换台机器就失效的绝对地址
+  return markdownImagesForStorage(normalizeMarkdown(ed.storage.markdown.getMarkdown()), contentBasePath())
 }
 
 const emitEditorUpdate = (ed: any = editor.value) => {
@@ -2344,7 +2355,7 @@ const editor = useEditor({
     TableCell,
     TableHeader,
   ],
-  content: props.initialContent,
+  content: markdownImagesForRender(props.initialContent, contentBasePath()),
   editorProps: {
     handleDOMEvents: {
       // Cmd/Ctrl + 单击链接 → 用系统默认浏览器打开（普通单击仍然是放光标）
@@ -2660,10 +2671,10 @@ const editor = useEditor({
               const filename = `img_${timestamp}_${randomStr}.${ext}`
 
               // 保存图片到 iCloud 的 images 文件夹
-              const relativePath = await fileSystem.saveImage(dataUrl, filename)
+              const src = await fileSystem.saveImage(dataUrl, filename)
 
-              // 插入图片到编辑器（relativePath 已经是 asset:// URL）
-              const imageNode = view.state.schema.nodes.image.create({ src: relativePath, alt: '', title: '' })
+              // 插进编辑器的用 asset:// 地址（能直接显示），写回笔记时再换成相对路径
+              const imageNode = view.state.schema.nodes.image.create({ src, alt: '', title: '' })
               view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
             } catch (err) {
               console.error('Failed to save image:', err)
@@ -2754,10 +2765,10 @@ const editor = useEditor({
             const filename = `img_${timestamp}_${randomStr}.${ext}`
 
             // 保存图片到 iCloud 的 images 文件夹
-            const relativePath = await fileSystem.saveImage(dataUrl, filename)
+            const src = await fileSystem.saveImage(dataUrl, filename)
 
-            // 插入图片到编辑器（relativePath 已经是完整的 file:// URL）
-            const imageNode = view.state.schema.nodes.image.create({ src: relativePath, alt: '', title: '' })
+            // 插进编辑器的用 asset:// 地址（能直接显示），写回笔记时再换成相对路径
+            const imageNode = view.state.schema.nodes.image.create({ src, alt: '', title: '' })
             view.dispatch(view.state.tr.replaceSelectionWith(imageNode))
           } catch (err) {
             console.error('Failed to save image:', err)
@@ -2848,7 +2859,7 @@ watch(() => props.initialContent, (newContent) => {
   if (editor.value && !isImeEditing() && newContent !== lastEmittedMarkdown) {
     const current = getNormalizedMarkdown()
     if (newContent !== current) {
-      editor.value.commands.setContent(newContent)
+      editor.value.commands.setContent(markdownImagesForRender(newContent, contentBasePath()))
     }
   }
 })

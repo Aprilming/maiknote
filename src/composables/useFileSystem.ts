@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { NoteMetadata, DirectoryData, NoteFileEntry } from '@/types/note'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { assetUrlOf, joinContentPath } from '@/utils/localImages'
 
 
 // 直接使用 invoke，在非 Tauri 环境下调用时会自然抛出异常（由各函数的 try/catch 捕获）
@@ -299,16 +300,16 @@ export function useFileSystem() {
    * Save image to the images folder
    * @param imageData Base64 encoded image data (with or without data URL prefix)
    * @param filename Filename to save as
-   * @returns Asset protocol URL for the saved image
+   * @returns 当前窗口能直接加载的 asset:// 地址（只用来插进编辑器显示；
+   *          写进笔记的是相对路径，见 utils/localImages）
    */
   async function saveImage(imageData: string, filename: string): Promise<string> {
     try {
       const path = await getContentPath()
-      await safeInvoke<string>('save_image', { basePath: path, imageData, filename })
-      // Return asset:// URL for Tauri to serve the file
-      // Ensure proper URL encoding and single slash after localhost
-      const encodedPath = encodeURIComponent(`${path}/images/${filename}`)
-      return `asset://localhost/${encodedPath}`
+      // Rust 侧返回的是相对工作空间内容根的路径（images/xxx.png），拿它拼出绝对地址显示用
+      const relativePath = (await safeInvoke<string>('save_image', { basePath: path, imageData, filename }))
+        || `images/${filename}`
+      return assetUrlOf(joinContentPath(path, relativePath))
     } catch (e) {
       console.error('Failed to save image:', e)
       throw new Error('Failed to save image')

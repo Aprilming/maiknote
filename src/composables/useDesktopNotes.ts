@@ -25,6 +25,8 @@ export interface DesktopNotePayload {
   backgroundColor: string | null
   updatedAt: number
   locked: boolean
+  /** 当前工作空间的内容根：卡片窗口拿它把正文里的相对图片地址拼成 asset:// */
+  contentBasePath: string
 }
 
 /** 主窗口 → 桌面卡片：笔记内容（null = 笔记已被删除） */
@@ -47,7 +49,7 @@ const EDGE_GAP = 32
 const CASCADE = 26
 
 /** 卡片里只用得到这几个字段，顺手把标题兜底好 */
-export function desktopPayloadOf(note: Note): DesktopNotePayload {
+export function desktopPayloadOf(note: Note, contentBasePath = ''): DesktopNotePayload {
   return {
     id: note.id,
     title: note.title?.trim() || '',
@@ -56,6 +58,7 @@ export function desktopPayloadOf(note: Note): DesktopNotePayload {
     backgroundColor: note.backgroundColor ?? null,
     updatedAt: note.updatedAt,
     locked: Boolean(note.isLocked),
+    contentBasePath,
   }
 }
 
@@ -149,7 +152,7 @@ function createDesktopNotes() {
     // 别的空间钉着的笔记在当前列表里当然找不到：推 null 会让卡片以为自己被删了直接关掉
     if (!note && allPinnedIds.value.includes(noteId)) return
     try {
-      await emitTo(`${DESKTOP_NOTE_LABEL_PREFIX}${noteId}`, DESKTOP_NOTE_EVENT, note ? desktopPayloadOf(note) : null)
+      await emitTo(`${DESKTOP_NOTE_LABEL_PREFIX}${noteId}`, DESKTOP_NOTE_EVENT, note ? desktopPayloadOf(note, workspaceStore.current?.path || '') : null)
     } catch (error) {
       console.error('推送桌面笔记内容失败:', error)
     }

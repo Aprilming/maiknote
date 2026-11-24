@@ -41,14 +41,21 @@ const hovering = ref(false)
 const md = createPreviewMarkdown()
 const mdCache = new Map<string, string>()
 
+// 笔记里的图片是相对工作空间内容根的地址，卡片窗口拿不到仓库状态，
+// 基准路径由主窗口随笔记内容一起推过来
+const imageBasePath = computed(() => payload.value?.contentBasePath || '')
+
 const html = computed(() => {
   const source = payload.value?.content || ''
   if (!source) return ''
-  const cached = mdCache.get(source)
+  const base = imageBasePath.value
+  // 缓存键带上基准路径：工作空间还没解析出来时渲染的那一份不能用
+  const key = base ? `${base}\u0000${source}` : source
+  const cached = mdCache.get(key)
   if (cached !== undefined) return cached
-  const rendered = sanitizeHtml(md.render(source))
+  const rendered = sanitizeHtml(md.render(source, { imageBasePath: base }))
   if (mdCache.size > 40) mdCache.clear()
-  mdCache.set(source, rendered)
+  mdCache.set(key, rendered)
   return rendered
 })
 

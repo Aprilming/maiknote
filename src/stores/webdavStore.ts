@@ -9,15 +9,23 @@ import {
   type WebdavForceMode,
   type WebdavSyncReport,
   type WebdavWorkspaceConfig,
+  type CloudSpaceInfo,
+  type SpaceIdentityResult,
+  type JoinedSpace,
 } from '@/types/webdav'
 import { getSecret, setSecret } from '@/composables/useSecrets'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 
 function blankOption(): WebdavWorkspaceConfig {
-  return { enabled: false, remoteDir: '', lastSyncAt: 0, lastError: '' }
+  return { enabled: false, remoteDir: '', lastSyncAt: 0, lastError: '', spaceId: '', rotation: 0 }
 }
 
 /** 远端目录里的名字：去掉路径分隔符和首尾空白，避免把空间名写成一串目录 */
+/** 每个空间一个密码，存钥匙串；账号名只含安全字符 */
+export function spacePasswordAccount(workspaceId: string): string {
+  return `webdavSpace.${workspaceId}`
+}
+
 function safeName(name: string): string {
   return name.replace(/[/\\]/g, '-').replace(/^[.\s]+|[.\s]+$/g, '') || 'workspace'
 }
@@ -218,6 +226,64 @@ export const useWebdavStore = defineStore('webdav', () => {
     }
   }
 
+  /** 扫描云端 MaikNote/ 下的所有空间（身份卡 + 笔记数） */
+  async function scanSpaces(): Promise<CloudSpaceInfo[]> {
+    await initialize()
+    return await invoke<CloudSpaceInfo[]>('webdav_scan_spaces', {
+      url: config.value.url.trim(),
+      username: config.value.username,
+      password: password.value,
+      insecureTls: config.value.insecureTls,
+    })
+  }
+
+  /** 给某个本地空间设/改云端密码；改密码要带旧密码，云端轮换号会 +1 */
+  async function setSpacePassword(
+    ws: Workspace,
+    newPassword: string,
+    oldPassword = ''
+  ): Promise<SpaceIdentityResult> {
+    await initialize()
+    const opt = optionOf(ws.id)
+    const remoteDir = opt.remoteDir || defaultRemoteDir(ws)
+    const res = await invoke<SpaceIdentityResult>('webdav_set_space_password', {
+      req: {
+        url: config.value.url.trim(),
+        username: config.value.username,
+        password: password.value,
+        insecureTls: config.value.insecureTls,
+        remoteDir,
+        name: ws.name,
+        oldPassword,
+        newPassword,
+      },
+    })
+    setOption(ws.id, { remoteDir, spaceId: res.spaceId, rotation: res.rotation })
+    await setSecret(spacePasswordAccount(ws.id), newPassword)
+    await persist()
+    return res
+  }
+
+  /** 校验空间密码；通过则拿到云端身份，前端据此建本地空间并绑定 */
+  async function joinSpace(remoteDir: string, spacePassword: string): Promise<JoinedSpace> {
+    await initialize()
+    return await invoke<JoinedSpace>('webdav_join_space', {
+      req: {
+        url: config.value.url.trim(),
+        username: config.value.username,
+        password: password.value,
+        insecureTls: config.value.insecureTls,
+        remoteDir,
+        spacePassword,
+      },
+    })
+  }
+
+  /** 在父目录下自动建出本地文件夹，返回规范化路径 */
+  async function prepareLocalDir(parent: string, name: string): Promise<string> {
+    return await invoke<string>('webdav_prepare_local_dir', { parent, name })
+  }
+
   return {
     config,
     password,
@@ -241,5 +307,9 @@ export const useWebdavStore = defineStore('webdav', () => {
     syncWorkspace,
     forceSync,
     cancelSync,
+    scanSpaces,
+    setSpacePassword,
+    joinSpace,
+    prepareLocalDir,
   }
 })

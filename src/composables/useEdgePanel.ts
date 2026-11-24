@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useNoteStore } from '@/stores/noteStore'
 import { useDirectoryStore } from '@/stores/directoryStore'
 import { useSettingStore } from '@/stores/settingStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { useI18n } from 'vue-i18n'
 import type { Note } from '@/types/note'
 
@@ -19,6 +20,8 @@ export interface EdgeNotePayload {
   updatedAt: number
   dirPath: string
   isLocked: boolean
+  /** 当前工作空间的内容根：边栏窗口拿它把正文里的相对图片地址拼成 asset:// */
+  contentBasePath: string
 }
 
 /**
@@ -51,6 +54,8 @@ export interface EdgePrefsPayload {
   stripWidth: number
   stripColor: string
   copyOnSelect: boolean
+  /** 鼠标移开是否自动收起（含快捷键展开的面板） */
+  autoHide: boolean
 }
 
 interface EdgeEditPayload {
@@ -150,6 +155,8 @@ export function useEdgePanel() {
   }
 
   function buildPayload(): EdgeNotePayload[] {
+    // 正文里的图片是相对工作空间内容根的地址，边栏窗口自己不解析路径，基准随 payload 传过去
+    const contentBasePath = useWorkspaceStore().current?.path || ''
     return noteStore.allPinnedNotes.map(note => ({
       id: note.id,
       title: note.title?.trim() || t('notelist.untitled'),
@@ -159,6 +166,7 @@ export function useEdgePanel() {
       updatedAt: note.updatedAt,
       dirPath: dirPathOf(note),
       isLocked: note.isLocked === true,
+      contentBasePath,
     }))
   }
 
@@ -247,6 +255,7 @@ export function useEdgePanel() {
       stripWidth: settingStore.settings.edgeStripWidth,
       stripColor: settingStore.settings.edgeStripColor,
       copyOnSelect: settingStore.settings.edgeCopyOnSelect,
+      autoHide: settingStore.settings.edgeAutoHide !== false,
     }
     await invoke('set_edge_prefs', { ...prefs }).catch(() => {})
     await emit(PREFS_EVENT, prefs).catch(() => {})

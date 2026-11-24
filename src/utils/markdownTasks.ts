@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import { imageSrcForRender } from '@/utils/localImages'
 
 /**
  * 预览类界面（贴边面板卡片、桌面小卡片）用的 Markdown 渲染器。
@@ -93,6 +94,15 @@ function installCodeCopy(md: MarkdownIt, label: string) {
 }
 
 /**
+ * 渲染时可选的环境参数：imageBasePath = 当前工作空间的内容根。
+ * 笔记里的图片是相对地址（images/xxx.png），预览窗口不带当前目录，
+ * 得靠它拼成 asset:// 才加载得出来。
+ */
+export interface PreviewMarkdownEnv {
+  imageBasePath?: string
+}
+
+/**
  * 建一个带任务列表支持的渲染器（每个窗口各建一份即可）。
  * 传了 `codeCopyLabel` 就给代码块加复制按钮，按钮文案即这个参数（提示文字）。
  */
@@ -100,6 +110,17 @@ export function createPreviewMarkdown(options: { codeCopyLabel?: string } = {}):
   const md = new MarkdownIt({ html: true, linkify: true, breaks: false })
   installTaskList(md)
   if (options.codeCopyLabel) installCodeCopy(md, options.codeCopyLabel)
+  // 图片地址在笔记里是相对路径，渲染前补成 asset:// 绝对地址（alt 仍交给默认规则处理）
+  const defaultImageRule = md.renderer.rules.image!
+  md.renderer.rules.image = (tokens, idx, ruleOptions, env, self) => {
+    const base = (env as PreviewMarkdownEnv | undefined)?.imageBasePath
+    const token = tokens[idx]
+    const index = base ? token.attrIndex('src') : -1
+    if (base && index >= 0 && token.attrs) {
+      token.attrs[index][1] = imageSrcForRender(token.attrs[index][1], base)
+    }
+    return defaultImageRule(tokens, idx, ruleOptions, env, self)
+  }
   return md
 }
 

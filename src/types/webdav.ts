@@ -7,6 +7,10 @@ export interface WebdavWorkspaceConfig {
   remoteDir: string
   lastSyncAt: number
   lastError: string
+  /** 绑定的云端身份卡 ID；只有加入了云端空间才非空 */
+  spaceId: string
+  /** 云端密码轮换号；与云端不一致时提示重新输入密码 */
+  rotation: number
 }
 
 export interface WebdavConfig {
@@ -51,4 +55,32 @@ export const WEBDAV_PASSWORD_ACCOUNT = 'webdavPassword'
 
 export function emptyWebdavConfig(): WebdavConfig {
   return { version: 1, url: '', username: '', insecureTls: false, workspaces: {} }
+}
+
+/** 云端扫描到的一个空间 */
+export interface CloudSpaceInfo {
+  name: string
+  remoteDir: string
+  spaceId: string
+  /** false = 老空间，云端还没身份卡 */
+  initialized: boolean
+  /** true = 已设密码，加入必须输密码 */
+  locked: boolean
+  noteCount: number
+  updatedAt: number
+  rotation: number
+}
+
+/** 设密码返回 */
+export interface SpaceIdentityResult {
+  spaceId: string
+  rotation: number
+}
+
+/** 加入云端空间返回 */
+export interface JoinedSpace {
+  spaceId: string
+  name: string
+  remoteDir: string
+  rotation: number
 }
